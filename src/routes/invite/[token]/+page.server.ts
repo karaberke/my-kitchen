@@ -22,13 +22,15 @@ export const actions: Actions = {
 	default: async (event) => {
 		if (!event.locals.user)
 			throw redirect(303, `/login?next=${encodeURIComponent(`/invite/${event.params.token}`)}`);
+		let householdId: string;
 		try {
-			await acceptInvite(event.locals.user.id, event.params.token);
+			householdId = await acceptInvite(event.locals.user.id, event.params.token);
 		} catch (err) {
 			if (err instanceof AppError) return fail(err.status, { message: err.message });
 			throw err;
 		}
-		throw redirect(303, '/household');
+		// Land on the household just joined, not the bare list.
+		throw redirect(303, `/household/${householdId}`);
 	}
 };
 
