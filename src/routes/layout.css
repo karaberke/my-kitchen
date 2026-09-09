@@ -1,1 +1,223 @@
 @import 'tailwindcss';
+
+@theme {
+	--font-sans:
+		'Public Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+	--font-serif: 'Libre Baskerville', Georgia, 'Times New Roman', serif;
+
+	/* Warm neutral palette from the Pantry & Plate prototype */
+	--color-cream: #fcf8ed;
+	--color-card: #fffdf6;
+	--color-parchment: #f6f0e1;
+	--color-linen: #efe9d8;
+	--color-linen-dark: #e9e2cc;
+	--color-sand: #e4dbc4;
+	--color-sand-dark: #e0d6bc;
+	--color-line: #f0e9d6;
+	--color-ink: #2e3327;
+	--color-ink-soft: #46503c;
+	--color-moss: #4e5a45;
+	--color-moss-soft: #5f6a54;
+	--color-sage: #727e66;
+	--color-sage-soft: #89927a;
+	--color-fog: #bdc3a9;
+	--color-leaf: #4c7a52;
+	--color-leaf-dark: #3c6543;
+	--color-leaf-soft: #e7efdc;
+	--color-leaf-line: #bfd3b2;
+	--color-honey: #c08a2e;
+	--color-honey-dark: #8a6a22;
+	--color-honey-soft: #fcf3e2;
+	--color-honey-line: #ebd9b4;
+	--color-brick: #a8493a;
+	--color-brick-dark: #8a4436;
+	--color-brick-soft: #f6ede9;
+	--color-brick-line: #e6c9c0;
+	--color-sky: #dcebf0;
+	--color-mist: #cfe1ea;
+
+	--radius-xl: 16px;
+	--radius-2xl: 18px;
+	--radius-3xl: 24px;
+	--shadow-card: 0 1px 3px rgba(46, 64, 44, 0.06);
+	--shadow-sheet: 0 -8px 40px rgba(46, 64, 44, 0.18);
+	--shadow-toast: 0 14px 30px rgba(32, 44, 30, 0.32);
+}
+
+@layer base {
+	html {
+		color-scheme: light;
+		-webkit-tap-highlight-color: transparent;
+		scroll-behavior: smooth;
+	}
+	body {
+		background: var(--color-cream);
+		color: var(--color-ink);
+		font-family: var(--font-sans);
+		font-size: 15px;
+		line-height: 1.5;
+		text-rendering: optimizeLegibility;
+	}
+	h1,
+	h2,
+	h3,
+	.font-display {
+		font-family: var(--font-serif);
+		font-weight: 400;
+		letter-spacing: -0.005em;
+	}
+	:focus-visible {
+		outline: 2px solid var(--color-leaf);
+		outline-offset: 2px;
+		border-radius: 6px;
+	}
+	input,
+	textarea,
+	select,
+	button {
+		font: inherit;
+		color: inherit;
+	}
+	::selection {
+		background: var(--color-leaf-soft);
+	}
+}
+
+@layer components {
+	.field {
+		@apply min-h-11 w-full rounded-[14px] border border-sand-dark bg-card px-3.5 py-2.5 text-[15px] placeholder:text-sage-soft focus:border-leaf focus:ring-2 focus:ring-leaf/30 focus:outline-none disabled:opacity-60;
+	}
+	.field-error {
+		@apply border-brick focus:border-brick focus:ring-brick/30;
+	}
+	.label {
+		@apply mb-1.5 block text-[12.5px] font-bold text-moss;
+	}
+	.hint {
+		@apply mt-1.5 text-[12px] leading-relaxed text-sage;
+	}
+	.error-text {
+		@apply mt-1.5 text-[12.5px] text-brick-dark;
+	}
+	.btn,
+	.btn-primary,
+	.btn-secondary,
+	.btn-ghost,
+	.btn-danger,
+	.btn-dark {
+		@apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-[14px] px-4 text-center text-[13.5px] font-bold transition-colors select-none disabled:cursor-not-allowed disabled:opacity-50;
+	}
+	.btn-primary {
+		@apply bg-leaf text-cream hover:bg-leaf-dark;
+	}
+	.btn-secondary {
+		@apply border border-sand-dark bg-linen text-ink hover:bg-linen-dark;
+	}
+	.btn-ghost {
+		@apply bg-transparent text-moss hover:bg-linen;
+	}
+	.btn-danger {
+		@apply bg-brick-soft text-brick-dark hover:bg-[#f0e1db];
+	}
+	.btn-dark {
+		@apply bg-ink text-cream hover:bg-[#3a4132];
+	}
+	.btn-sm {
+		@apply min-h-9 rounded-[11px] px-3 text-[12.5px];
+	}
+	.card {
+		@apply rounded-[18px] border border-sand bg-card shadow-card;
+	}
+	.card-muted {
+		@apply rounded-[18px] border border-sand bg-parchment;
+	}
+	.chip {
+		@apply inline-flex h-8 flex-none items-center gap-1 rounded-full border border-sand-dark bg-parchment px-3.5 text-[12.5px] font-semibold text-moss transition-colors hover:bg-linen;
+	}
+	.chip-on {
+		@apply border-ink bg-ink text-cream hover:bg-ink;
+	}
+	.eyebrow {
+		@apply text-[11px] font-bold tracking-[0.08em] text-sage-soft uppercase;
+	}
+	.pill {
+		@apply inline-flex items-center rounded-lg px-2 py-0.5 text-[10.5px] font-semibold;
+	}
+	.divider-row {
+		@apply border-b border-line last:border-b-0;
+	}
+	.icon-btn {
+		@apply inline-flex h-9 w-9 items-center justify-center rounded-[11px] bg-linen text-moss transition-colors hover:bg-linen-dark disabled:opacity-40;
+	}
+	.sr-only-focusable:not(:focus) {
+		@apply sr-only;
+	}
+}
+
+@media print {
+	body {
+		background: #fff;
+		color: #000;
+		font-size: 12pt;
+	}
+	.no-print {
+		display: none !important;
+	}
+	.card,
+	.card-muted {
+		border: none;
+		box-shadow: none;
+		background: transparent;
+	}
+	a {
+		text-decoration: none;
+		color: inherit;
+	}
+	main {
+		padding: 0 !important;
+		max-width: none !important;
+	}
+}
+
+@keyframes sheet-up {
+	from {
+		transform: translateY(100%);
+	}
+	to {
+		transform: translateY(0);
+	}
+}
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes toast-in {
+	from {
+		opacity: 0;
+		transform: translateY(12px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+.anim-fade {
+	animation: fade-in 0.18s ease;
+}
+.anim-sheet {
+	animation: sheet-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.anim-toast {
+	animation: toast-in 0.2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+	.anim-fade,
+	.anim-sheet,
+	.anim-toast {
+		animation: none;
+	}
+}

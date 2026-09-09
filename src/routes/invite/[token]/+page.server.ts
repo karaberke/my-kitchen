@@ -1,0 +1,31 @@
+import { fail, redirect } from '@sveltejs/kit';
+import type { Actions, PageServerLoad } from './$types';
+import { db } from '$lib/server/db';
+import { acceptInvite, peekInvite } from '$lib/server/households';
+import { AppError } from '$lib/server/errors';
+import { serverEnv } from '$lib/server/env';
+
+export const load: PageServerLoad = async (event) => {
+	const invite = await peekInvite(db, event.params.token);
+	return {
+		title: 'Invitation',
+		invite: invite ? { householdName: invite.householdName, valid: invite.valid } : null,
+		signedIn: !!event.locals.user,
+		registrationOpen: serverEnv().REGISTRATION_OPEN,
+		next: `/invite/${event.params.token}`
+	};
+};
+
+export const actions: Actions = {
+	default: async (event) => {
+		if (!event.locals.user)
+			throw redirect(303, `/login?next=${encodeURIComponent(`/invite/${event.params.token}`)}`);
+		try {
+			await acceptInvite(event.locals.user.id, event.params.token);
+		} catch (err) {
+			if (err instanceof AppError) return fail(err.status, { message: err.message });
+			throw err;
+		}
+		throw redirect(303, '/household');
+	}
+};
