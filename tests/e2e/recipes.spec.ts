@@ -88,6 +88,7 @@ test.describe('recipes', () => {
 
 		// invite Bob
 		await a.goto('/household');
+		await a.getByRole('link', { name: /Alice's kitchen/ }).click();
 		await a.getByRole('button', { name: 'Create invitation link' }).click();
 		const link = await a.getByLabel('Invitation link').inputValue();
 		await b.goto(link);
@@ -107,13 +108,14 @@ test.describe('recipes', () => {
 
 		// remove Bob from the household: access ends immediately
 		await a.goto('/household');
+		await a.getByRole('link', { name: /Alice's kitchen/ }).click();
 		a.once('dialog', (d) => d.accept());
 		await a.getByRole('button', { name: 'Remove' }).click();
-		await expect(a.getByText('Bob (you)')).toHaveCount(0);
+		// Wait for the removal to land before checking Bob's access.
+		await expect(a.getByText(bob.email)).toHaveCount(0);
 		await b.goto(`/recipes/${id}`);
 		await expect(b.getByText('Nothing here')).toBeVisible();
 		await ctxA.close();
 		await ctxB.close();
-		void bob;
 	});
 });

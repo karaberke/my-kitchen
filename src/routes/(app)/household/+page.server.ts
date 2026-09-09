@@ -2,46 +2,15 @@ import { fail, redirect } from '@sveltejs/kit';
 import { guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { assertMember, requireHousehold, requireUser } from '$lib/server/access';
-import {
-	createHousehold,
-	createInvite,
-	deleteHousehold,
-	ensurePersonalHousehold,
-	listActiveInvites,
-	listMembers,
-	listMemberships,
-	otherOwnersExist,
-	removeMember,
-	renameHousehold,
-	revokeInvite,
-	setActiveHousehold,
-	setMemberRole
-} from '$lib/server/households';
+import { requireUser } from '$lib/server/access';
+import { createHousehold, setActiveHousehold } from '$lib/server/households';
 import { AppError } from '$lib/server/errors';
-import { serverEnv } from '$lib/server/env';
 
+/** The list of households. Managing one happens on /household/[id]. */
 const loadImpl = async (event: PageServerLoadEvent) => {
-	const user = requireUser(event);
+	requireUser(event);
 	event.depends('app:household');
-	const household = event.locals.household;
-	if (!household)
-		return { title: 'Household', members: [], invites: [], isOwner: false, canLeave: false };
-	const role = await assertMember(db, household.id, user.id);
-	const isOwner = role === 'owner';
-	const [members, invites, others] = await Promise.all([
-		listMembers(db, household.id),
-		isOwner ? listActiveInvites(db, household.id) : Promise.resolve([]),
-		otherOwnersExist(db, household.id, user.id)
-	]);
-	return {
-		title: 'Household',
-		members,
-		invites,
-		isOwner,
-		canLeave: role === 'member' || others,
-		origin: serverEnv().ORIGIN
-	};
+	return { title: 'Households' };
 };
 
 function handle(err: unknown) {
@@ -50,6 +19,7 @@ function handle(err: unknown) {
 }
 
 export const actions: Actions = {
+	// Posted to by HouseholdSwitcher in the app shell as well as this page.
 	switch: async (event) => {
 		const user = requireUser(event);
 		const fd = await event.request.formData();
@@ -63,85 +33,13 @@ export const actions: Actions = {
 	create: async (event) => {
 		const user = requireUser(event);
 		const fd = await event.request.formData();
+		let id: string;
 		try {
-			await createHousehold(db, user.id, String(fd.get('name') ?? ''));
+			id = await createHousehold(db, user.id, String(fd.get('name') ?? ''));
 		} catch (err) {
 			return handle(err);
 		}
-		throw redirect(303, '/household');
-	},
-	rename: async (event) => {
-		const { user, household } = requireHousehold(event);
-		const fd = await event.request.formData();
-		try {
-			await renameHousehold(db, user.id, household.id, String(fd.get('name') ?? ''));
-		} catch (err) {
-			return handle(err);
-		}
-		return { ok: true, action: 'rename' };
-	},
-	invite: async (event) => {
-		const { user, household } = requireHousehold(event);
-		try {
-			const inv = await createInvite(db, user.id, household.id);
-			return {
-				ok: true,
-				action: 'invite',
-				inviteUrl: `${serverEnv().ORIGIN}/invite/${inv.token}`,
-				expiresAt: inv.expiresAt
-			};
-		} catch (err) {
-			return handle(err);
-		}
-	},
-	revoke: async (event) => {
-		const { user, household } = requireHousehold(event);
-		const fd = await event.request.formData();
-		try {
-			await revokeInvite(db, user.id, household.id, String(fd.get('inviteId') ?? ''));
-		} catch (err) {
-			return handle(err);
-		}
-		return { ok: true, action: 'revoke' };
-	},
-	role: async (event) => {
-		const { user, household } = requireHousehold(event);
-		const fd = await event.request.formData();
-		const role = fd.get('role') === 'owner' ? 'owner' : 'member';
-		try {
-			await setMemberRole(user.id, household.id, String(fd.get('userId') ?? ''), role);
-		} catch (err) {
-			return handle(err);
-		}
-		return { ok: true, action: 'role' };
-	},
-	remove: async (event) => {
-		const { user, household } = requireHousehold(event);
-		const fd = await event.request.formData();
-		const target = String(fd.get('userId') ?? '');
-		try {
-			await removeMember(user.id, household.id, target);
-		} catch (err) {
-			return handle(err);
-		}
-		if (target === user.id) throw redirect(303, '/household');
-		return { ok: true, action: 'remove' };
-	},
-	deleteHousehold: async (event) => {
-		const { user, household } = requireHousehold(event);
-		const fd = await event.request.formData();
-		const confirmName = String(fd.get('confirmName') ?? '').trim();
-		if (confirmName !== household.name)
-			return fail(400, { message: 'Type the household name exactly to confirm.' });
-		try {
-			await deleteHousehold(user.id, household.id);
-			// Never leave the user with zero households: give them a fresh personal kitchen.
-			const remaining = await listMemberships(db, user.id);
-			if (remaining.length === 0) await ensurePersonalHousehold(db, user.id, user.name);
-		} catch (err) {
-			return handle(err);
-		}
-		throw redirect(303, '/household');
+		throw redirect(303, `/household/${id}`);
 	}
 };
 
