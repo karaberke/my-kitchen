@@ -52,7 +52,8 @@ docker compose up -d --build
 ```
 
 Services: `db` (persistent volume), `migrate` (one-shot, serialized), `app`
-(Node on 0.0.0.0:3000, no host port), `cloudflared`. A cloud-PostgreSQL variant is
+(Node on 0.0.0.0:3000, no host port), `cloudflared`. Compose reads `.env` for
+interpolation, so one file configures both `pnpm dev` and production. A cloud-PostgreSQL variant is
 `compose.cloud-db.yaml`; a local production-like variant with a published port is
 `compose.local-prod.yaml`.
 

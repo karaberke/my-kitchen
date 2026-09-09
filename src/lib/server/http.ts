@@ -59,7 +59,11 @@ export function guard<F extends (event: any) => any>(fn: F): F {
 		try {
 			return await fn(event);
 		} catch (err) {
-			if (err instanceof AppError) error(err.status, { message: err.message, code: err.status === 401 ? 'unauthorized' : err.status === 403 ? 'forbidden' : undefined });
+			if (err instanceof AppError)
+				error(err.status, {
+					message: err.message,
+					code: err.status === 401 ? 'unauthorized' : err.status === 403 ? 'forbidden' : undefined
+				});
 			throw err;
 		}
 	}) as F;

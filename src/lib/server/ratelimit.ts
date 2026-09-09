@@ -29,7 +29,11 @@ function sweep(now: number) {
 }
 
 /** Returns the remaining allowance; 0 means the caller must reject. Records the hit when allowed. */
-export function consume(key: string, rule: RateLimitRule, now = Date.now()): { allowed: boolean; retryAfterSeconds: number } {
+export function consume(
+	key: string,
+	rule: RateLimitRule,
+	now = Date.now()
+): { allowed: boolean; retryAfterSeconds: number } {
 	sweep(now);
 	const hits = (buckets.get(key) ?? []).filter((t) => t > now - rule.windowMs);
 	if (hits.length >= rule.max) {

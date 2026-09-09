@@ -427,16 +427,14 @@ async function writeRows(tx: Tx, recipeId: string, value: ValidRecipe) {
 		);
 	}
 	if (value.steps.length) {
-		await tx
-			.insert(recipeSteps)
-			.values(
-				value.steps.map((s) => ({
-					recipeId,
-					position: s.position,
-					sectionTitle: s.sectionTitle,
-					text: s.text
-				}))
-			);
+		await tx.insert(recipeSteps).values(
+			value.steps.map((s) => ({
+				recipeId,
+				position: s.position,
+				sectionTitle: s.sectionTitle,
+				text: s.text
+			}))
+		);
 	}
 }
 

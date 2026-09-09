@@ -28,19 +28,11 @@
 		| null
 		| undefined;
 	const f = $derived(form as LooseForm);
-	// svelte-ignore state_referenced_locally
-	let q = $state(data.filters.q);
-	$effect(() => {
-		q = data.filters.q;
-	});
+	let q = $derived(data.filters.q);
 
 	type Mode = 'add' | 'correct' | 'waste' | 'metadata';
 	let sheet = $state<{ mode: Mode; group?: PantryGroup; lot?: PantryLotView } | null>(null);
-	// svelte-ignore state_referenced_locally
-	let opId = $state<string>(data.operationId);
-	$effect(() => {
-		opId = data.operationId;
-	});
+	let opId = $derived<string>(data.operationId);
 	let undoOp = $state(newOperationId());
 
 	// add form state
@@ -62,8 +54,10 @@
 	}
 	function link(changes: Record<string, string | null>) {
 		const u = new URL(page.url);
-		for (const [k, v] of Object.entries(changes))
-			v ? u.searchParams.set(k, v) : u.searchParams.delete(k);
+		for (const [k, v] of Object.entries(changes)) {
+			if (v) u.searchParams.set(k, v);
+			else u.searchParams.delete(k);
+		}
 		return u.pathname + u.search;
 	}
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;

@@ -11,7 +11,7 @@
 		memberships,
 		children
 	}: {
-		user: { id: string; name: string; email: string };
+		user: { name: string; email: string };
 		household: { id: string; name: string; role: string } | null;
 		memberships: { householdId: string; name: string; role: string; memberCount: number }[];
 		children: Snippet;

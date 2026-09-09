@@ -24,11 +24,7 @@
 		hasDirtyInput?: () => boolean;
 	} = $props();
 
-	// svelte-ignore state_referenced_locally
-	let known = $state({ ...initial });
-	$effect(() => {
-		known = { ...initial };
-	});
+	let known = $derived({ ...initial });
 	let changedNotice = $state(false);
 	let lastChecked = $state<Date | null>(null);
 	let failures = 0;

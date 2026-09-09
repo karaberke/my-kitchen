@@ -13,7 +13,6 @@
 	import { UNITS } from '$lib/shared/units';
 	import type { LineView, BatchView } from '$lib/server/grocery';
 
-	// svelte-ignore state_referenced_locally
 	let { data, form } = $props();
 	const list = $derived(data.list);
 	type LooseForm =
@@ -35,10 +34,7 @@
 	let purchase = $state<LineView | null>(null);
 	let editBatch = $state<BatchView | null>(null);
 	let editLine = $state<LineView | null>(null);
-	let opId = $state<string>(data.operationId);
-	$effect(() => {
-		opId = data.operationId;
-	});
+	let opId = $derived<string>(data.operationId);
 	let undoOp = $state(newOperationId());
 	const dirty = () => addOpen || !!purchase || !!editBatch || !!editLine;
 
@@ -69,10 +65,9 @@
 		)
 	);
 	const sections = $derived.by(() => {
-		const map = new Map<string, LineView[]>();
-		for (const l of visibleLines)
-			(map.get(l.category) ?? map.set(l.category, []).get(l.category)!).push(l);
-		return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+		const groups: Record<string, LineView[]> = {};
+		for (const l of visibleLines) (groups[l.category] ??= []).push(l);
+		return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
 	});
 	const pendingCount = $derived(list.lines.filter((l) => l.status === 'pending').length);
 	const doneCount = $derived(list.lines.length - pendingCount);

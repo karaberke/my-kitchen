@@ -104,7 +104,8 @@
 		} else if (e.key === 'Enter') {
 			if (open && active >= 0) {
 				e.preventDefault();
-				active < suggestions.length ? choose(suggestions[active]) : chooseNew();
+				if (active < suggestions.length) choose(suggestions[active]);
+				else chooseNew();
 			} else if (onenter) {
 				e.preventDefault();
 				onenter();

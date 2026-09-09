@@ -45,7 +45,10 @@ export function serverEnv(): ServerEnv {
 	if (cached) return cached;
 	if (building) {
 		// Image builds run without secrets or a database; runtime re-validates real values.
-		return schema.parse({ DATABASE_URL: 'postgres://build:build@localhost:5432/build', BETTER_AUTH_SECRET: 'build-time-placeholder-secret' });
+		return schema.parse({
+			DATABASE_URL: 'postgres://build:build@localhost:5432/build',
+			BETTER_AUTH_SECRET: 'build-time-placeholder-secret'
+		});
 	}
 	const parsed = schema.safeParse(dynamic);
 	if (!parsed.success) {
