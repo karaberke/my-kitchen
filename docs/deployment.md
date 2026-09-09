@@ -1,44 +1,67 @@
 # Deployment guide
 
-## Prerequisites
-
-- Docker Engine 24+ with Compose v2 (`docker compose version`), BuildKit enabled (default).
-- A domain on Cloudflare and a Cloudflare Tunnel (Zero Trust → Networks → Tunnels).
-- Optional: a private S3 bucket, or a managed PostgreSQL.
-
-The launch command starts the configured services only. It never creates Cloudflare,
-S3 or cloud-database resources.
-
-## One-time configuration
-
-1. `cp .env.example .env`
-2. Set at least:
-   - `POSTGRES_PASSWORD` (bundled db) or `DATABASE_URL` + `DATABASE_SSL=require` (cloud db)
-   - `ORIGIN=https://pantry.example.com` (the public hostname, https)
-   - `BETTER_AUTH_SECRET` (`openssl rand -base64 48`)
-   - `CLOUDFLARE_TUNNEL_TOKEN` (from the tunnel's _Configure_ page)
-   - `REGISTRATION_OPEN=true` for the first accounts, then `false` for a private install
-3. Create the tunnel in the Cloudflare dashboard and add a **public hostname** that routes
-   `pantry.example.com` → `http://app:3000` (service type HTTP, URL `app:3000`).
-   The `cloudflared` container joins the compose network and resolves `app` by name.
-
-Compose interpolates `${...}` values from the `.env` file in the project directory (the
-same file `pnpm dev` and the scripts read). Keep production values there on the server, or
-pass another file with `docker compose --env-file prod.env ...`. `ORIGIN` must be the URL
-users type; a mismatch makes every form post fail the CSRF origin check with 403.
-
-## Launch
+## The short version
 
 ```sh
-docker compose up -d --build            # bundled PostgreSQL
-docker compose -f compose.cloud-db.yaml up -d --build   # managed PostgreSQL
+git clone <repo> pantry-and-plate && cd pantry-and-plate && ./deploy.sh [options]
 ```
 
-Order: `db` becomes healthy → `migrate` runs committed migrations (advisory-locked, exits) →
-`app` starts → `cloudflared` connects. `docker compose ps` shows `migrate` as _exited (0)_.
+`deploy.sh` needs Docker with Compose v2 (and `git` for the remote bootstrap). It:
 
-`docker compose logs -f app` shows the Node server; `curl` inside the network:
-`docker compose exec app curl -s localhost:3000/health?ready=1`.
+1. creates `.env` from `.env.example` with a generated `BETTER_AUTH_SECRET` and `POSTGRES_PASSWORD` (existing `.env` files are kept; only the flags you pass are changed),
+2. writes your choices (`APP_PORT`, `APP_BIND`, `ORIGIN`, `COMPOSE_PROFILES`, `CLOUDFLARE_TUNNEL_TOKEN`, `DATABASE_URL`, `REGISTRATION_OPEN`),
+3. runs `docker compose up -d --build`, waits for the health check and prints the URL.
+
+| Option                                | Effect                                                    | `.env` key                                           |
+| ------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------- |
+| `--port 8080`                         | host port the app is published on                         | `APP_PORT`                                           |
+| `--bind 0.0.0.0`                      | publish on all interfaces instead of `127.0.0.1`          | `APP_BIND`                                           |
+| `--origin https://pantry.example.com` | exact public URL users type                               | `ORIGIN`                                             |
+| `--quick-tunnel`                      | Cloudflare quick tunnel, random `*.trycloudflare.com` URL | `COMPOSE_PROFILES=quicktunnel`, `ORIGIN=`            |
+| `--tunnel-token TOKEN`                | named Cloudflare tunnel for your domain                   | `COMPOSE_PROFILES=tunnel`, `CLOUDFLARE_TUNNEL_TOKEN` |
+| `--no-tunnel`                         | remove a tunnel profile                                   | `COMPOSE_PROFILES=`                                  |
+| `--cloud-db URL`                      | managed PostgreSQL, uses `compose.cloud-db.yaml`          | `DATABASE_URL`                                       |
+| `--registration open\|closed`         | allow self sign-up                                        | `REGISTRATION_OPEN`                                  |
+| `--no-start` / `--no-build`           | only write `.env` / skip the image rebuild                | –                                                    |
+
+Without `deploy.sh`: copy `.env.example` to `.env`, fill in the same keys, then `docker compose up -d --build`
+(or `docker compose -f compose.cloud-db.yaml up -d --build`). Compose interpolates `${...}` values
+from `.env` and activates the Cloudflare service from `COMPOSE_PROFILES`.
+
+Services: `db` (persistent volume), `migrate` (one-shot, advisory-locked), `app` (Node on
+`0.0.0.0:3000` inside the container, published on `APP_BIND:APP_PORT`), and one of
+`cloudflared` (profile `tunnel`) or `quicktunnel` (profile `quicktunnel`). The launch command
+starts these services only; it never creates Cloudflare, S3 or cloud-database resources.
+
+## ORIGIN and how the app knows its URL
+
+Form posts are protected by an origin check, so `ORIGIN` must be exactly what people type,
+scheme and port included: `http://localhost:3000`, `http://192.168.1.20:8080`,
+`https://pantry.example.com`. A mismatch shows up as 403 on sign-in.
+
+`ORIGIN` may be empty **only** for the quick tunnel: the container entrypoint
+(`scripts/start.mjs`) drops the empty variable and the app then trusts the origin of each
+request as forwarded by cloudflared (`X-Forwarded-Proto` + `Host`). In that mode the app is
+meant to be used through the tunnel URL, not via `http://localhost` (which would be treated
+as https and fail the origin check).
+
+Session cookies are marked `Secure` when `ORIGIN` starts with `https://`. Plain-http LAN installs
+therefore work, but anyone on the network path can read the traffic; prefer a tunnel or TLS proxy
+for anything beyond your own LAN.
+
+## Cloudflare Tunnel
+
+**Quick tunnel (try-out):** `./deploy.sh --quick-tunnel`. cloudflared prints a
+`https://<random>.trycloudflare.com` hostname, which `deploy.sh` shows. No account, no DNS.
+The hostname changes on every restart and Cloudflare offers no uptime guarantee for it.
+
+**Named tunnel (your domain):**
+
+1. Cloudflare dashboard → _Zero Trust → Networks → Tunnels → Create a tunnel_ (Cloudflared connector). Copy the token.
+2. On the tunnel's _Public Hostname_ tab add your hostname (e.g. `pantry.example.com`) with service type **HTTP** and URL **`app:3000`**. The container joins the compose network and resolves `app` by name.
+3. `./deploy.sh --tunnel-token <token> --origin https://pantry.example.com`
+
+The app stays on `127.0.0.1:<port>` on the host; only the tunnel reaches it from outside.
 
 ## Update
 

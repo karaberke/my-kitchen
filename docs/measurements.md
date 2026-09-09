@@ -71,7 +71,7 @@ recipes and prefix lookup over ingredient names stayed far below the budget.
 - Repeated build with only source changes: dependency layers (`package.json`,
   `pnpm-lock.yaml`, `pnpm install` with a BuildKit cache mount) are reused; only
   the `COPY . .`, `pnpm build` and `pnpm prune` layers rerun. Measured:
-  `docker compose -f compose.local-prod.yaml up -d --build` after a source-only
+  `docker compose -f compose.yaml up -d --build` after a source-only
   change completed in 11 s on the development machine (image build + start).
 - Build requires no secrets and no database: `serverEnv()` returns placeholders
   while `building` is true; real values are validated at container start.
@@ -94,7 +94,7 @@ recipes and prefix lookup over ingredient names stayed far below the budget.
 | `pnpm test:integration` (real PostgreSQL)                                                                          | 5 files, 17 tests passed                  |
 | `pnpm build`                                                                                                       | adapter-node output, precompressed assets |
 | `pnpm test:e2e` (Playwright, built app)                                                                            | 5 flows passed                            |
-| Docker: fresh `db` start → `migrate` → `app` healthy                                                               | passed (`compose.local-prod.yaml`)        |
+| Docker: fresh `db` start → `migrate` → `app` healthy                                                               | passed (`compose.yaml`)                   |
 | Docker: `down`/`up` keeps users and sessions; migrate reruns idempotently                                          | passed                                    |
 | Docker: migration failure (bad password) exits 1, app does not start                                               | passed                                    |
 | Docker: cloud-db variant against an external Postgres (no db service)                                              | passed                                    |

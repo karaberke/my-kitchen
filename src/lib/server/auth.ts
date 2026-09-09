@@ -2,20 +2,43 @@ import { betterAuth } from 'better-auth/minimal';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
 import { getRequestEvent } from '$app/server';
+import { dev } from '$app/environment';
 import { db } from '$lib/server/db';
-import { serverEnv, isProduction } from '$lib/server/env';
+import { serverEnv } from '$lib/server/env';
 import { ensurePersonalHousehold } from '$lib/server/households';
 
 const env = serverEnv();
+const fixedOrigin = env.ORIGIN || null;
+
+/**
+ * Origin of the current request as seen through a reverse proxy or tunnel.
+ * Used only when ORIGIN is empty ("auto" mode, e.g. a Cloudflare quick tunnel
+ * whose hostname is not known in advance). Cross-site requests still fail the
+ * check because their Origin header differs from the Host they target.
+ */
+export function requestOrigin(request: Request): string | null {
+	const proto = request.headers.get('x-forwarded-proto')?.split(',')[0].trim() || 'https';
+	const host =
+		request.headers.get('x-forwarded-host')?.split(',')[0].trim() || request.headers.get('host');
+	if (!host || !/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host) || !/^https?$/.test(proto)) return null;
+	return `${proto}://${host}`;
+}
 
 /**
  * Better Auth with database sessions. Cookie caching stays disabled so that a
  * revoked session is rejected on the very next request.
  */
 export const auth = betterAuth({
-	baseURL: env.ORIGIN,
+	baseURL: fixedOrigin ?? undefined,
 	secret: env.BETTER_AUTH_SECRET,
-	trustedOrigins: [env.ORIGIN],
+	// Called once at start-up without a request, then per request.
+	trustedOrigins: (request?: Request) => {
+		const own = request ? requestOrigin(request) : null;
+		// Production trusts exactly ORIGIN. `vite dev` also trusts its own dev-server origin so the
+		// same .env can hold the Docker ORIGIN (e.g. http://localhost:8080) without breaking sign-in.
+		if (fixedOrigin) return dev && own ? [fixedOrigin, own] : [fixedOrigin];
+		return own ? [own] : [];
+	},
 	database: drizzleAdapter(db, { provider: 'pg' }),
 	emailAndPassword: {
 		enabled: true,
@@ -41,7 +64,9 @@ export const auth = betterAuth({
 		}
 	},
 	advanced: {
-		useSecureCookies: isProduction(),
+		// Secure cookies follow the scheme users actually reach us on; forcing them on a
+		// plain-http LAN install would make sign-in silently fail.
+		useSecureCookies: fixedOrigin ? fixedOrigin.startsWith('https://') : undefined,
 		cookiePrefix: 'pp'
 	},
 	databaseHooks: {

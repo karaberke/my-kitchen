@@ -25,3 +25,32 @@ vite.config.ts.timestamp-*
 # Test artifacts
 test-results
 playwright-report
+coverage
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Caches
+.eslintcache
+.prettiercache
+*.tsbuildinfo
+
+# Editors
+.idea
+*.swp
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Local runtime data (see also data/.gitignore)
+/data/uploads
+/data/test-uploads
+
+# Local Docker Compose overrides
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yml

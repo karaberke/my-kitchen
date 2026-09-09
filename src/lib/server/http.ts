@@ -39,7 +39,9 @@ export function applyResponsePolicy(event: RequestEvent, response: Response): Re
 }
 
 function isPublicStaticAsset(path: string): boolean {
-	return /^\/(robots\.txt|favicon\.(svg|ico|png)|manifest\.webmanifest|icons\/)/.test(path);
+	return /^\/(robots\.txt|favicon\.ico|favicon-\d+x\d+\.png|apple-touch-icon\.png|android-chrome-\d+x\d+\.png|site\.webmanifest)$/.test(
+		path
+	);
 }
 
 export function noStoreJson(data: unknown, init: ResponseInit = {}): Response {

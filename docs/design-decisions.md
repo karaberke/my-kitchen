@@ -19,6 +19,12 @@ This note explains the choices that are not obvious from the code.
   catalog rows and the caller's own rows. A shared recipe carries its custom
   ingredient names by value (the recipe row stores `name`), so members see the
   recipe without gaining a way to enumerate the owner's other identities.
+- **Origin handling**: `ORIGIN` is the single source of truth for CSRF and
+  auth trusted origins in production. When it is empty (Cloudflare quick tunnel
+  with a random hostname) the app trusts the origin of each request as
+  forwarded by the tunnel (`X-Forwarded-Proto` + `Host`); cross-site posts still
+  fail because their `Origin` differs from the `Host` they target. In `vite dev`
+  the dev-server origin is trusted in addition, so one `.env` serves both.
 - **Auth rate limits**: the form actions for sign-in, sign-up and password change
   use a small in-process sliding-window limiter keyed by client address (and
   email for sign-in), because Better Auth's own limiter only guards its HTTP

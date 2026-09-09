@@ -1,7 +1,12 @@
-# Production: app + PostgreSQL + one-shot migrations + Cloudflare Tunnel.
-# One-time setup: copy .env.example to .env and fill in the values.
-# Launch:       docker compose up -d --build
-# No host ports are published; Cloudflare routes the public hostname to http://app:3000.
+# Pantry & Plate — production stack: PostgreSQL + one-shot migrations + app (+ optional Cloudflare Tunnel).
+#
+#   ./deploy.sh                     one-command setup and launch (writes .env, generates secrets)
+#   docker compose up -d --build    launch/upgrade once .env exists
+#
+# Cloudflare Tunnel is opt-in through Compose profiles set in .env:
+#   COMPOSE_PROFILES=tunnel        named tunnel with CLOUDFLARE_TUNNEL_TOKEN (your own domain)
+#   COMPOSE_PROFILES=quicktunnel   zero-config https://<random>.trycloudflare.com URL (try-out only)
+# The app itself listens on ${APP_BIND}:${APP_PORT} (default 127.0.0.1:3000).
 name: pantry-and-plate
 
 x-app-env: &app-env
@@ -10,7 +15,10 @@ x-app-env: &app-env
   DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-10}
   DATABASE_IDLE_TIMEOUT_SECONDS: ${DATABASE_IDLE_TIMEOUT_SECONDS:-30}
   DATABASE_SSL: ${DATABASE_SSL:-}
-  ORIGIN: ${ORIGIN:?set ORIGIN in .env (https://your-hostname)}
+  # Public URL users type. Leave empty only for the quick tunnel (origin is then taken from each request).
+  ORIGIN: ${ORIGIN:-}
+  PROTOCOL_HEADER: x-forwarded-proto
+  HOST_HEADER: x-forwarded-host
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
   REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
@@ -27,6 +35,13 @@ x-app-env: &app-env
   PUBLIC_REVISION_POLL_MS: ${PUBLIC_REVISION_POLL_MS:-20000}
   HOST: 0.0.0.0
   PORT: '3000'
+
+x-cloudflared: &cloudflared
+  image: cloudflare/cloudflared:2025.9.1
+  restart: unless-stopped
+  depends_on:
+    app:
+      condition: service_started
 
 services:
   db:
@@ -64,6 +79,9 @@ services:
     image: pantry-and-plate:latest
     restart: unless-stopped
     environment: *app-env
+    ports:
+      # APP_BIND=127.0.0.1 keeps it local (tunnel / reverse proxy on the same host); 0.0.0.0 exposes it on the LAN.
+      - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000'
     volumes:
       - uploads:/app/data/uploads
     depends_on:
@@ -72,17 +90,20 @@ services:
       migrate:
         condition: service_completed_successfully
     stop_grace_period: 20s
-    # No host port: reachable only through the tunnel (and other compose services).
 
+  # Named tunnel for your own domain (dashboard-created, token based).
   cloudflared:
-    image: cloudflare/cloudflared:2025.9.1
-    restart: unless-stopped
+    <<: *cloudflared
+    profiles: [tunnel]
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
-    depends_on:
-      app:
-        condition: service_started
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+  # Quick tunnel: no account, random *.trycloudflare.com hostname printed in its logs.
+  quicktunnel:
+    <<: *cloudflared
+    profiles: [quicktunnel]
+    command: tunnel --no-autoupdate --url http://app:3000
 
 volumes:
   pgdata:
