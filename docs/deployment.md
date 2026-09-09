@@ -9,35 +9,51 @@ git clone <repo> my-kitchen && cd my-kitchen && ./deploy.sh [options]
 `deploy.sh` needs Docker with Compose v2 (and `git` for the remote bootstrap). It:
 
 1. creates `.env` from `.env.example` with a generated `BETTER_AUTH_SECRET` and `POSTGRES_PASSWORD` (existing `.env` files are kept; only the flags you pass are changed),
-2. writes your choices (`APP_PORT`, `APP_BIND`, `ORIGIN`, `COMPOSE_PROFILES`, `CLOUDFLARE_TUNNEL_TOKEN`, `DATABASE_URL`, `REGISTRATION_OPEN`),
-3. runs `docker compose up -d --build`, waits for the health check and prints the URL.
+2. writes your choices (`APP_PORT`, `APP_BIND`, `ORIGIN`, `COMPOSE_PROFILES`, `CLOUDFLARE_TUNNEL_TOKEN`, `DATABASE_URL`, `REGISTRATION_OPEN`, `ADMIN_*`),
+3. on the first run asks for your account (email, name, password; empty password = generated and printed once),
+4. runs `docker compose up -d --build`, waits for the health check and prints the URL.
 
-| Option                                | Effect                                                    | `.env` key                                           |
-| ------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------- |
-| `--port 8080`                         | host port the app is published on                         | `APP_PORT`                                           |
-| `--bind 0.0.0.0`                      | publish on all interfaces instead of `127.0.0.1`          | `APP_BIND`                                           |
-| `--origin https://pantry.example.com` | exact public URL users type                               | `ORIGIN`                                             |
-| `--quick-tunnel`                      | Cloudflare quick tunnel, random `*.trycloudflare.com` URL | `COMPOSE_PROFILES=quicktunnel`, `ORIGIN=`            |
-| `--tunnel-token TOKEN`                | named Cloudflare tunnel for your domain                   | `COMPOSE_PROFILES=tunnel`, `CLOUDFLARE_TUNNEL_TOKEN` |
-| `--no-tunnel`                         | remove a tunnel profile                                   | `COMPOSE_PROFILES=`                                  |
-| `--cloud-db URL`                      | managed PostgreSQL, uses `compose.cloud-db.yaml`          | `DATABASE_URL`                                       |
-| `--registration open\|closed`         | allow self sign-up                                        | `REGISTRATION_OPEN`                                  |
-| `--no-start` / `--no-build`           | only write `.env` / skip the image rebuild                | –                                                    |
+| Option                                              | Effect                                                    | `.env` key                                           |
+| --------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------- |
+| `--port 8080`                                       | host port the app is published on                         | `APP_PORT`                                           |
+| `--bind 0.0.0.0`                                    | publish on all interfaces instead of `127.0.0.1`          | `APP_BIND`                                           |
+| `--origin https://kitchen.example.com`              | exact public URL users type                               | `ORIGIN`                                             |
+| `--quick-tunnel`                                    | Cloudflare quick tunnel, random `*.trycloudflare.com` URL | `COMPOSE_PROFILES=quicktunnel`, `ORIGIN=`            |
+| `--tunnel-token TOKEN`                              | named Cloudflare tunnel for your domain                   | `COMPOSE_PROFILES=tunnel`, `CLOUDFLARE_TUNNEL_TOKEN` |
+| `--no-tunnel`                                       | remove a tunnel profile                                   | `COMPOSE_PROFILES=`                                  |
+| `--cloud-db URL`                                    | managed PostgreSQL, uses `compose.cloud-db.yaml`          | `DATABASE_URL`                                       |
+| `--registration open\|closed`                       | allow self sign-up                                        | `REGISTRATION_OPEN`                                  |
+| `--admin-email`, `--admin-name`, `--admin-password` | your account, created by the app on its first start       | `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD`        |
+| `--no-start` / `--no-build`                         | only write `.env` / skip the image rebuild                | –                                                    |
 
 Without `deploy.sh`: copy `.env.example` to `.env`, fill in the same keys, then `docker compose up -d --build`
 (or `docker compose -f compose.cloud-db.yaml up -d --build`). Compose interpolates `${...}` values
 from `.env` and activates the Cloudflare service from `COMPOSE_PROFILES`.
 
 Services: `db` (persistent volume), `migrate` (one-shot, advisory-locked), `app` (Node on
-`0.0.0.0:3000` inside the container, published on `APP_BIND:APP_PORT`), and one of
+`0.0.0.0:3000` inside the container, published on `APP_BIND:APP_PORT`, default `127.0.0.1:3003`), and one of
 `cloudflared` (profile `tunnel`) or `quicktunnel` (profile `quicktunnel`). The launch command
 starts these services only; it never creates Cloudflare, S3 or cloud-database resources.
+
+## Accounts: ADMIN_\* and REGISTRATION_OPEN
+
+At every start the app checks `ADMIN_EMAIL`. If it is set and no user with that email exists,
+it creates the account with `ADMIN_NAME` and `ADMIN_PASSWORD` (8 to 128 characters) and its
+personal household. Once the account exists the three variables are ignored, so a password
+changed under _Settings_ is never overwritten; to reset a forgotten password delete the
+account's rows (or the whole database) and start again. The account has no special powers
+beyond owning its household; it is simply the first account of a private install.
+
+New accounts can be created when `REGISTRATION_OPEN=true` (anyone reaching the site) or,
+regardless of that setting, by opening a valid household invitation link
+(_Household → Invite_) and choosing _Create an account_. Better Auth's raw
+`/api/auth/sign-up` endpoint is disabled; the app's own `/register` action is the only path.
 
 ## ORIGIN and how the app knows its URL
 
 Form posts are protected by an origin check, so `ORIGIN` must be exactly what people type,
-scheme and port included: `http://localhost:3000`, `http://192.168.1.20:8080`,
-`https://pantry.example.com`. A mismatch shows up as 403 on sign-in.
+scheme and port included: `http://localhost:3003`, `http://192.168.1.20:8080`,
+`https://kitchen.example.com`. A mismatch shows up as 403 on sign-in.
 
 `ORIGIN` may be empty **only** for the quick tunnel: the container entrypoint
 (`scripts/start.mjs`) drops the empty variable and the app then trusts the origin of each
@@ -57,11 +73,15 @@ The hostname changes on every restart and Cloudflare offers no uptime guarantee 
 
 **Named tunnel (your domain):**
 
-1. Cloudflare dashboard → _Zero Trust → Networks → Tunnels → Create a tunnel_ (Cloudflared connector). Copy the token.
-2. On the tunnel's _Public Hostname_ tab add your hostname (e.g. `pantry.example.com`) with service type **HTTP** and URL **`app:3000`**. The container joins the compose network and resolves `app` by name.
-3. `./deploy.sh --tunnel-token <token> --origin https://pantry.example.com`
+1. Cloudflare dashboard → _Zero Trust → Networks → Tunnels → Create a tunnel_ (Cloudflared connector). On the _Install connector_ step copy the token (the value after `--token`); do not install anything.
+2. On the tunnel's _Public Hostname_ tab add your hostname (e.g. `kitchen.example.com`) with service type **HTTP** and URL **`app:3000`**. The cloudflared container joins the compose network and resolves `app` by name; `3000` is the container's internal port and is unrelated to `APP_PORT`.
+3. `./deploy.sh --tunnel-token <token> --origin https://kitchen.example.com`, or set `COMPOSE_PROFILES=tunnel`, `CLOUDFLARE_TUNNEL_TOKEN` and `ORIGIN` in `.env` and run `docker compose up -d`.
+4. The tunnel shows _Healthy_ in the dashboard; Cloudflare creates the DNS record and certificate.
 
 The app stays on `127.0.0.1:<port>` on the host; only the tunnel reaches it from outside.
+Rotating the token: create a new token in the dashboard, update `CLOUDFLARE_TUNNEL_TOKEN`,
+`docker compose up -d`. Removing the tunnel: `./deploy.sh --no-tunnel` (or `COMPOSE_PROFILES=`) and
+`docker compose up -d --remove-orphans`.
 
 ## Update
 
@@ -118,9 +138,9 @@ cache entirely. `Vary: Cookie` is not relied on for isolation.
 Verify from outside:
 
 ```sh
-curl -sI https://pantry.example.com/recipes | grep -i -E 'cache-control|cf-cache-status'
+curl -sI https://kitchen.example.com/recipes | grep -i -E 'cache-control|cf-cache-status'
 # expect: cache-control: private, no-store   cf-cache-status: BYPASS (or DYNAMIC)
-curl -sI https://pantry.example.com/_app/immutable/<hashed file> | grep -i -E 'cache-control|cf-cache-status'
+curl -sI https://kitchen.example.com/_app/immutable/<hashed file> | grep -i -E 'cache-control|cf-cache-status'
 # expect: public, max-age=31536000, immutable   cf-cache-status: HIT after the first request
 ```
 
@@ -158,3 +178,6 @@ Switching backend does not migrate existing files; copy them with the provider's
 - **Uploads fail with 413** → raise `BODY_SIZE_LIMIT` (adapter-node) above `UPLOAD_MAX_BYTES`.
 - **Tunnel shows "unhealthy"** → check the token and that the public hostname points to
   `http://app:3000`. `docker compose logs cloudflared`.
+- **Cannot sign in with ADMIN_EMAIL** → `docker compose logs app | grep bootstrap`. "already
+  exists" means the account was created earlier with a different password; "could not create"
+  shows the reason (usually a password shorter than 8 characters).

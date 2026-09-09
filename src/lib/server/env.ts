@@ -24,6 +24,18 @@ const schema = z.object({
 		.optional()
 		.default('true')
 		.transform((v) => !['false', '0', 'no', 'off'].includes(v.trim().toLowerCase())),
+	/** First account, created at start-up when it does not exist yet (see bootstrap.ts). */
+	ADMIN_EMAIL: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim().toLowerCase()),
+	ADMIN_NAME: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim().replace(/\s+/g, ' ').slice(0, 80)),
+	ADMIN_PASSWORD: z.string().optional().default(''),
 	STORAGE_BACKEND: z.enum(['local', 's3']).default('local'),
 	UPLOAD_DIR: z.string().default('./data/uploads'),
 	S3_BUCKET: z.string().optional().default(''),
@@ -63,6 +75,12 @@ export function serverEnv(): ServerEnv {
 	if (!parsed.success) {
 		const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 		throw new Error(`Invalid server environment: ${issues}`);
+	}
+	if (parsed.data.ADMIN_EMAIL) {
+		if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(parsed.data.ADMIN_EMAIL))
+			throw new Error('ADMIN_EMAIL must be an email address');
+		if (parsed.data.ADMIN_PASSWORD.length < 8 || parsed.data.ADMIN_PASSWORD.length > 128)
+			throw new Error('ADMIN_PASSWORD must be 8 to 128 characters when ADMIN_EMAIL is set');
 	}
 	if (parsed.data.STORAGE_BACKEND === 's3') {
 		const missing = ['S3_BUCKET', 'S3_REGION'].filter((k) => !parsed.data[k as keyof ServerEnv]);

@@ -1,4 +1,4 @@
-import type { Handle, HandleServerError } from '@sveltejs/kit';
+import type { Handle, HandleServerError, ServerInit } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import { randomUUID } from 'node:crypto';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
@@ -7,6 +7,12 @@ import { db } from '$lib/server/db';
 import { listMemberships } from '$lib/server/households';
 import { resolveActiveHousehold } from '$lib/server/access';
 import { applyResponsePolicy } from '$lib/server/http';
+import { ensureAdminAccount } from '$lib/server/bootstrap';
+
+/** Runs once when the server starts: creates the ADMIN_* account if it does not exist yet. */
+export const init: ServerInit = async () => {
+	if (!building) await ensureAdminAccount();
+};
 
 /**
  * Resolve the session exactly once per request into request-scoped locals.
@@ -18,6 +24,12 @@ const handleSession: Handle = async ({ event, resolve }) => {
 	event.locals.session = null;
 	event.locals.memberships = [];
 	event.locals.household = null;
+
+	// Accounts are only ever created through the app's own /register action (which applies the
+	// registration policy) or the ADMIN_* bootstrap, never through Better Auth's raw endpoint.
+	if (event.url.pathname.startsWith('/api/auth/sign-up')) {
+		return applyResponsePolicy(event, new Response('Not found', { status: 404 }));
+	}
 
 	if (!building) {
 		const result = await auth.api.getSession({ headers: event.request.headers });

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # My Kitchen — self-host in one command.
 #
-#   ./deploy.sh                                  local install on http://localhost:3000
+#   ./deploy.sh                                  local install on http://localhost:3003
 #   ./deploy.sh --port 8080 --bind 0.0.0.0 --origin http://192.168.1.20:8080   LAN install
 #   ./deploy.sh --quick-tunnel                   public try-out URL on *.trycloudflare.com (no account)
-#   ./deploy.sh --tunnel-token TOKEN --origin https://pantry.example.com       your own domain
+#   ./deploy.sh --tunnel-token TOKEN --origin https://kitchen.example.com      your own domain
 #   ./deploy.sh --cloud-db 'postgres://user:pass@host/db?sslmode=require'      managed PostgreSQL
+#   ./deploy.sh --admin-email you@example.com --admin-password 'secret'        first account (asked on first run otherwise)
 #
 # Run it again any time: it keeps your .env, applies the flags you pass, rebuilds and restarts.
 # Remote bootstrap (needs git):  curl -fsSL <raw url of this file> | bash -s -- --port 8080
@@ -13,11 +14,15 @@ set -euo pipefail
 
 MY_KITCHEN_REPO="${MY_KITCHEN_REPO:-https://github.com/YOUR-GITHUB-USER/my-kitchen.git}"
 PORT="" BIND="" ORIGIN_ARG="" TOKEN="" QUICK=0 NO_TUNNEL=0 CLOUD_DB="" REGISTRATION="" DIR="" START=1 REBUILD=1
+ADMIN_EMAIL_ARG="" ADMIN_NAME_ARG="" ADMIN_PASSWORD_ARG=""
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--port) PORT="$2"; shift 2 ;;
+		--admin-email) ADMIN_EMAIL_ARG="$2"; shift 2 ;;
+		--admin-name) ADMIN_NAME_ARG="$2"; shift 2 ;;
+		--admin-password) ADMIN_PASSWORD_ARG="$2"; shift 2 ;;
 		--bind) BIND="$2"; shift 2 ;;
 		--origin) ORIGIN_ARG="$2"; shift 2 ;;
 		--tunnel-token) TOKEN="$2"; shift 2 ;;
@@ -47,7 +52,7 @@ if [ ! -f "$SELF_DIR/compose.yaml" ] || [ ! -f "$SELF_DIR/Dockerfile" ]; then
 		git clone --depth 1 "$MY_KITCHEN_REPO" "$TARGET"
 	fi
 	cd "$TARGET"
-	exec ./deploy.sh "$@" ${PORT:+--port "$PORT"} ${BIND:+--bind "$BIND"} ${ORIGIN_ARG:+--origin "$ORIGIN_ARG"} ${TOKEN:+--tunnel-token "$TOKEN"} $([ $QUICK = 1 ] && echo --quick-tunnel) $([ $NO_TUNNEL = 1 ] && echo --no-tunnel) ${CLOUD_DB:+--cloud-db "$CLOUD_DB"} ${REGISTRATION:+--registration "$REGISTRATION"} $([ $START = 0 ] && echo --no-start)
+	exec ./deploy.sh "$@" ${PORT:+--port "$PORT"} ${BIND:+--bind "$BIND"} ${ORIGIN_ARG:+--origin "$ORIGIN_ARG"} ${TOKEN:+--tunnel-token "$TOKEN"} $([ $QUICK = 1 ] && echo --quick-tunnel) $([ $NO_TUNNEL = 1 ] && echo --no-tunnel) ${CLOUD_DB:+--cloud-db "$CLOUD_DB"} ${REGISTRATION:+--registration "$REGISTRATION"} $([ $START = 0 ] && echo --no-start) ${ADMIN_EMAIL_ARG:+--admin-email "$ADMIN_EMAIL_ARG"} ${ADMIN_NAME_ARG:+--admin-name "$ADMIN_NAME_ARG"} ${ADMIN_PASSWORD_ARG:+--admin-password "$ADMIN_PASSWORD_ARG"}
 fi
 cd "$SELF_DIR"
 
@@ -69,20 +74,52 @@ set_env() { # set_env KEY VALUE  (replace or append, keeps other lines untouched
 	mv "$tmp" .env
 }
 get_env() { grep -E "^$1=" .env | head -1 | cut -d= -f2- ; }
+ask() { # ask VAR "prompt" [silent]  -> reads from the terminal even when piped through curl | bash
+	local __var="$1" __prompt="$2" __silent="${3:-}" __val=""
+	( : < /dev/tty ) 2>/dev/null || return 1
+	if [ -n "$__silent" ]; then read -r -s -p "$__prompt" __val < /dev/tty; echo >/dev/tty; else read -r -p "$__prompt" __val < /dev/tty; fi
+	printf -v "$__var" '%s' "$__val"
+}
 
+FIRST_RUN=0
 if [ ! -f .env ]; then
 	say "Creating .env with generated secrets"
 	cp .env.example .env
 	set_env BETTER_AUTH_SECRET "$(rand)"
 	set_env POSTGRES_PASSWORD "$(rand)"
+	FIRST_RUN=1
 fi
 [ -n "$(get_env BETTER_AUTH_SECRET)" ] || set_env BETTER_AUTH_SECRET "$(rand)"
 [ -n "$(get_env POSTGRES_PASSWORD)" ] && [ "$(get_env POSTGRES_PASSWORD)" != "change-me-to-a-long-random-password" ] || set_env POSTGRES_PASSWORD "$(rand)"
 
+# Your account: from flags, or asked once on the first run. Created by the app on its first start.
+[ -n "$ADMIN_EMAIL_ARG" ] && set_env ADMIN_EMAIL "$ADMIN_EMAIL_ARG"
+[ -n "$ADMIN_NAME_ARG" ] && set_env ADMIN_NAME "$ADMIN_NAME_ARG"
+[ -n "$ADMIN_PASSWORD_ARG" ] && set_env ADMIN_PASSWORD "$ADMIN_PASSWORD_ARG"
+ADMIN_SHOW_PASSWORD=""
+if [ $FIRST_RUN = 1 ] && [ -z "$(get_env ADMIN_EMAIL)" ]; then
+	say "Your account (leave the email empty to create it later at /register)"
+	if ask A_EMAIL "   Email: "; then
+		if [ -n "$A_EMAIL" ]; then
+			set_env ADMIN_EMAIL "$A_EMAIL"
+			ask A_NAME "   Name [Admin]: " || true
+			set_env ADMIN_NAME "${A_NAME:-Admin}"
+			ask A_PASS "   Password (8+ characters, empty = generate one): " silent || true
+			if [ -z "$A_PASS" ]; then A_PASS="$(rand | cut -c1-16)"; ADMIN_SHOW_PASSWORD="$A_PASS"; fi
+			set_env ADMIN_PASSWORD "$A_PASS"
+		fi
+	else
+		warn "No terminal to ask for your account; pass --admin-email and --admin-password, or register at /register after start"
+	fi
+fi
+if [ -n "$(get_env ADMIN_EMAIL)" ] && [ "$(printf '%s' "$(get_env ADMIN_PASSWORD)" | wc -c)" -lt 8 ]; then
+	die "ADMIN_PASSWORD must have at least 8 characters (pass --admin-password or edit .env; or clear ADMIN_EMAIL)"
+fi
+
 [ -n "$PORT" ] && set_env APP_PORT "$PORT"
 [ -n "$BIND" ] && set_env APP_BIND "$BIND"
 [ -n "$REGISTRATION" ] && set_env REGISTRATION_OPEN "$( [ "$REGISTRATION" = closed ] && echo false || echo true )"
-PORT="$(get_env APP_PORT)"; PORT="${PORT:-3000}"
+PORT="$(get_env APP_PORT)"; PORT="${PORT:-3003}"
 COMPOSE_FILE="compose.yaml"
 if [ -n "$CLOUD_DB" ]; then
 	set_env DATABASE_URL "$CLOUD_DB"
@@ -114,11 +151,11 @@ else
 fi
 ORIGIN_VAL="$(get_env ORIGIN)"
 if [ "$PROFILE" = tunnel ] && ! printf '%s' "$ORIGIN_VAL" | grep -q '^https://'; then
-	warn "With a named tunnel ORIGIN must be your public https URL (pass --origin https://pantry.example.com). Sign-in will fail until it matches."
+	warn "With a named tunnel ORIGIN must be your public https URL (pass --origin https://kitchen.example.com). Sign-in will fail until it matches."
 fi
 
 say "Configuration (.env)"
-printf '   port %s on %s   origin %s   tunnel %s   database %s\n' "$PORT" "$(get_env APP_BIND)" "${ORIGIN_VAL:-<from request (quick tunnel)>}" "${PROFILE:-none}" "$( [ -n "$CLOUD_DB" ] && echo "cloud" || echo "bundled PostgreSQL" )"
+printf '   port %s on %s   origin %s   tunnel %s   database %s   account %s\n' "$PORT" "$(get_env APP_BIND)" "${ORIGIN_VAL:-<from request (quick tunnel)>}" "${PROFILE:-none}" "$( [ -n "$CLOUD_DB" ] && echo "cloud" || echo "bundled PostgreSQL" )" "$(get_env ADMIN_EMAIL)"
 [ $START = 1 ] || { say "Skipping start (--no-start). Launch with: docker compose -f $COMPOSE_FILE up -d --build"; exit 0; }
 
 # --- launch -------------------------------------------------------------------
@@ -151,7 +188,12 @@ echo
 say "My Kitchen is running"
 echo "   Open:            ${PUBLIC_URL:-http://localhost:$PORT}"
 [ "$PROFILE" = quicktunnel ] && echo "   (quick tunnel URLs change on every restart and are meant for trying things out)"
-echo "   Create the first account at ${PUBLIC_URL:-http://localhost:$PORT}/register, then optionally run: ./deploy.sh --registration closed"
+if [ -n "$(get_env ADMIN_EMAIL)" ]; then
+	echo "   Sign in as:      $(get_env ADMIN_EMAIL)${ADMIN_SHOW_PASSWORD:+  password: $ADMIN_SHOW_PASSWORD  (change it under Settings)}"
+	[ "$(get_env REGISTRATION_OPEN)" = false ] || echo "   Sign-ups are open; close them with: ./deploy.sh --registration closed   (invitation links keep working)"
+else
+	echo "   Create the first account at ${PUBLIC_URL:-http://localhost:$PORT}/register, then optionally run: ./deploy.sh --registration closed"
+fi
 echo "   Logs:            docker compose -f $COMPOSE_FILE logs -f app"
 echo "   Update:          git pull && ./deploy.sh"
 echo "   Stop:            docker compose -f $COMPOSE_FILE down        (data stays in Docker volumes)"
