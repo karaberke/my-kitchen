@@ -1,16 +1,18 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
-import type { Actions, PageServerLoad } from './$types';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { auth } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { serverEnv } from '$lib/server/env';
+import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 import { consistencyCheck } from '$lib/server/pantry';
 import { eq } from 'drizzle-orm';
 import { userPreferences } from '$lib/server/db/schema';
 import { sql } from 'drizzle-orm';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	const [pref] = await db
 		.select({ convention: userPreferences.convention })
@@ -96,3 +98,5 @@ export const actions: Actions = {
 		return { ok: true, form: 'consistency', report };
 	}
 };
+
+export const load = guard(loadImpl);

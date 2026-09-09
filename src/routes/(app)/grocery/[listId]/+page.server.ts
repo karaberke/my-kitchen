@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
-import type { Actions, PageServerLoad } from './$types';
+import type { Actions, PageServerLoadEvent } from './$types';
 import type { RequestEvent } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { assertMember, loadHouseholdOrThrow, requireHousehold } from '$lib/server/access';
@@ -24,7 +25,7 @@ import { isOperationId } from '$lib/server/operations';
 import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
 import { isUnitId } from '$lib/shared/units';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
 	event.depends('app:grocery');
 	await assertMember(db, household.id, user.id);
@@ -231,3 +232,5 @@ export const actions: Actions = {
 		}
 	}
 };
+
+export const load = guard(loadImpl);

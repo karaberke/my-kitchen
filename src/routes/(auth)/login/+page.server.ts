@@ -1,14 +1,16 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
-import type { Actions, PageServerLoad } from './$types';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { auth } from '$lib/server/auth';
 import { serverEnv } from '$lib/server/env';
+import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 
 function safeNext(raw: string | null): string {
 	return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/recipes';
 }
 
-export const load: PageServerLoad = ({ locals, url }) => {
+const loadImpl = ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, safeNext(url.searchParams.get('next')));
 	return {
 		title: 'Sign in',
@@ -26,6 +28,8 @@ export const actions: Actions = {
 		const password = String(fd.get('password') ?? '').slice(0, 200);
 		const next = safeNext(String(fd.get('next') ?? ''));
 		if (!email || !password) return fail(400, { message: 'Enter your email and password', email });
+		const limit = consume(`signin:${event.getClientAddress()}:${email.toLowerCase()}`, AUTH_LIMITS.signIn);
+		if (!limit.allowed) return fail(429, { message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`, email });
 		try {
 			await auth.api.signInEmail({ body: { email, password }, headers: event.request.headers });
 		} catch (err) {
@@ -42,3 +46,5 @@ export const actions: Actions = {
 		throw redirect(303, next);
 	}
 };
+
+export const load = guard(loadImpl);

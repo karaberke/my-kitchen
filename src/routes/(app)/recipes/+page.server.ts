@@ -1,11 +1,12 @@
 import { fail } from '@sveltejs/kit';
-import type { Actions, PageServerLoad } from './$types';
+import { guard } from '$lib/server/http';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { listRecipes, listUserTags, parseListParams, setFavorite } from '$lib/server/recipes';
 import { AppError } from '$lib/server/errors';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:recipes');
 	const params = parseListParams(event.url);
@@ -31,3 +32,5 @@ export const actions: Actions = {
 		return { ok: true };
 	}
 };
+
+export const load = guard(loadImpl);

@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
-import type { Actions, PageServerLoad } from './$types';
+import { guard } from '$lib/server/http';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireHousehold, requireUser } from '$lib/server/access';
 import {
@@ -16,7 +17,7 @@ import { Dec } from '$lib/shared/decimal';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { randomUUID } from 'node:crypto';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:recipe');
 	const householdId = event.locals.household?.id ?? null;
@@ -128,3 +129,5 @@ export const actions: Actions = {
 		}
 	}
 };
+
+export const load = guard(loadImpl);

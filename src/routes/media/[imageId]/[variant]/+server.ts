@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
+import { guard } from '$lib/server/http';
+import type { RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUserApi } from '$lib/server/access';
 import {
@@ -15,7 +16,7 @@ import { storage } from '$lib/server/media/storage';
  * returned; the ETag is never a substitute for it. Browser may cache privately
  * but must revalidate every time; Cloudflare must bypass.
  */
-export const GET: RequestHandler = async (event) => {
+const GETImpl = async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	const variant = event.params.variant as ImageVariant;
 	if (!(variant in IMAGE_VARIANTS)) throw error(404, 'Not found');
@@ -42,3 +43,5 @@ export const GET: RequestHandler = async (event) => {
 	headers.set('content-disposition', 'inline');
 	return new Response(obj.stream, { status: 200, headers });
 };
+
+export const GET = guard(GETImpl);

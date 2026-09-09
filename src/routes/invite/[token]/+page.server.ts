@@ -1,11 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
-import type { Actions, PageServerLoad } from './$types';
+import { guard } from '$lib/server/http';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { acceptInvite, peekInvite } from '$lib/server/households';
 import { AppError } from '$lib/server/errors';
 import { serverEnv } from '$lib/server/env';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const invite = await peekInvite(db, event.params.token);
 	return {
 		title: 'Invitation',
@@ -29,3 +30,5 @@ export const actions: Actions = {
 		throw redirect(303, '/household');
 	}
 };
+
+export const load = guard(loadImpl);

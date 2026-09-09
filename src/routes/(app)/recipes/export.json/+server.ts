@@ -1,10 +1,11 @@
-import type { RequestHandler } from './$types';
+import type { RequestEvent } from './$types';
+import { guard } from '$lib/server/http';
 import { db } from '$lib/server/db';
 import { requireUserApi } from '$lib/server/access';
 import { exportRecipes } from '$lib/server/recipes';
 
 /** The caller's collection. `?scope=all` also includes recipes shared with them. */
-export const GET: RequestHandler = async (event) => {
+const GETImpl = async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	const scope = event.url.searchParams.get('scope') === 'all' ? 'all' : 'mine';
 	const data = await exportRecipes(db, user.id, { scope });
@@ -16,3 +17,5 @@ export const GET: RequestHandler = async (event) => {
 		}
 	});
 };
+
+export const GET = guard(GETImpl);

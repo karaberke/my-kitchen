@@ -1,9 +1,10 @@
 import { sql } from 'drizzle-orm';
-import type { RequestHandler } from './$types';
+import { guard } from '$lib/server/http';
+import type { RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 
 /** Liveness + readiness: `?ready=1` also checks the database. */
-export const GET: RequestHandler = async ({ url }) => {
+const GETImpl = async ({ url }: RequestEvent) => {
 	const headers = { 'cache-control': 'no-store', 'content-type': 'application/json' };
 	if (url.searchParams.get('ready') !== '1')
 		return new Response(JSON.stringify({ status: 'ok' }), { headers });
@@ -17,3 +18,5 @@ export const GET: RequestHandler = async ({ url }) => {
 		);
 	}
 };
+
+export const GET = guard(GETImpl);

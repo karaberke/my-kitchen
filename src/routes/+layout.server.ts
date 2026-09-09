@@ -1,7 +1,8 @@
-import type { LayoutServerLoad } from './$types';
+import type { LayoutServerLoadEvent } from './$types';
+import { guard } from '$lib/server/http';
 import { env } from '$env/dynamic/public';
 
-export const load: LayoutServerLoad = async ({ locals, depends }) => {
+const loadImpl = async ({ locals, depends }: LayoutServerLoadEvent) => {
 	depends('app:session');
 	return {
 		user: locals.user
@@ -12,3 +13,5 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 		pollMs: Math.max(3000, Number(env.PUBLIC_REVISION_POLL_MS ?? 20000) || 20000)
 	};
 };
+
+export const load = guard(loadImpl);

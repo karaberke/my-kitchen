@@ -1,11 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
-import type { Actions, PageServerLoad } from './$types';
+import { guard } from '$lib/server/http';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, requireHousehold } from '$lib/server/access';
 import { createList, getCurrentListId, listGroceryLists } from '$lib/server/grocery';
 import { AppError } from '$lib/server/errors';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
 	await assertMember(db, household.id, user.id);
 	const current = await getCurrentListId(db, household.id);
@@ -30,3 +31,5 @@ export const actions: Actions = {
 		}
 	}
 };
+
+export const load = guard(loadImpl);

@@ -1,4 +1,5 @@
-import type { RequestEvent } from '@sveltejs/kit';
+import { error, type RequestEvent } from '@sveltejs/kit';
+import { AppError } from '$lib/server/errors';
 
 /**
  * Explicit caching policy per response type.
@@ -46,4 +47,20 @@ export function noStoreJson(data: unknown, init: ResponseInit = {}): Response {
 	headers.set('content-type', 'application/json; charset=utf-8');
 	headers.set('cache-control', 'private, no-store');
 	return new Response(JSON.stringify(data), { ...init, headers });
+}
+
+/**
+ * Map application errors thrown inside loads and endpoints to HTTP statuses
+ * (404 stays 404, 401/403 stay what they are) instead of generic 500s.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function guard<F extends (event: any) => any>(fn: F): F {
+	return (async (event: Parameters<F>[0]) => {
+		try {
+			return await fn(event);
+		} catch (err) {
+			if (err instanceof AppError) error(err.status, { message: err.message, code: err.status === 401 ? 'unauthorized' : err.status === 403 ? 'forbidden' : undefined });
+			throw err;
+		}
+	}) as F;
 }

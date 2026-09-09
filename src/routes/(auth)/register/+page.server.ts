@@ -1,10 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
-import type { Actions, PageServerLoad } from './$types';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { auth } from '$lib/server/auth';
 import { serverEnv } from '$lib/server/env';
+import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 
-export const load: PageServerLoad = ({ locals, url }) => {
+const loadImpl = ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, '/recipes');
 	const next = url.searchParams.get('next');
 	return {
@@ -58,3 +60,5 @@ export const actions: Actions = {
 		throw redirect(303, next);
 	}
 };
+
+export const load = guard(loadImpl);

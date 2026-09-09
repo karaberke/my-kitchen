@@ -1,4 +1,5 @@
 import { env as dynamic } from '$env/dynamic/private';
+import { building } from '$app/environment';
 import { z } from 'zod';
 
 const schema = z.object({
@@ -42,6 +43,10 @@ let cached: ServerEnv | undefined;
 /** Validated server environment. Throws a readable error at first use. */
 export function serverEnv(): ServerEnv {
 	if (cached) return cached;
+	if (building) {
+		// Image builds run without secrets or a database; runtime re-validates real values.
+		return schema.parse({ DATABASE_URL: 'postgres://build:build@localhost:5432/build', BETTER_AUTH_SECRET: 'build-time-placeholder-secret' });
+	}
 	const parsed = schema.safeParse(dynamic);
 	if (!parsed.success) {
 		const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');

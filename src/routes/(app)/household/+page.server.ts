@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
-import type { Actions, PageServerLoad } from './$types';
+import { guard } from '$lib/server/http';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, requireHousehold, requireUser } from '$lib/server/access';
 import {
@@ -17,7 +18,7 @@ import {
 import { AppError } from '$lib/server/errors';
 import { serverEnv } from '$lib/server/env';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:household');
 	const household = event.locals.household;
@@ -124,3 +125,5 @@ export const actions: Actions = {
 		return { ok: true, action: 'remove' };
 	}
 };
+
+export const load = guard(loadImpl);
