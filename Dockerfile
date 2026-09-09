@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multistage build for Pantry & Plate (SvelteKit + adapter-node).
+# Multistage build for My Kitchen (SvelteKit + adapter-node).
 # Dependency layers are reused as long as package.json / pnpm-lock.yaml do not change.
 
 ARG NODE_IMAGE=node:24.9.0-bookworm-slim

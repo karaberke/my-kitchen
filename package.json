@@ -1,5 +1,5 @@
 {
-	"name": "recipe-saver",
+	"name": "my-kitchen",
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
@@ -16,8 +16,8 @@
 		"test:unit": "vitest run --project unit",
 		"test:integration": "vitest run --project integration",
 		"test:e2e": "playwright test",
-		"db:dev": "docker compose -f compose.dev.yaml -p recipe-saver-dev up -d",
-		"db:dev:down": "docker compose -f compose.dev.yaml -p recipe-saver-dev down",
+		"db:dev": "docker compose -f compose.dev.yaml -p my-kitchen-dev up -d",
+		"db:dev:down": "docker compose -f compose.dev.yaml -p my-kitchen-dev down",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "node --env-file=.env scripts/migrate.mjs",
 		"db:migrate:test": "node --env-file=.env.test scripts/migrate.mjs",

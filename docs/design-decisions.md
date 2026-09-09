@@ -1,6 +1,6 @@
 # Design decisions
 
-Pantry & Plate is a single SvelteKit application with one PostgreSQL database.
+My Kitchen is a single SvelteKit application with one PostgreSQL database.
 This note explains the choices that are not obvious from the code.
 
 ## Ownership and isolation

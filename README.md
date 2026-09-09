@@ -1,4 +1,4 @@
-# Pantry & Plate
+# My Kitchen
 
 Self-hosted recipes, grocery lists and pantry tracking for your household.
 Plan meals from your recipes, see what is missing from the pantry, shop, cook, and keep stock in sync across everyone's phones.
@@ -8,7 +8,7 @@ Plan meals from your recipes, see what is missing from the pantry, shop, cook, a
 You need Docker (Engine or Desktop) with Compose v2.
 
 ```sh
-git clone https://github.com/YOUR-GITHUB-USER/recipe-saver.git pantry-and-plate && cd pantry-and-plate && ./deploy.sh
+git clone https://github.com/YOUR-GITHUB-USER/my-kitchen.git my-kitchen && cd my-kitchen && ./deploy.sh
 ```
 
 That's it: `deploy.sh` writes a `.env` with generated secrets, builds the image, starts PostgreSQL, runs migrations and the app, and prints the URL (default `http://localhost:3000`). Open it, create the first account, done.
@@ -64,7 +64,7 @@ pnpm dev               # http://localhost:5173
 | `pnpm db:generate`                                               | new migration after editing `src/lib/server/db/schema.ts` |
 | `pnpm seed:perf`, `pnpm measure -- --base http://localhost:3000` | performance dataset and timings                           |
 
-Create the test database once: `docker compose -f compose.dev.yaml -p recipe-saver-dev exec db psql -U recipe -d recipe_dev -c 'create database recipe_test'`, then `pnpm db:migrate:test`.
+Create the test database once: `docker compose -f compose.dev.yaml -p my-kitchen-dev exec db psql -U recipe -d recipe_dev -c 'create database recipe_test'`, then `pnpm db:migrate:test`.
 
 ## Documentation
 

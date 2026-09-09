@@ -39,7 +39,7 @@
 	<aside
 		class="no-print sticky top-0 hidden h-dvh w-60 flex-none flex-col border-r border-sand bg-parchment px-3.5 py-5 md:flex"
 	>
-		<a href="/recipes" class="font-display px-2 text-[18px] text-ink">Pantry &amp; Plate</a>
+		<a href="/recipes" class="font-display px-2 text-[18px] text-ink">My Kitchen</a>
 		<div class="px-2 pt-1 pb-4">
 			<HouseholdSwitcher {household} {memberships} />
 		</div>
@@ -78,7 +78,7 @@
 	<div class="flex min-w-0 flex-1 flex-col">
 		<!-- Mobile header -->
 		<header class="no-print flex items-center justify-between gap-3 px-4 pt-3 pb-1 md:hidden">
-			<a href="/recipes" class="font-display text-[17px]">Pantry &amp; Plate</a>
+			<a href="/recipes" class="font-display text-[17px]">My Kitchen</a>
 			<HouseholdSwitcher {household} {memberships} compact />
 		</header>
 

@@ -8,7 +8,7 @@
 </script>
 
 <svelte:head>
-	<title>{page.data.title ? `${page.data.title} · Pantry & Plate` : 'Pantry & Plate'}</title>
+	<title>{page.data.title ? `${page.data.title} · My Kitchen` : 'My Kitchen'}</title>
 </svelte:head>
 
 {#if data.user}
@@ -21,7 +21,7 @@
 	>
 		<div class="mx-auto flex max-w-md flex-col gap-5">
 			<div class="text-center">
-				<div class="font-display text-[26px] text-ink">Pantry &amp; Plate</div>
+				<div class="font-display text-[26px] text-ink">My Kitchen</div>
 				<div class="mt-1 text-[12px] tracking-[0.08em] text-sage uppercase">
 					Recipes · groceries · pantry
 				</div>

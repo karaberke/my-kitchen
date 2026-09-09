@@ -3,7 +3,7 @@
 ## The short version
 
 ```sh
-git clone <repo> pantry-and-plate && cd pantry-and-plate && ./deploy.sh [options]
+git clone <repo> my-kitchen && cd my-kitchen && ./deploy.sh [options]
 ```
 
 `deploy.sh` needs Docker with Compose v2 (and `git` for the remote bootstrap). It:
@@ -83,7 +83,7 @@ Volumes are not backups. Take logical dumps:
 # backup (bundled db)
 docker compose exec -T db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > backup-$(date +%F).dump
 # uploads (local storage backend)
-docker run --rm -v pantry-and-plate_uploads:/data -v "$PWD":/backup alpine tar czf /backup/uploads-$(date +%F).tgz -C /data .
+docker run --rm -v my-kitchen_uploads:/data -v "$PWD":/backup alpine tar czf /backup/uploads-$(date +%F).tgz -C /data .
 ```
 
 Restore into a **disposable** database first to prove the dump works:

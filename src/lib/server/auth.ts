@@ -67,7 +67,7 @@ export const auth = betterAuth({
 		// Secure cookies follow the scheme users actually reach us on; forcing them on a
 		// plain-http LAN install would make sign-in silently fail.
 		useSecureCookies: fixedOrigin ? fixedOrigin.startsWith('https://') : undefined,
-		cookiePrefix: 'pp'
+		cookiePrefix: 'mk'
 	},
 	databaseHooks: {
 		user: {
