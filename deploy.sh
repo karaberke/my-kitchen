@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pantry & Plate — self-host in one command.
+# My Kitchen — self-host in one command.
 #
 #   ./deploy.sh                                  local install on http://localhost:3000
 #   ./deploy.sh --port 8080 --bind 0.0.0.0 --origin http://192.168.1.20:8080   LAN install
@@ -11,7 +11,7 @@
 # Remote bootstrap (needs git):  curl -fsSL <raw url of this file> | bash -s -- --port 8080
 set -euo pipefail
 
-PANTRY_REPO="${PANTRY_REPO:-https://github.com/YOUR-GITHUB-USER/recipe-saver.git}"
+MY_KITCHEN_REPO="${MY_KITCHEN_REPO:-https://github.com/YOUR-GITHUB-USER/my-kitchen.git}"
 PORT="" BIND="" ORIGIN_ARG="" TOKEN="" QUICK=0 NO_TUNNEL=0 CLOUD_DB="" REGISTRATION="" DIR="" START=1 REBUILD=1
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -40,11 +40,11 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # --- bootstrap: not inside a checkout? clone one and re-run there -------------
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 if [ ! -f "$SELF_DIR/compose.yaml" ] || [ ! -f "$SELF_DIR/Dockerfile" ]; then
-	command -v git >/dev/null || die "git is required to download Pantry & Plate"
-	TARGET="${DIR:-pantry-and-plate}"
+	command -v git >/dev/null || die "git is required to download My Kitchen"
+	TARGET="${DIR:-my-kitchen}"
 	if [ ! -d "$TARGET/.git" ]; then
-		say "Downloading Pantry & Plate into ./$TARGET"
-		git clone --depth 1 "$PANTRY_REPO" "$TARGET"
+		say "Downloading My Kitchen into ./$TARGET"
+		git clone --depth 1 "$MY_KITCHEN_REPO" "$TARGET"
 	fi
 	cd "$TARGET"
 	exec ./deploy.sh "$@" ${PORT:+--port "$PORT"} ${BIND:+--bind "$BIND"} ${ORIGIN_ARG:+--origin "$ORIGIN_ARG"} ${TOKEN:+--tunnel-token "$TOKEN"} $([ $QUICK = 1 ] && echo --quick-tunnel) $([ $NO_TUNNEL = 1 ] && echo --no-tunnel) ${CLOUD_DB:+--cloud-db "$CLOUD_DB"} ${REGISTRATION:+--registration "$REGISTRATION"} $([ $START = 0 ] && echo --no-start)
@@ -148,7 +148,7 @@ if [ "$PROFILE" = quicktunnel ]; then
 fi
 
 echo
-say "Pantry & Plate is running"
+say "My Kitchen is running"
 echo "   Open:            ${PUBLIC_URL:-http://localhost:$PORT}"
 [ "$PROFILE" = quicktunnel ] && echo "   (quick tunnel URLs change on every restart and are meant for trying things out)"
 echo "   Create the first account at ${PUBLIC_URL:-http://localhost:$PORT}/register, then optionally run: ./deploy.sh --registration closed"

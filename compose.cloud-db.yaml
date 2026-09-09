@@ -1,7 +1,7 @@
 # Same as compose.yaml but for a managed/cloud PostgreSQL: no db service.
 #   ./deploy.sh --cloud-db 'postgres://user:pass@host/db'      or
 #   docker compose -f compose.cloud-db.yaml up -d --build
-name: pantry-and-plate
+name: my-kitchen
 
 x-app-env: &app-env
   DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
@@ -42,7 +42,7 @@ services:
     build:
       context: .
       target: runtime
-    image: pantry-and-plate:latest
+    image: my-kitchen:latest
     restart: 'no'
     environment: *app-env
     command: ['node', 'scripts/migrate.mjs']
@@ -51,7 +51,7 @@ services:
     build:
       context: .
       target: runtime
-    image: pantry-and-plate:latest
+    image: my-kitchen:latest
     restart: unless-stopped
     environment: *app-env
     ports:

@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { CATALOG } from './catalog-data.mjs';
 
+// Historic namespace: keeps catalog ids stable across renames; never change it.
 const NAMESPACE = 'pantry-and-plate-catalog-v1';
 function uuidV5(name) {
 	const h = createHash('sha1').update(NAMESPACE).update(name).digest();

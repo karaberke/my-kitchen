@@ -1,4 +1,4 @@
-# Pantry & Plate — production stack: PostgreSQL + one-shot migrations + app (+ optional Cloudflare Tunnel).
+# My Kitchen — production stack: PostgreSQL + one-shot migrations + app (+ optional Cloudflare Tunnel).
 #
 #   ./deploy.sh                     one-command setup and launch (writes .env, generates secrets)
 #   docker compose up -d --build    launch/upgrade once .env exists
@@ -7,7 +7,7 @@
 #   COMPOSE_PROFILES=tunnel        named tunnel with CLOUDFLARE_TUNNEL_TOKEN (your own domain)
 #   COMPOSE_PROFILES=quicktunnel   zero-config https://<random>.trycloudflare.com URL (try-out only)
 # The app itself listens on ${APP_BIND}:${APP_PORT} (default 127.0.0.1:3000).
-name: pantry-and-plate
+name: my-kitchen
 
 x-app-env: &app-env
   DATABASE_URL: postgres://${POSTGRES_USER:-recipe}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-recipe}
@@ -64,7 +64,7 @@ services:
     build:
       context: .
       target: runtime
-    image: pantry-and-plate:latest
+    image: my-kitchen:latest
     restart: 'no'
     environment: *app-env
     depends_on:
@@ -76,7 +76,7 @@ services:
     build:
       context: .
       target: runtime
-    image: pantry-and-plate:latest
+    image: my-kitchen:latest
     restart: unless-stopped
     environment: *app-env
     ports:

@@ -728,7 +728,7 @@ export async function exportRecipes(
 
 	return {
 		schemaVersion: EXPORT_SCHEMA_VERSION,
-		application: 'pantry-and-plate',
+		application: 'my-kitchen',
 		exportedAt: new Date().toISOString(),
 		exportedBy: userId,
 		notes: [
