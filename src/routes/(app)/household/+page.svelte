@@ -4,12 +4,15 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
-	import { pushToast } from '$lib/client/toast.svelte';
+	import { clearToasts, pushToast } from '$lib/client/toast.svelte';
 	import { fmtDateTime, initials } from '$lib/client/format';
 
 	let { data, form } = $props();
 	let newOpen = $state(false);
 	let renameOpen = $state(false);
+	let deleteOpen = $state(false);
+	let confirmText = $state('');
+	const confirmMatches = $derived(!!data.household && confirmText.trim() === data.household.name);
 	let inviteUrl = $state<string | null>(null);
 	$effect(() => {
 		if (form?.inviteUrl) inviteUrl = form.inviteUrl as string;
@@ -197,6 +200,22 @@
 				</ul>
 			{/if}
 		</section>
+
+		<section class="card-muted mt-5 border-brick-line p-3.5">
+			<div class="eyebrow text-brick-dark">Danger zone</div>
+			<p class="mt-1 text-[12.5px] leading-relaxed text-ink-soft">
+				Deleting this household erases its pantry, grocery lists and history for everyone in it.
+				Recipes stay with the people who wrote them.
+			</p>
+			<button
+				type="button"
+				class="btn-danger btn-sm mt-3"
+				onclick={() => {
+					confirmText = '';
+					deleteOpen = true;
+				}}>Delete this household</button
+			>
+		</section>
 	{/if}
 {/if}
 
@@ -248,3 +267,47 @@
 		<button class="btn-primary w-full">Save</button>
 	</form>
 </Sheet>
+{#if data.household}
+	<Sheet
+		bind:open={deleteOpen}
+		title="Delete this household?"
+		description="The pantry, grocery lists and history for “{data.household
+			.name}” will be erased. Other members lose access right away. Your recipes stay with you. This cannot be undone."
+	>
+		<form
+			method="post"
+			action="?/deleteHousehold"
+			class="flex flex-col gap-3.5"
+			use:enhance={() => {
+				clearToasts();
+				return async ({ update }) => {
+					await update({ reset: false });
+					deleteOpen = false;
+					// The active household is gone: drop every cached load so the page we
+					// land on reflects the replacement household rather than stale data.
+					await invalidateAll();
+				};
+			}}
+		>
+			<div>
+				<label class="label" for="hh-delete-confirm"
+					>Type <strong>{data.household.name}</strong> to confirm</label
+				>
+				<input
+					class="field"
+					id="hh-delete-confirm"
+					name="confirmName"
+					autocomplete="off"
+					spellcheck="false"
+					bind:value={confirmText}
+				/>
+			</div>
+			<div class="flex gap-2.5">
+				<button type="button" class="btn-secondary flex-1" onclick={() => (deleteOpen = false)}
+					>Cancel</button
+				>
+				<button class="btn-danger flex-1" disabled={!confirmMatches}>Delete household</button>
+			</div>
+		</form>
+	</Sheet>
+{/if}

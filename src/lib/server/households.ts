@@ -5,6 +5,7 @@ import {
 	householdInvites,
 	householdMembers,
 	households,
+	inventoryMovements,
 	user,
 	userPreferences,
 	type HouseholdRole
@@ -294,6 +295,28 @@ export async function setMemberRole(
 					eq(householdMembers.userId, targetUserId)
 				)
 			);
+	});
+}
+
+/**
+ * Delete a household and every row scoped to it (members, invites, pantry, grocery lists,
+ * inventory history, recipe shares). Recipes and images are user-owned and survive. Owner-only.
+ */
+export async function deleteHousehold(actorId: string, householdId: string): Promise<void> {
+	await withTransaction(async (tx) => {
+		await assertOwner(tx, householdId, actorId);
+		// Lock the household row so concurrent pantry/grocery mutations serialise behind us.
+		const [row] = await tx
+			.select({ id: households.id })
+			.from(households)
+			.where(eq(households.id, householdId))
+			.for('update');
+		if (!row) throw new AppError(404, 'Household not found');
+		// inventory_movement.lot_id -> stock_lot is ON DELETE RESTRICT, and the household cascade
+		// does not guarantee movements go before their lots. Clear movements explicitly first.
+		await tx.delete(inventoryMovements).where(eq(inventoryMovements.householdId, householdId));
+		// Everything else cascades; user_preference.active_household_id is set null.
+		await tx.delete(households).where(eq(households.id, householdId));
 	});
 }
 

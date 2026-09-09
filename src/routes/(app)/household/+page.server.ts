@@ -6,8 +6,11 @@ import { assertMember, requireHousehold, requireUser } from '$lib/server/access'
 import {
 	createHousehold,
 	createInvite,
+	deleteHousehold,
+	ensurePersonalHousehold,
 	listActiveInvites,
 	listMembers,
+	listMemberships,
 	otherOwnersExist,
 	removeMember,
 	renameHousehold,
@@ -123,6 +126,22 @@ export const actions: Actions = {
 		}
 		if (target === user.id) throw redirect(303, '/household');
 		return { ok: true, action: 'remove' };
+	},
+	deleteHousehold: async (event) => {
+		const { user, household } = requireHousehold(event);
+		const fd = await event.request.formData();
+		const confirmName = String(fd.get('confirmName') ?? '').trim();
+		if (confirmName !== household.name)
+			return fail(400, { message: 'Type the household name exactly to confirm.' });
+		try {
+			await deleteHousehold(user.id, household.id);
+			// Never leave the user with zero households: give them a fresh personal kitchen.
+			const remaining = await listMemberships(db, user.id);
+			if (remaining.length === 0) await ensurePersonalHousehold(db, user.id, user.name);
+		} catch (err) {
+			return handle(err);
+		}
+		throw redirect(303, '/household');
 	}
 };
 
