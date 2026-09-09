@@ -1,0 +1,49 @@
+import type { RequestEvent } from '@sveltejs/kit';
+
+/**
+ * Explicit caching policy per response type.
+ *
+ * - Hashed immutable assets under /_app/immutable/ are emitted by SvelteKit with
+ *   `public, max-age=31536000, immutable`; we leave them untouched.
+ * - Everything dynamic (HTML, data, auth, API, exports) is `private, no-store`.
+ * - The private media endpoint sets its own `private, no-cache` + ETag policy.
+ * - Unversioned public static files get a short revalidating policy.
+ */
+export function applyResponsePolicy(event: RequestEvent, response: Response): Response {
+	const headers = response.headers;
+	const path = event.url.pathname;
+
+	if (path.startsWith('/_app/immutable/')) {
+		return response;
+	}
+
+	const explicit = headers.get('x-cache-policy');
+	if (explicit) {
+		headers.delete('x-cache-policy');
+	} else if (path.startsWith('/media/')) {
+		// media route sets its own headers; make sure nothing shared sneaks through
+		if (!headers.has('cache-control')) headers.set('cache-control', 'private, no-store');
+	} else if (isPublicStaticAsset(path)) {
+		headers.set('cache-control', 'public, max-age=600, must-revalidate');
+	} else {
+		headers.set('cache-control', 'private, no-store');
+		headers.set('pragma', 'no-cache');
+	}
+
+	headers.set('x-content-type-options', 'nosniff');
+	headers.set('referrer-policy', 'strict-origin-when-cross-origin');
+	headers.set('x-frame-options', 'DENY');
+	headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+	return response;
+}
+
+function isPublicStaticAsset(path: string): boolean {
+	return /^\/(robots\.txt|favicon\.(svg|ico|png)|manifest\.webmanifest|icons\/)/.test(path);
+}
+
+export function noStoreJson(data: unknown, init: ResponseInit = {}): Response {
+	const headers = new Headers(init.headers);
+	headers.set('content-type', 'application/json; charset=utf-8');
+	headers.set('cache-control', 'private, no-store');
+	return new Response(JSON.stringify(data), { ...init, headers });
+}
