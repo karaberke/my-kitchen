@@ -13,7 +13,8 @@
 		<div
 			class="mt-4 rounded-[14px] border border-honey-line bg-honey-soft px-3.5 py-3 text-[13px] text-honey-dark"
 		>
-			Registration is closed on this installation.
+			Registration is closed on this installation. Ask a household owner for an invitation link; it
+			lets you create an account.
 		</div>
 	{:else}
 		<form

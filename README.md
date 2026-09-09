@@ -3,39 +3,80 @@
 Self-hosted recipes, grocery lists and pantry tracking for your household.
 Plan meals from your recipes, see what is missing from the pantry, shop, cook, and keep stock in sync across everyone's phones.
 
-## Self-host in one command
+## Self-host
 
 You need Docker (Engine or Desktop) with Compose v2.
 
 ```sh
-git clone https://github.com/YOUR-GITHUB-USER/my-kitchen.git my-kitchen && cd my-kitchen && ./deploy.sh
+git clone https://github.com/YOUR-GITHUB-USER/my-kitchen.git && cd my-kitchen
+cp .env.example .env
+openssl rand -base64 32      # paste the output as BETTER_AUTH_SECRET
 ```
 
-That's it: `deploy.sh` writes a `.env` with generated secrets, builds the image, starts PostgreSQL, runs migrations and the app, and prints the URL (default `http://localhost:3000`). Open it, create the first account, done.
+Open `.env` and set at least:
 
-Pick your own port and how the app is reachable:
+| Variable                                      | What to put                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `POSTGRES_PASSWORD`                           | Any password for the database (letters, digits, `- _ .`). Only used inside Docker.                     |
+| `BETTER_AUTH_SECRET`                          | The random string from `openssl rand -base64 32`.                                                      |
+| `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD` | Your own account. It is created on the first start; afterwards these lines are ignored.                |
+| `APP_PORT`                                    | The port to serve on (default 3003).                                                                   |
+| `ORIGIN`                                      | The URL people will type, default `http://localhost:3003`. Change it when you change the port or host. |
 
-| I want…                                       | Command                                                                    |
-| --------------------------------------------- | -------------------------------------------------------------------------- |
-| a different port                              | `./deploy.sh --port 8080`                                                  |
-| access from other devices on my network       | `./deploy.sh --port 8080 --bind 0.0.0.0 --origin http://192.168.1.20:8080` |
-| a public URL right now, no domain, no account | `./deploy.sh --quick-tunnel`                                               |
-| my own domain through Cloudflare              | `./deploy.sh --tunnel-token <token> --origin https://pantry.example.com`   |
-| a managed PostgreSQL (Neon, Supabase, RDS…)   | `./deploy.sh --cloud-db 'postgres://user:pass@host/db'`                    |
-| to close sign-ups after the first accounts    | `./deploy.sh --registration closed`                                        |
+`docker compose` refuses to start while `POSTGRES_PASSWORD` or `BETTER_AUTH_SECRET` is missing.
 
-`--origin` is the exact URL people type (scheme, host, port); it is set automatically for local installs.
-Run `./deploy.sh` again after `git pull` to update; it keeps your `.env` and data.
-Everything is in `.env` if you prefer editing by hand, then `docker compose up -d --build`.
+**Shortcut:** `./deploy.sh` does all of the above for you (generates the secrets, asks for your account, starts everything and prints the URL). `./deploy.sh --port 8080`, `--quick-tunnel`, `--tunnel-token`, `--admin-email` and the other flags are listed in [docs/deployment.md](docs/deployment.md).
 
-### Cloudflare in two minutes
+### Start it
 
-- **Try it out:** `./deploy.sh --quick-tunnel` prints a `https://<random>.trycloudflare.com` URL. No account needed. The URL changes on every restart, so use it for testing only.
-- **Your domain:** in the Cloudflare dashboard go to _Zero Trust → Networks → Tunnels → Create a tunnel_, copy the token, and add a public hostname (for example `pantry.example.com`) pointing to `http://app:3000`. Then run
-  `./deploy.sh --tunnel-token <token> --origin https://pantry.example.com`.
-  Nothing is exposed on the host except `127.0.0.1:<port>`.
+```sh
+docker compose up -d --build
+```
 
-Recommended Cloudflare cache rules and everything about backups, updates and troubleshooting are in [docs/deployment.md](docs/deployment.md).
+The first run builds the image (a few minutes), starts PostgreSQL, applies the database migrations and creates your account. Data lives in the Docker volumes `my-kitchen_pgdata` (database) and `my-kitchen_uploads` (photos) and survives restarts, updates and `docker compose down`.
+
+To update later: `git pull && docker compose up -d --build`.
+
+### Open it
+
+- On the same machine: `http://localhost:<APP_PORT>`.
+- At home from other devices: set `APP_BIND=0.0.0.0` and `ORIGIN=http://<LAN IP>:<APP_PORT>` in `.env` (find the IP with `hostname -I` on Linux or `ipconfig getifaddr en0` on macOS), then `docker compose up -d`.
+- Away from home: use a Cloudflare Tunnel, see below.
+
+Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Under _Household_ create an invitation link for everyone who shares your pantry; members share the pantry and grocery lists while recipes stay personal unless shared. Anyone with a valid invitation link can create an account even when sign-ups are closed, so set `REGISTRATION_OPEN=false` for a private install. Each person can change their own name and password under _Settings_.
+
+### Reach it from anywhere with Cloudflare
+
+Cloudflare Tunnel makes the app reachable over HTTPS without opening any port on your router. The `cloudflared` container runs next to the app and connects outbound to Cloudflare; nothing on the host is exposed except `127.0.0.1:<APP_PORT>`.
+
+**Option A: try it in one minute (no account, no domain)**
+
+1. In `.env` set `COMPOSE_PROFILES=quicktunnel` and `ORIGIN=` (empty).
+2. `docker compose up -d`
+3. `docker compose logs quicktunnel | grep trycloudflare` prints a `https://<random>.trycloudflare.com` URL. Open it.
+
+The URL changes every time the tunnel restarts and Cloudflare gives no uptime promise for it, so use this for testing only. (`./deploy.sh --quick-tunnel` does the same and prints the URL.)
+
+**Option B: your own domain (permanent)**
+
+You need a free Cloudflare account with your domain added to it.
+
+1. Cloudflare dashboard → **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel** → connector type _Cloudflared_. Give it a name (for example `my-kitchen`).
+2. On the _Install connector_ step, copy the long token from the command Cloudflare shows (the part after `--token`). Skip the install instructions; Compose runs the connector for you.
+3. Open the tunnel's **Public Hostname** tab → **Add a public hostname**:
+   - Subdomain `kitchen`, domain `example.com` (whatever you like)
+   - Service type **HTTP**, URL **`app:3000`** (this is the app container's name and internal port; it never changes, whatever `APP_PORT` is)
+4. In `.env` set:
+   ```sh
+   COMPOSE_PROFILES=tunnel
+   CLOUDFLARE_TUNNEL_TOKEN=<the token from step 2>
+   ORIGIN=https://kitchen.example.com
+   ```
+5. `docker compose up -d`, then open `https://kitchen.example.com`. Cloudflare provides the certificate and DNS record automatically; the tunnel shows as _Healthy_ in the dashboard within a minute.
+
+Equivalent one-liner: `./deploy.sh --tunnel-token <token> --origin https://kitchen.example.com`.
+
+Optional hardening: in Zero Trust → **Access** → **Applications** you can put a Cloudflare login in front of the hostname so only your family's emails reach the sign-in page. Recommended cache rules and troubleshooting are in [docs/deployment.md](docs/deployment.md).
 
 ## What you get
 
@@ -62,7 +103,7 @@ pnpm dev               # http://localhost:5173
 | `pnpm test:unit`, `pnpm test:integration`                        | pure logic; transactions against `recipe_test`            |
 | `pnpm build && pnpm test:e2e`                                    | Playwright flows against the built app                    |
 | `pnpm db:generate`                                               | new migration after editing `src/lib/server/db/schema.ts` |
-| `pnpm seed:perf`, `pnpm measure -- --base http://localhost:3000` | performance dataset and timings                           |
+| `pnpm seed:perf`, `pnpm measure -- --base http://localhost:3003` | performance dataset and timings                           |
 
 Create the test database once: `docker compose -f compose.dev.yaml -p my-kitchen-dev exec db psql -U recipe -d recipe_dev -c 'create database recipe_test'`, then `pnpm db:migrate:test`.
 

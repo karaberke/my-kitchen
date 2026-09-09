@@ -42,7 +42,10 @@ export const auth = betterAuth({
 	database: drizzleAdapter(db, { provider: 'pg' }),
 	emailAndPassword: {
 		enabled: true,
-		disableSignUp: !env.REGISTRATION_OPEN,
+		// Sign-up policy (REGISTRATION_OPEN, invitation links, the ADMIN_* bootstrap) is enforced
+		// by the app's own /register action and bootstrap.ts; the HTTP sign-up endpoint that
+		// Better Auth would expose is blocked in hooks.server.ts.
+		disableSignUp: false,
 		minPasswordLength: 8,
 		maxPasswordLength: 128,
 		// No email transport is configured, so password reset is intentionally off.

@@ -3,27 +3,23 @@ import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth } from '$lib/server/auth';
-import { serverEnv } from '$lib/server/env';
+import { db } from '$lib/server/db';
+import { registrationAllowed } from '$lib/server/registration';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 
-const loadImpl = ({ locals, url }: PageServerLoadEvent) => {
+const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, '/recipes');
-	const next = url.searchParams.get('next');
+	const raw = url.searchParams.get('next');
+	const next = raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/recipes';
 	return {
 		title: 'Create account',
-		registrationOpen: serverEnv().REGISTRATION_OPEN,
-		next: next && next.startsWith('/') && !next.startsWith('//') ? next : '/recipes'
+		registrationOpen: await registrationAllowed(db, next),
+		next
 	};
 };
 
 export const actions: Actions = {
 	default: async (event) => {
-		if (!serverEnv().REGISTRATION_OPEN)
-			return fail(403, {
-				message: 'Registration is closed on this installation.',
-				name: '',
-				email: ''
-			});
 		const fd = await event.request.formData();
 		const name = String(fd.get('name') ?? '')
 			.trim()
@@ -35,6 +31,12 @@ export const actions: Actions = {
 		const password = String(fd.get('password') ?? '').slice(0, 200);
 		const nextRaw = String(fd.get('next') ?? '');
 		const next = nextRaw.startsWith('/') && !nextRaw.startsWith('//') ? nextRaw : '/recipes';
+		if (!(await registrationAllowed(db, next)))
+			return fail(403, {
+				message: 'Registration is closed on this installation.',
+				name,
+				email
+			});
 		if (name.length < 2) return fail(400, { message: 'Enter your name', name, email });
 		if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
 			return fail(400, { message: 'Enter a valid email address', name, email });

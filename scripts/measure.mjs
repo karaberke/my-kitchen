@@ -3,7 +3,7 @@
  * Measures warm server response times against a running instance, using the
  * perf seed's first user. Reports p50/p95, payload sizes, and the size of an
  * unchanged revision poll. Usage:
- *   node --env-file=.env scripts/measure.mjs --base http://localhost:3000 --runs 30
+ *   node --env-file=.env scripts/measure.mjs --base http://localhost:3003 --runs 30
  */
 const args = Object.fromEntries(
 	process.argv
@@ -11,7 +11,7 @@ const args = Object.fromEntries(
 		.map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1]] : []))
 		.filter((x) => x.length)
 );
-const BASE = args.base ?? 'http://localhost:3000';
+const BASE = args.base ?? 'http://localhost:3003';
 const RUNS = Number(args.runs ?? 30);
 const EMAIL = args.email ?? 'perf1@example.test';
 const PASSWORD = args.password ?? 'perf-password-1';

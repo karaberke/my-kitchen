@@ -6,7 +6,7 @@
 # Cloudflare Tunnel is opt-in through Compose profiles set in .env:
 #   COMPOSE_PROFILES=tunnel        named tunnel with CLOUDFLARE_TUNNEL_TOKEN (your own domain)
 #   COMPOSE_PROFILES=quicktunnel   zero-config https://<random>.trycloudflare.com URL (try-out only)
-# The app itself listens on ${APP_BIND}:${APP_PORT} (default 127.0.0.1:3000).
+# The app itself listens on ${APP_BIND}:${APP_PORT} (default 127.0.0.1:3003).
 name: my-kitchen
 
 x-app-env: &app-env
@@ -21,6 +21,10 @@ x-app-env: &app-env
   HOST_HEADER: x-forwarded-host
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
   REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
+  # First account, created on the first start when it does not exist yet.
+  ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+  ADMIN_NAME: ${ADMIN_NAME:-}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
   UPLOAD_DIR: /app/data/uploads
   S3_BUCKET: ${S3_BUCKET:-}
@@ -81,7 +85,7 @@ services:
     environment: *app-env
     ports:
       # APP_BIND=127.0.0.1 keeps it local (tunnel / reverse proxy on the same host); 0.0.0.0 exposes it on the LAN.
-      - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000'
+      - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3003}:3000'
     volumes:
       - uploads:/app/data/uploads
     depends_on:

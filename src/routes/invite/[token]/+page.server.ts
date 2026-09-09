@@ -12,7 +12,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		title: 'Invitation',
 		invite: invite ? { householdName: invite.householdName, valid: invite.valid } : null,
 		signedIn: !!event.locals.user,
-		registrationOpen: serverEnv().REGISTRATION_OPEN,
+		// A valid invitation may create an account even when sign-ups are closed.
+		registrationOpen: serverEnv().REGISTRATION_OPEN || !!invite?.valid,
 		next: `/invite/${event.params.token}`
 	};
 };
