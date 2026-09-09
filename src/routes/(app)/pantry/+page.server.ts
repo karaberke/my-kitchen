@@ -38,7 +38,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		title: 'Pantry',
 		overview,
 		filters,
-		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision },
+		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision },
 		operationId: randomUUID(),
 		categories: GROCERY_CATEGORIES
 	};

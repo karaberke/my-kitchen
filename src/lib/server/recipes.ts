@@ -7,6 +7,7 @@ import {
 	recipeIngredients,
 	recipeShares,
 	recipeSteps,
+	recipeAttachments,
 	recipes,
 	stockLots,
 	user
@@ -203,6 +204,8 @@ export interface RecipeDetail {
 	ownerName: string;
 	isFavorite: boolean;
 	sourceAttribution: string;
+	/** the imported file this recipe was read from, openable by anyone who can read the recipe */
+	sourceFile: { id: string; filename: string; pageCount: number | null } | null;
 	image: {
 		id: string;
 		version: number;
@@ -245,11 +248,15 @@ export async function getRecipeDetail(
 			updatedAt: recipes.updatedAt,
 			imageId: images.id,
 			imageVersion: images.version,
-			imageVariants: images.variants
+			imageVariants: images.variants,
+			attachmentId: recipeAttachments.id,
+			attachmentName: recipeAttachments.filename,
+			attachmentPages: recipeAttachments.pageCount
 		})
 		.from(recipes)
 		.innerJoin(user, eq(user.id, recipes.ownerUserId))
 		.leftJoin(images, eq(images.id, recipes.imageId))
+		.leftJoin(recipeAttachments, eq(recipeAttachments.id, recipes.sourceAttachmentId))
 		.where(and(eq(recipes.id, recipeId), recipeReadableBy(userId)))
 		.limit(1);
 	if (!row) throw notFound('Recipe not found');
@@ -382,6 +389,13 @@ export async function getRecipeDetail(
 		ownerName: row.ownerName,
 		isFavorite: favRows.length > 0,
 		sourceAttribution: row.sourceAttribution,
+		sourceFile: row.attachmentId
+			? {
+					id: row.attachmentId,
+					filename: row.attachmentName ?? 'source file',
+					pageCount: row.attachmentPages
+				}
+			: null,
 		image:
 			row.imageId && row.imageVariants
 				? {

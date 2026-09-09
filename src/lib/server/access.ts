@@ -94,7 +94,8 @@ export async function loadHouseholdOrThrow(db: DbOrTx, householdId: string) {
 			id: households.id,
 			name: households.name,
 			pantryRevision: households.pantryRevision,
-			groceryRevision: households.groceryRevision
+			groceryRevision: households.groceryRevision,
+			planRevision: households.planRevision
 		})
 		.from(households)
 		.where(eq(households.id, householdId))

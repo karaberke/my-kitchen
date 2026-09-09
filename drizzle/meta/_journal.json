@@ -15,6 +15,20 @@
       "when": 1788934310989,
       "tag": "0001_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788972799650,
+      "tag": "0002_meal_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788975042082,
+      "tag": "0003_recipe_attachment",
+      "breakpoints": true
     }
   ]
 }
