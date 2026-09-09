@@ -36,7 +36,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	return {
 		title: list.name,
 		list,
-		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision },
+		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision },
 		operationId: randomUUID(),
 		categories: GROCERY_CATEGORIES
 	};

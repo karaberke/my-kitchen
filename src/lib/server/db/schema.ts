@@ -43,6 +43,8 @@ export const households = pgTable('household', {
 	pantryRevision: integer('pantry_revision').notNull().default(0),
 	/** bumped in the same transaction as any grocery list mutation */
 	groceryRevision: integer('grocery_revision').notNull().default(0),
+	/** bumped in the same transaction as any meal plan mutation */
+	planRevision: integer('plan_revision').notNull().default(0),
 	createdAt: timestamptz('created_at').notNull().defaultNow()
 });
 
@@ -163,6 +165,31 @@ export const images = pgTable(
 	(t) => [index('image_owner_idx').on(t.ownerUserId)]
 );
 
+/**
+ * The original file an imported recipe came from, kept so the cook can open the
+ * source. Stored as bytes only: HTML is never served as markup, and nothing here
+ * is ever executed — the serving route sends PDFs inline and everything else as
+ * a download.
+ */
+export const recipeAttachments = pgTable(
+	'recipe_attachment',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		ownerUserId: text('owner_user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		backend: text('backend').$type<StorageBackend>().notNull(),
+		objectKey: text('object_key').notNull(),
+		filename: text('filename').notNull(),
+		mime: text('mime').notNull(),
+		sizeBytes: integer('size_bytes').notNull(),
+		/** pages for a PDF; null for anything else */
+		pageCount: integer('page_count'),
+		createdAt: timestamptz('created_at').notNull().defaultNow()
+	},
+	(t) => [index('recipe_attachment_owner_idx').on(t.ownerUserId)]
+);
+
 /* ------------------------------------------------------------------------ */
 /* Recipes                                                                   */
 /* ------------------------------------------------------------------------ */
@@ -189,6 +216,10 @@ export const recipes = pgTable(
 		convention: text('convention').notNull().default('metric'),
 		status: text('status').$type<RecipeStatus>().notNull().default('draft'),
 		imageId: uuid('image_id').references(() => images.id, { onDelete: 'set null' }),
+		/** the imported file this recipe was read from, if any */
+		sourceAttachmentId: uuid('source_attachment_id').references(() => recipeAttachments.id, {
+			onDelete: 'set null'
+		}),
 		revision: integer('revision').notNull().default(1),
 		sourceRecipeId: uuid('source_recipe_id'),
 		sourceAttribution: text('source_attribution').notNull().default(''),
@@ -539,5 +570,35 @@ export const purchaseAllocations = pgTable(
 	(t) => [
 		uniqueIndex('purchase_allocation_event_line_uq').on(t.eventId, t.lineId),
 		index('purchase_allocation_line_idx').on(t.lineId)
+	]
+);
+
+/* ------------------------------------------------------------------------ */
+/* Meal plan                                                                 */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * One planned meal. Like inventory events, the title is denormalised so a plan
+ * survives the deletion of the recipe it pointed at (it degrades to a note).
+ */
+export const mealPlanEntries = pgTable(
+	'meal_plan_entry',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		householdId: uuid('household_id')
+			.notNull()
+			.references(() => households.id, { onDelete: 'cascade' }),
+		/** the day this meal is planned for: a calendar date, never a timestamp */
+		plannedOn: date('planned_on', { mode: 'string' }).notNull(),
+		/** live link while the recipe exists; null for a free-text note */
+		recipeId: uuid('recipe_id').references(() => recipes.id, { onDelete: 'set null' }),
+		/** always populated: the recipe title when planned, or the note text */
+		title: text('title').notNull(),
+		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		createdAt: timestamptz('created_at').notNull().defaultNow()
+	},
+	(t) => [
+		index('meal_plan_entry_household_date_idx').on(t.householdId, t.plannedOn, t.createdAt),
+		check('meal_plan_entry_title_chk', sql`length(btrim(${t.title})) > 0`)
 	]
 );

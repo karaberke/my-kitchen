@@ -21,7 +21,7 @@ import { AppError } from '$lib/server/errors';
 export async function lockHousehold(
 	tx: Tx,
 	householdId: string,
-	bump: { pantry?: boolean; grocery?: boolean }
+	bump: { pantry?: boolean; grocery?: boolean; plan?: boolean }
 ) {
 	const [row] = await tx
 		.update(households)
@@ -31,12 +31,14 @@ export async function lockHousehold(
 				: households.pantryRevision,
 			groceryRevision: bump.grocery
 				? sql`${households.groceryRevision} + 1`
-				: households.groceryRevision
+				: households.groceryRevision,
+			planRevision: bump.plan ? sql`${households.planRevision} + 1` : households.planRevision
 		})
 		.where(eq(households.id, householdId))
 		.returning({
 			pantryRevision: households.pantryRevision,
-			groceryRevision: households.groceryRevision
+			groceryRevision: households.groceryRevision,
+			planRevision: households.planRevision
 		});
 	if (!row) throw new AppError(404, 'Household not found');
 	return row;

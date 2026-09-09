@@ -17,8 +17,8 @@
 		hasDirtyInput = () => false
 	}: {
 		householdId: string;
-		watch: ('pantry' | 'grocery')[];
-		initial: { pantry: number; grocery: number };
+		watch: ('pantry' | 'grocery' | 'plan')[];
+		initial: { pantry: number; grocery: number; plan: number };
 		intervalMs?: number;
 		dependsOn: string;
 		hasDirtyInput?: () => boolean;
@@ -44,13 +44,18 @@
 			});
 			if (res.status === 401 || res.status === 403) return; // stop polling: not authorized any more
 			if (!res.ok) throw new Error(String(res.status));
-			const rev = (await res.json()) as { household: string; pantry: number; grocery: number };
+			const rev = (await res.json()) as {
+				household: string;
+				pantry: number;
+				grocery: number;
+				plan: number;
+			};
 			if (rev.household !== householdId) return; // household switched meanwhile
 			failures = 0;
 			lastChecked = new Date();
 			const changed = watch.some((k) => rev[k] !== known[k]);
 			if (changed) {
-				known = { pantry: rev.pantry, grocery: rev.grocery };
+				known = { pantry: rev.pantry, grocery: rev.grocery, plan: rev.plan };
 				if (hasDirtyInput()) changedNotice = true;
 				else await refresh();
 			}

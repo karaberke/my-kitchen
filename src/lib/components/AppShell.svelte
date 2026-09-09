@@ -19,6 +19,7 @@
 
 	const tabs = [
 		{ href: '/recipes', label: 'Recipes', icon: '❏' },
+		{ href: '/plan', label: 'Plan', icon: '▦' },
 		{ href: '/grocery', label: 'Grocery', icon: '☑' },
 		{ href: '/pantry', label: 'Pantry', icon: '▤' },
 		{ href: '/household', label: 'Household', icon: '⌂' },

@@ -373,13 +373,22 @@
 				: ''}">Open cooking view</a
 		>
 
-		{#if r.notes || r.source}
+		{#if r.notes || r.source || r.sourceFile}
 			<div class="card-muted mt-5 p-3.5">
 				<div class="eyebrow">Notes &amp; source</div>
 				{#if r.notes}<p class="mt-2 text-[13px] leading-relaxed whitespace-pre-line text-ink-soft">
 						{r.notes}
 					</p>{/if}
 				{#if r.source}<p class="mt-2 text-[12px] text-sage">Source: {r.source}</p>{/if}
+				{#if r.sourceFile}
+					<p class="mt-2 text-[12px] text-sage">
+						Imported from <a
+							href="/media/attachment/{r.sourceFile.id}"
+							target="_blank"
+							rel="noopener">{r.sourceFile.filename}</a
+						>{r.sourceFile.pageCount ? ` · ${r.sourceFile.pageCount} pages` : ''}
+					</p>
+				{/if}
 			</div>
 		{/if}
 	</div>

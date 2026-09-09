@@ -70,7 +70,7 @@
 		class="btn-ghost btn-sm hidden sm:inline-flex"
 		download="recipes.json">Export</a
 	>
-	<a href="/recipes/new" class="btn-primary btn-sm rounded-full">+ Add</a>
+	<a href="/recipes/add" class="btn-primary btn-sm rounded-full">+ Add</a>
 </PageHeader>
 
 <form
@@ -141,7 +141,7 @@
 			? 'Try another search or filter.'
 			: 'Add your first recipe by hand. Share it with your household from the recipe page.'}
 	>
-		<a href="/recipes/new" class="btn-primary">Add a recipe</a>
+		<a href="/recipes/add" class="btn-primary">Add a recipe</a>
 	</EmptyState>
 {:else}
 	<div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
