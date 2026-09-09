@@ -41,15 +41,54 @@ interface Line {
 	page: number;
 }
 
+const NUMBERED = /^\d+[.)]\s+/;
+
+/** A line that plainly begins something new, so the one before it is finished. */
+function startsNewItem(text: string): boolean {
+	return (
+		NUMBERED.test(text) ||
+		INGREDIENT_HEADING.test(text) ||
+		STEP_HEADING.test(text) ||
+		OTHER_HEADING.test(text) ||
+		!!splitIngredientLine(text).amount
+	);
+}
+
+/**
+ * PDF text arrives wrapped at the page's column width, so one sentence can span
+ * several lines. Re-join a line onto the one before when that one clearly had
+ * not finished — but never across something that starts a new item.
+ */
+function joinWrapped(lines: Line[]): Line[] {
+	const out: Line[] = [];
+	for (const line of lines) {
+		const prev = out[out.length - 1];
+		const wrapped =
+			prev &&
+			// Only a line long enough to have hit the column edge was wrapped; a
+			// short one is a title or a label that simply has no full stop.
+			prev.text.length >= 45 &&
+			!/[.!?:;]$/.test(prev.text) &&
+			!startsNewItem(line.text);
+		if (wrapped) {
+			prev.text = `${prev.text} ${line.text}`;
+			continue;
+		}
+		out.push({ ...line });
+	}
+	return out;
+}
+
 export function parseRecipeText(pages: string[]): TextImportResult {
 	const input = emptyRecipeFormInput();
-	const lines: Line[] = [];
+	const raw: Line[] = [];
 	pages.forEach((page, i) => {
-		for (const raw of page.split('\n')) {
-			const text = raw.replace(/\s+/g, ' ').trim();
-			if (text) lines.push({ text, page: i + 1 });
+		for (const line of page.split('\n')) {
+			const text = line.replace(/\s+/g, ' ').trim();
+			if (text) raw.push({ text, page: i + 1 });
 		}
 	});
+	const lines = joinWrapped(raw);
 	if (!lines.length) return { input, ingredientPages: [], empty: true };
 
 	input.notes = pages.map((p) => p.trim()).join('\n\n');
@@ -106,7 +145,8 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 		const inSteps = section === 'steps';
 
 		if (inSteps || (section === 'none' && !looksLikeIngredient && steps.length)) {
-			steps.push({ section: '', text });
+			// The form numbers steps itself, so drop the source's own numbering.
+			steps.push({ section: '', text: text.replace(NUMBERED, '') });
 			return;
 		}
 		if (inIngredients || looksLikeIngredient) {
@@ -124,9 +164,9 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 			return;
 		}
 		// Prose before any heading reads as the description; after that, a step.
-		if (section === 'none' && !input.ingredients.length && descriptionParts.length < 1)
+		if (section === 'none' && !input.ingredients.length && !steps.length)
 			descriptionParts.push(text);
-		else steps.push({ section: '', text });
+		else steps.push({ section: '', text: text.replace(NUMBERED, '') });
 	});
 
 	input.description = descriptionParts.join(' ').slice(0, 2000);

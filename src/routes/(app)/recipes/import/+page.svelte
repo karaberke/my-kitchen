@@ -3,6 +3,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import RecipeForm from '$lib/components/RecipeForm.svelte';
+	import type { RecipeFormInput } from '$lib/shared/recipe-input';
 
 	let { data, form } = $props();
 
@@ -12,51 +13,85 @@
 
 	const isPdf = $derived(data.kind === 'pdf');
 	const ready = $derived(!!fileName || !!pasted.trim());
-	const parsed = $derived(form?.parsed ? form : null);
+
+	/**
+	 * What the parse found, remembered on the client. A save that fails comes
+	 * back with errors but no parse result, so holding it here is what keeps the
+	 * review screen — and the user's edits — on screen instead of resetting.
+	 */
+	let review = $state<{
+		source: string;
+		attachmentId: string;
+		filename: string;
+		pageCount: number | null;
+		input: RecipeFormInput;
+	} | null>(null);
+	$effect(() => {
+		if (form && 'parsed' in form && form.parsed)
+			review = {
+				source: String(form.source ?? 'text'),
+				attachmentId: String(form.attachmentId ?? ''),
+				filename: String(form.filename ?? 'source file'),
+				pageCount: (form.pageCount as number | null) ?? null,
+				input: form.input as RecipeFormInput
+			};
+	});
 	const saveAction = $derived(
-		parsed?.attachmentId ? `?/save&attachment=${parsed.attachmentId}` : '?/save'
+		review?.attachmentId ? `?/save&attachment=${review.attachmentId}` : '?/save'
+	);
+	const submitted = $derived(
+		form && 'input' in form ? (form.input as RecipeFormInput | undefined) : undefined
 	);
 </script>
 
-{#if parsed}
+{#if review}
 	<PageHeader title="Check the import" subtitle="Nothing is saved yet." back="/recipes/add" />
 	<div class="mb-3 flex flex-col gap-2">
-		{#if parsed.source === 'json-ld'}
+		{#if review.source === 'json-ld'}
 			<Alert kind="success">
 				Found recipe data in the page. Original wording is kept — check the fields below, then save.
 			</Alert>
-		{:else if parsed.source === 'pdf'}
+		{:else if review.source === 'pdf'}
 			<Alert kind="warn">
 				Text came from the PDF page layout, so amounts and line breaks can read oddly. Original
 				wording is kept in each ingredient — check the fields below, then save.
 			</Alert>
-		{:else if parsed.source === 'pdf-empty'}
+		{:else if review.source === 'pdf-empty'}
 			<Alert kind="warn">
 				No readable text in that PDF — it is most likely scanned pages. The file is still attached,
 				so you can open it while you type the recipe in below.
 			</Alert>
 		{:else}
 			<Alert kind="warn">
-				No structured recipe data in that page, so the readable text is in Notes for you to shape.
-				Add the ingredients and steps you want tracked.
+				That page carries no structured recipe data, so there was nothing reliable to read out of
+				it. Open the original alongside this form and copy across what you want tracked.
 			</Alert>
 		{/if}
-		{#if parsed.attachmentId}
+		{#if review.attachmentId}
+			{@const unstructured = review.source === 'text' || review.source === 'pdf-empty'}
+			{#if unstructured}
+				<a
+					class="btn-secondary btn-sm self-start"
+					href="/media/attachment/{review.attachmentId}"
+					target="_blank"
+					rel="noopener">Open {review.filename} in a new tab ↗</a
+				>
+			{/if}
 			<p class="px-0.5 text-[11.5px] text-sage">
 				Source kept: <a
-					href="/media/attachment/{parsed.attachmentId}"
+					href="/media/attachment/{review.attachmentId}"
 					target="_blank"
-					rel="noopener">{parsed.filename}</a
-				>{parsed.pageCount ? ` · ${parsed.pageCount} pages` : ''} — it stays with the recipe once you
+					rel="noopener">{review.filename}</a
+				>{review.pageCount ? ` · ${review.pageCount} pages` : ''} — it stays with the recipe once you
 				save.
 			</p>
 		{/if}
 	</div>
-	{#key parsed.input}
+	{#key submitted ?? review.input}
 		<RecipeForm
 			mode="new"
 			action={saveAction}
-			initial={form?.input ?? parsed.input}
+			initial={submitted ?? review.input}
 			errors={form?.errors ?? {}}
 			message={form?.message ?? ''}
 		/>

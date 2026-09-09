@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { register } from './helpers';
+import { createRecipe, register } from './helpers';
 
 const JSONLD_PAGE = `<!DOCTYPE html><html><head><title>Some blog</title>
 <script type="application/ld+json">${JSON.stringify({
@@ -78,7 +78,7 @@ test('falls back to readable text when the page has no recipe data, without leak
 	await page.locator('#import-html').fill(PLAIN_PAGE);
 	await page.getByRole('button', { name: 'Read the recipe' }).click();
 
-	await expect(page.getByText(/No structured recipe data/)).toBeVisible();
+	await expect(page.getByText(/no structured recipe data/i)).toBeVisible();
 	await expect(page.getByLabel('Title')).toHaveValue("Nan's stew");
 	const notes = page.getByLabel('Notes');
 	await expect(notes).toHaveValue(/Brown the beef/);
@@ -149,7 +149,7 @@ test('a PDF with no text layer is still attached so the recipe can be typed in',
 	await page.getByRole('button', { name: 'Read the recipe' }).click();
 
 	await expect(page.getByText(/No readable text in that PDF/)).toBeVisible();
-	await expect(page.getByRole('link', { name: 'scanned.pdf' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'scanned.pdf', exact: true })).toBeVisible();
 	await expect(page.getByLabel('Title')).toHaveValue('');
 });
 
@@ -170,4 +170,119 @@ test('another user cannot open someone else’s imported source', async ({ brows
 	expect((await a.request.get(href!)).status()).toBe(200);
 	await ctxA.close();
 	await ctxB.close();
+});
+
+test('a saved HTML page can be opened, but is served inert', async ({ page }) => {
+	await register(page, 'Ivo');
+	await page.goto('/recipes/import');
+	await page.locator('#import-html').fill(PLAIN_PAGE);
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+	const open = page.getByRole('link', { name: /Open .* in a new tab/ });
+	await expect(open).toBeVisible();
+	const href = await open.getAttribute('href');
+
+	const res = await page.request.get(href!);
+	expect(res.status()).toBe(200);
+	// Served as a page you can read...
+	expect(res.headers()['content-type']).toContain('text/html');
+	expect(res.headers()['content-disposition']).toContain('inline');
+	// ...but sandboxed into an opaque origin where nothing runs or phones home.
+	const csp = res.headers()['content-security-policy'];
+	expect(csp).toContain('sandbox');
+	expect(csp).not.toContain('allow-scripts');
+	expect(csp).not.toContain('allow-same-origin');
+	expect(csp).toContain("default-src 'none'");
+	expect(res.headers()['x-content-type-options']).toBe('nosniff');
+	// The bytes are the original, script tag and all — it is neutralised by headers, not edited.
+	expect(await res.text()).toContain('SHOULD_NOT_APPEAR');
+});
+
+test('a whole website is not dumped into notes', async ({ page }) => {
+	await register(page, 'Iggy');
+	const bulky = `<html><head><title>Big blog</title></head><body>${'<p>Navigation and footer boilerplate.</p>'.repeat(200)}</body></html>`;
+	await page.goto('/recipes/import');
+	await page.locator('#import-html').fill(bulky);
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+	await expect(page.getByText(/no structured recipe data/i)).toBeVisible();
+	await expect(page.getByLabel('Notes')).toHaveValue('');
+	// The original is still there to read instead.
+	await expect(page.getByRole('link', { name: /Open .* in a new tab/ })).toBeVisible();
+});
+
+test('a save that fails validation keeps the review screen, the edits and the reasons', async ({
+	page
+}) => {
+	await register(page, 'Val');
+	await page.goto('/recipes/import');
+	await page.locator('#import-html').fill(PLAIN_PAGE);
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+	await expect(page.getByRole('heading', { name: 'Check the import' })).toBeVisible();
+
+	// That page yields no servings, ingredients or steps, all of which a full save needs.
+	await page.getByLabel('Title').fill('Nan’s stew');
+	await page.getByRole('button', { name: 'Save recipe' }).click();
+
+	// Still reviewing — not thrown back to the upload form.
+	await expect(page.getByRole('heading', { name: 'Check the import' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Read the recipe' })).toHaveCount(0);
+	// Every missing piece is named, not just the first.
+	await expect(page.getByText('Please fix the highlighted fields.')).toBeVisible();
+	await expect(page.getByText('Base servings are needed for scaling')).toBeVisible();
+	await expect(page.getByText('Add at least one ingredient')).toBeVisible();
+	await expect(page.getByText('Add at least one step')).toBeVisible();
+	// The edits and the kept source survived.
+	await expect(page.getByLabel('Title')).toHaveValue('Nan’s stew');
+	await expect(page.getByRole('link', { name: /pasted-source\.html/ }).first()).toBeVisible();
+
+	// Filling in what was flagged lets it save.
+	await page.getByLabel('Base servings').fill('4');
+	await page.locator('#ing-0-amount').fill('500');
+	await page.locator('#ing-0-unit').fill('g');
+	await page.locator('#ing-0-name').fill('beef shin');
+	await page.locator('#step-0-text').fill('Brown the beef, then simmer.');
+	await page.getByRole('button', { name: 'Save recipe' }).click();
+	await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
+	await expect(page.getByRole('heading', { name: 'Nan’s stew' })).toBeVisible();
+	// The source followed it through the failed attempt.
+	await expect(page.getByRole('link', { name: 'View source' })).toBeVisible();
+});
+
+test('a file that cannot be read says so', async ({ page }) => {
+	await register(page, 'Vic');
+	await page.goto('/recipes/import?kind=pdf');
+	// A .pdf that is not a PDF at all.
+	await page.locator('#import-file').setInputFiles({
+		name: 'broken.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from('%PDF-1.4 this is not really a pdf')
+	});
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+	await expect(page.getByText('That file could not be read as a PDF')).toBeVisible();
+});
+
+test('a saved import offers View source next to Print', async ({ page }) => {
+	await register(page, 'Vera');
+	await page.goto('/recipes/import');
+	await page.locator('#import-html').fill(JSONLD_PAGE);
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+	await page.getByRole('button', { name: 'Save recipe' }).click();
+	await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
+
+	const view = page.getByRole('link', { name: 'View source' });
+	await expect(view).toBeVisible();
+	const res = await page.request.get((await view.getAttribute('href'))!);
+	expect(res.status()).toBe(200);
+});
+
+test('a hand-entered recipe has no View source button', async ({ page }) => {
+	await register(page, 'Vince');
+	await createRecipe(page, {
+		title: 'By hand',
+		servings: '2',
+		ingredient: { amount: '100', unit: 'g', name: 'chicken breast', match: 'chicken breast' },
+		step: 'Cook.'
+	});
+	await expect(page.getByRole('link', { name: 'View source' })).toHaveCount(0);
 });
