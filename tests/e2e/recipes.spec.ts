@@ -99,6 +99,7 @@ test.describe('recipes', () => {
 		await a.goto(`/recipes/${id}`);
 		await a.getByRole('button', { name: 'Share…' }).click();
 		await a.getByRole('button', { name: 'Share', exact: true }).click();
+		await expect(a.getByRole('button', { name: 'Unshare' })).toBeVisible();
 		await b.goto(`/recipes/${id}`);
 		await expect(b.getByRole('heading', { name: 'Alice private dal' })).toBeVisible();
 		await expect(b.getByRole('link', { name: 'Edit' })).toHaveCount(0);

@@ -1,4 +1,5 @@
-import type { Actions, PageServerLoad } from './$types';
+import type { Actions, PageServerLoadEvent } from './$types';
+import { guard } from '$lib/server/http';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { getRecipeDetail } from '$lib/server/recipes';
@@ -7,7 +8,7 @@ import { getIngredientMeta } from '$lib/server/ingredients';
 import { error } from '@sveltejs/kit';
 import { Dec } from '$lib/shared/decimal';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	const recipe = await getRecipeDetail(db, user.id, event.params.id, null);
 	if (!recipe.isOwner)
@@ -58,3 +59,5 @@ export const actions: Actions = {
 		return handleRecipeSubmit(event, event.params.id);
 	}
 };
+
+export const load = guard(loadImpl);

@@ -6,8 +6,8 @@ ARG NODE_IMAGE=node:24.9.0-bookworm-slim
 
 # ---------- deps: full install (dev deps needed for the build) ----------
 FROM ${NODE_IMAGE} AS deps
-ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=true
-RUN corepack enable && corepack prepare pnpm@10.17.1 --activate
+ENV CI=true
+RUN npm install -g pnpm@12.3.4 --no-fund --no-audit
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { register } from './helpers';
+import { login, register } from './helpers';
 
 test('another visible device sees a pantry change within the polling window; dirty forms stay intact', async ({
 	browser
@@ -9,10 +9,7 @@ test('another visible device sees a pantry change within the polling window; dir
 	const { email, password } = await register(a, 'Fay');
 	const ctxB = await browser.newContext();
 	const b = await ctxB.newPage();
-	await b.goto('/login');
-	await b.getByLabel('Email').fill(email);
-	await b.getByLabel('Password').fill(password);
-	await b.getByRole('button', { name: 'Sign in' }).click();
+	await login(b, email, password);
 	await b.goto('/pantry');
 	await expect(b.getByText('Pantry is empty')).toBeVisible();
 
@@ -31,7 +28,7 @@ test('another visible device sees a pantry change within the polling window; dir
 	// B opens a sheet (dirty input); A changes stock again; B keeps its sheet and gets a notice
 	await b.getByRole('button', { name: '+ Add stock' }).click();
 	await b.locator('#add-qty').fill('250');
-	await a.getByRole('button', { name: 'Add stock' }).first().click();
+	await a.getByRole('button', { name: 'Add stock', exact: true }).first().click();
 	await a.locator('#add-qty').fill('2');
 	await a.locator('#add-unit').selectOption('kg');
 	await a.getByRole('button', { name: 'Add', exact: true }).click();

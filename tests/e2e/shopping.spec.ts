@@ -75,15 +75,15 @@ test('plan two recipes, review pantry subtraction, shop with partial purchases, 
 	await page.getByRole('button', { name: 'Finish & update pantry' }).click();
 	await page.locator('#finish-batch').selectOption({ index: 1 });
 	await page.getByRole('button', { name: 'Deduct from pantry' }).click();
-	await expect(page.getByText(/Pantry updated: 1 deduction/)).toBeVisible();
-	await expect(page.getByText(/2 planned servings fulfilled/)).toBeVisible();
+	await expect(page.getByText('Pantry updated: 1 deduction')).toBeVisible();
+	await expect(page.getByText('2 planned servings fulfilled')).toBeVisible();
 	await page.goto('/pantry');
 	await expect(page.getByText('1.35 kg', { exact: true }).first()).toBeVisible();
 
 	// undo from history restores 150 g
 	await page.goto('/pantry/history');
 	await page.getByRole('button', { name: 'Undo' }).first().click();
-	await expect(page.getByText(/Undid: Cooked Curry/)).toBeVisible();
+	await expect(page.getByText('Undid: Cooked Curry')).toBeVisible();
 	await page.goto('/pantry');
 	await expect(page.getByText('1.5 kg', { exact: true }).first()).toBeVisible();
 });

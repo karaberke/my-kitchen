@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
+import { guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
-import type { Actions, PageServerLoad } from './$types';
+import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, requireHousehold } from '$lib/server/access';
 import { getHistory } from '$lib/server/pantry';
@@ -8,7 +9,7 @@ import { undoEvent } from '$lib/server/undo';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { isOperationId } from '$lib/server/operations';
 
-export const load: PageServerLoad = async (event) => {
+const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
 	event.depends('app:history');
 	await assertMember(db, household.id, user.id);
@@ -42,3 +43,5 @@ export const actions: Actions = {
 		}
 	}
 };
+
+export const load = guard(loadImpl);
