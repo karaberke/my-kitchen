@@ -1,6 +1,5 @@
 <script lang="ts">
 	import './layout.css';
-	import favicon from '$lib/assets/favicon.svg';
 	import { page } from '$app/state';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import Toasts from '$lib/components/Toasts.svelte';
@@ -9,7 +8,6 @@
 </script>
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
 	<title>{page.data.title ? `${page.data.title} · Pantry & Plate` : 'Pantry & Plate'}</title>
 </svelte:head>
 

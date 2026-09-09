@@ -1,6 +1,6 @@
-# Production variant with a managed/cloud PostgreSQL (Neon, Supabase, RDS, ...).
-# Omits the local db service. DATABASE_URL and DATABASE_SSL come from .env.
-# Launch:  docker compose -f compose.cloud-db.yaml up -d --build
+# Same as compose.yaml but for a managed/cloud PostgreSQL: no db service.
+#   ./deploy.sh --cloud-db 'postgres://user:pass@host/db'      or
+#   docker compose -f compose.cloud-db.yaml up -d --build
 name: pantry-and-plate
 
 x-app-env: &app-env
@@ -10,7 +10,9 @@ x-app-env: &app-env
   DATABASE_IDLE_TIMEOUT_SECONDS: ${DATABASE_IDLE_TIMEOUT_SECONDS:-30}
   # unset -> require (cloud databases normally mandate TLS); set DATABASE_SSL= (empty) to disable, e.g. for a LAN database
   DATABASE_SSL: ${DATABASE_SSL-require}
-  ORIGIN: ${ORIGIN:?set ORIGIN in .env (https://your-hostname)}
+  ORIGIN: ${ORIGIN:-}
+  PROTOCOL_HEADER: x-forwarded-proto
+  HOST_HEADER: x-forwarded-host
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
   REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
@@ -27,6 +29,13 @@ x-app-env: &app-env
   PUBLIC_REVISION_POLL_MS: ${PUBLIC_REVISION_POLL_MS:-20000}
   HOST: 0.0.0.0
   PORT: '3000'
+
+x-cloudflared: &cloudflared
+  image: cloudflare/cloudflared:2025.9.1
+  restart: unless-stopped
+  depends_on:
+    app:
+      condition: service_started
 
 services:
   migrate:
@@ -45,6 +54,8 @@ services:
     image: pantry-and-plate:latest
     restart: unless-stopped
     environment: *app-env
+    ports:
+      - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000'
     volumes:
       - uploads:/app/data/uploads
     depends_on:
@@ -53,14 +64,16 @@ services:
     stop_grace_period: 20s
 
   cloudflared:
-    image: cloudflare/cloudflared:2025.9.1
-    restart: unless-stopped
+    <<: *cloudflared
+    profiles: [tunnel]
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
-    depends_on:
-      app:
-        condition: service_started
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+  quicktunnel:
+    <<: *cloudflared
+    profiles: [quicktunnel]
+    command: tunnel --no-autoupdate --url http://app:3000
 
 volumes:
   uploads:

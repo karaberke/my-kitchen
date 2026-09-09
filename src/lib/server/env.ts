@@ -8,7 +8,16 @@ const schema = z.object({
 	DATABASE_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(10),
 	DATABASE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(30),
 	DATABASE_SSL: z.string().optional().default(''),
-	ORIGIN: z.string().url().default('http://localhost:5173'),
+	/** Public URL users type. Empty = "auto": trust the origin of each request (behind a proxy/tunnel that sets X-Forwarded-Proto). */
+	ORIGIN: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim().replace(/\/+$/, ''))
+		.refine(
+			(v) => v === '' || /^https?:\/\/[^\s/]+$/.test(v),
+			'ORIGIN must be a URL like https://pantry.example.com (or empty for auto)'
+		),
 	BETTER_AUTH_SECRET: z.string().min(16, 'BETTER_AUTH_SECRET must be at least 16 characters'),
 	REGISTRATION_OPEN: z
 		.string()

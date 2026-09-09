@@ -1,77 +1,73 @@
 # Pantry & Plate
 
-Recipes, grocery planning and pantry tracking for a household. One SvelteKit app,
-one PostgreSQL database, Docker Compose deployment behind a Cloudflare Tunnel.
+Self-hosted recipes, grocery lists and pantry tracking for your household.
+Plan meals from your recipes, see what is missing from the pantry, shop, cook, and keep stock in sync across everyone's phones.
 
-- **Recipes** – manual entry with drafts, groups, sections, fractions, tags, photos,
-  scaling, sharing with households, favorites, duplicate, print, JSON export.
-- **Grocery lists** – plan recipe batches, aggregate demand, subtract pantry once,
-  review, then shop: purchases enter the pantry in full and credit the list.
-- **Pantry** – stock lots with locations and use-by dates, corrections, waste,
-  append-only history, undo, and a consistency check.
-- **Households** – multiple memberships, owner/member roles, single-use invite links.
+## Self-host in one command
 
-Stack: SvelteKit 2 / Svelte 5 / TypeScript / Tailwind 4 / PostgreSQL 17 / Drizzle ORM /
-Postgres.js / Better Auth / Zod / sharp. Node 24 LTS, pnpm.
+You need Docker (Engine or Desktop) with Compose v2.
+
+```sh
+git clone https://github.com/YOUR-GITHUB-USER/recipe-saver.git pantry-and-plate && cd pantry-and-plate && ./deploy.sh
+```
+
+That's it: `deploy.sh` writes a `.env` with generated secrets, builds the image, starts PostgreSQL, runs migrations and the app, and prints the URL (default `http://localhost:3000`). Open it, create the first account, done.
+
+Pick your own port and how the app is reachable:
+
+| I want…                                       | Command                                                                    |
+| --------------------------------------------- | -------------------------------------------------------------------------- |
+| a different port                              | `./deploy.sh --port 8080`                                                  |
+| access from other devices on my network       | `./deploy.sh --port 8080 --bind 0.0.0.0 --origin http://192.168.1.20:8080` |
+| a public URL right now, no domain, no account | `./deploy.sh --quick-tunnel`                                               |
+| my own domain through Cloudflare              | `./deploy.sh --tunnel-token <token> --origin https://pantry.example.com`   |
+| a managed PostgreSQL (Neon, Supabase, RDS…)   | `./deploy.sh --cloud-db 'postgres://user:pass@host/db'`                    |
+| to close sign-ups after the first accounts    | `./deploy.sh --registration closed`                                        |
+
+`--origin` is the exact URL people type (scheme, host, port); it is set automatically for local installs.
+Run `./deploy.sh` again after `git pull` to update; it keeps your `.env` and data.
+Everything is in `.env` if you prefer editing by hand, then `docker compose up -d --build`.
+
+### Cloudflare in two minutes
+
+- **Try it out:** `./deploy.sh --quick-tunnel` prints a `https://<random>.trycloudflare.com` URL. No account needed. The URL changes on every restart, so use it for testing only.
+- **Your domain:** in the Cloudflare dashboard go to _Zero Trust → Networks → Tunnels → Create a tunnel_, copy the token, and add a public hostname (for example `pantry.example.com`) pointing to `http://app:3000`. Then run
+  `./deploy.sh --tunnel-token <token> --origin https://pantry.example.com`.
+  Nothing is exposed on the host except `127.0.0.1:<port>`.
+
+Recommended Cloudflare cache rules and everything about backups, updates and troubleshooting are in [docs/deployment.md](docs/deployment.md).
+
+## What you get
+
+- **Recipes** – manual entry with drafts, ingredient groups, fractions, tags, photos, scaling, sharing with your household, favorites, print and JSON export.
+- **Grocery lists** – plan recipe batches, see the combined demand minus what the pantry already has, then shop; purchases go straight into the pantry.
+- **Pantry** – stock with locations and use-by dates, corrections, waste, full history with undo.
+- **Households** – invite links, owner/member roles, several households per account, changes visible on other devices within seconds.
+
+Stack: SvelteKit 2, Svelte 5, TypeScript, Tailwind 4, PostgreSQL 17, Drizzle ORM, Better Auth. Node 24, pnpm.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm db:dev            # PostgreSQL 17 on 127.0.0.1:5433 (docker compose -f compose.dev.yaml)
-cp .env.example .env   # defaults already point at the dev database
-pnpm db:migrate        # applies drizzle/*.sql (schema + read-only ingredient catalog)
+pnpm db:dev            # PostgreSQL 17 on 127.0.0.1:5433 (compose.dev.yaml)
+cp .env.example .env   # defaults point at the dev database
+pnpm db:migrate
 pnpm dev               # http://localhost:5173
 ```
 
-Create an account at `/register`; a personal household is created automatically.
+| Command                                                          | Purpose                                                   |
+| ---------------------------------------------------------------- | --------------------------------------------------------- |
+| `pnpm check`, `pnpm lint`                                        | types, formatting, eslint                                 |
+| `pnpm test:unit`, `pnpm test:integration`                        | pure logic; transactions against `recipe_test`            |
+| `pnpm build && pnpm test:e2e`                                    | Playwright flows against the built app                    |
+| `pnpm db:generate`                                               | new migration after editing `src/lib/server/db/schema.ts` |
+| `pnpm seed:perf`, `pnpm measure -- --base http://localhost:3000` | performance dataset and timings                           |
 
-Useful scripts:
-
-| Command                                        | Purpose                                                              |
-| ---------------------------------------------- | -------------------------------------------------------------------- |
-| `pnpm check` / `pnpm lint`                     | type check, prettier + eslint                                        |
-| `pnpm test:unit`                               | pure quantity/units/planning tests                                   |
-| `pnpm test:integration`                        | transaction tests against `recipe_test` (real PostgreSQL)            |
-| `pnpm build && pnpm test:e2e`                  | Playwright browser flows against the built app                       |
-| `pnpm db:generate`                             | generate a migration after editing `src/lib/server/db/schema.ts`     |
-| `pnpm db:check`                                | pantry consistency check (balances vs movement log)                  |
-| `pnpm seed:perf`                               | development-only performance dataset (10 households × 200 recipes …) |
-| `pnpm measure -- --base http://localhost:3000` | warm p50/p95 of key reads against a running server                   |
-| `node --env-file=.env scripts/explain.mjs`     | EXPLAIN (ANALYZE, BUFFERS) for representative queries                |
-
-The test database is created once: `docker compose -f compose.dev.yaml -p recipe-saver-dev exec db psql -U recipe -d recipe_dev -c 'create database recipe_test'`, then `pnpm db:migrate:test`.
-
-## Production
-
-See [docs/deployment.md](docs/deployment.md). Short version:
-
-```sh
-cp .env.example .env   # set POSTGRES_PASSWORD, ORIGIN, BETTER_AUTH_SECRET, CLOUDFLARE_TUNNEL_TOKEN
-docker compose up -d --build
-```
-
-Services: `db` (persistent volume), `migrate` (one-shot, serialized), `app`
-(Node on 0.0.0.0:3000, no host port), `cloudflared`. Compose reads `.env` for
-interpolation, so one file configures both `pnpm dev` and production. A cloud-PostgreSQL variant is
-`compose.cloud-db.yaml`; a local production-like variant with a published port is
-`compose.local-prod.yaml`.
-
-## Layout
-
-```
-src/lib/shared/     pure quantity logic shared by browser and server (decimal, units, parsing, planning)
-src/lib/server/     business logic, access checks, database, storage adapters
-src/lib/components/ UI components
-src/routes/         pages, form actions, API and media endpoints
-drizzle/            committed migrations
-scripts/            migrate, seed, measure, explain, consistency check
-tests/              unit (src/**/*.test.ts), integration, e2e
-docs/               design decisions, deployment, measurements
-```
+Create the test database once: `docker compose -f compose.dev.yaml -p recipe-saver-dev exec db psql -U recipe -d recipe_dev -c 'create database recipe_test'`, then `pnpm db:migrate:test`.
 
 ## Documentation
 
-- [Design decisions](docs/design-decisions.md) – ownership, snapshots, transaction invariants, cache rules, deferred features
-- [Deployment](docs/deployment.md) – Compose, tunnel, cache rules, backup/restore, troubleshooting
-- [Measurements](docs/measurements.md) – dataset, query counts, payload sizes, latencies
+- [Deployment](docs/deployment.md) – all `deploy.sh` and `.env` options, Cloudflare setup and cache rules, updates, backup/restore, troubleshooting
+- [Design decisions](docs/design-decisions.md) – ownership, grocery snapshots, transaction invariants, cache policy, deferred features
+- [Measurements](docs/measurements.md) – dataset, query counts, payload sizes, latencies, verification runs
