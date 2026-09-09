@@ -8,10 +8,24 @@ import { storage } from '$lib/server/media/storage';
 
 /**
  * Private source files. Authorization runs before any bytes or a 304, as with
- * images. A PDF opens inline; anything else — HTML above all — is sent as a
- * download with a neutralised content type, so a stored page can never run in
- * the app's origin.
+ * images.
+ *
+ * Both PDFs and saved HTML open in the viewer's tab, but a stored page is never
+ * trusted: the CSP `sandbox` directive (with no allow-scripts and no
+ * allow-same-origin) drops it into an opaque origin where no script runs and it
+ * can reach neither this app's cookies nor its DOM. `default-src 'none'` also
+ * stops it fetching anything, so opening one leaks no request to its origin
+ * site. Inline styles are allowed so the page stays readable.
  */
+const SANDBOX_CSP = [
+	'sandbox',
+	"default-src 'none'",
+	"style-src 'unsafe-inline'",
+	'img-src data:',
+	'font-src data:',
+	"form-action 'none'",
+	"base-uri 'none'"
+].join('; ');
 const GETImpl = async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	if (!/^[0-9a-f-]{36}$/i.test(event.params.attachmentId)) throw error(404, 'Not found');
@@ -25,11 +39,11 @@ const GETImpl = async (event: RequestEvent) => {
 		etag,
 		vary: 'Cookie',
 		'x-cache-policy': 'media',
-		'content-type': isPdf ? 'application/pdf' : 'application/octet-stream',
-		'content-disposition': `${isPdf ? 'inline' : 'attachment'}; filename="${att.filename.replace(/"/g, '')}"`,
-		// Belt and braces: nothing served here may execute or embed anything.
-		'content-security-policy': "default-src 'none'; sandbox",
-		'x-content-type-options': 'nosniff'
+		'content-type': isPdf ? 'application/pdf' : 'text/html; charset=utf-8',
+		'content-disposition': `inline; filename="${att.filename.replace(/"/g, '')}"`,
+		'content-security-policy': SANDBOX_CSP,
+		'x-content-type-options': 'nosniff',
+		'referrer-policy': 'no-referrer'
 	});
 	const inm = event.request.headers.get('if-none-match');
 	if (inm && inm.split(',').some((t) => t.trim() === etag)) {

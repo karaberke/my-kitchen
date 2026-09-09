@@ -237,6 +237,16 @@
 				rel="noopener">Plain text</a
 			>
 			<button class="btn-secondary btn-sm" onclick={() => window.print()}>Print</button>
+			{#if r.sourceFile}
+				<a
+					href="/media/attachment/{r.sourceFile.id}"
+					class="btn-secondary btn-sm"
+					target="_blank"
+					rel="noopener"
+					title="Open {r.sourceFile.filename}, the file this recipe was imported from"
+					>View source</a
+				>
+			{/if}
 			{#if r.isOwner}
 				<form method="post" action="?/archive" use:enhance>
 					<input type="hidden" name="archived" value={r.status === 'archived' ? '0' : '1'} />

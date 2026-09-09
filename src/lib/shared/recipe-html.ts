@@ -252,12 +252,27 @@ function firstScalar(value: unknown): string {
 	return text(value);
 }
 
+/**
+ * The recipe's own name beats the document title, which usually carries the
+ * site's name too ("Taiwanese Fried Chicken - The Woks of Life").
+ */
 function titleFromDocument(html: string): string {
+	const named =
+		/<[a-z0-9]+\b[^>]*class="[^"]*recipe-name[^"]*"[^>]*>([\s\S]*?)<\/[a-z0-9]+\s*>/i.exec(html) ??
+		/<[a-z0-9]+\b[^>]*itemprop="name"[^>]*>([\s\S]*?)<\/[a-z0-9]+\s*>/i.exec(html);
+	if (named && stripTags(named[1])) return stripTags(named[1]);
 	const title = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i.exec(html);
 	if (title && stripTags(title[1])) return stripTags(title[1]);
 	const h1 = /<h1\b[^>]*>([\s\S]*?)<\/h1\s*>/i.exec(html);
 	return h1 ? stripTags(h1[1]) : '';
 }
+
+/**
+ * Past this, the text is a whole web page — navigation, comments, footer — not
+ * a recipe. Keeping it would bury the useful part and be truncated on save
+ * anyway, so the stored original becomes the better reference.
+ */
+const MAX_USEFUL_NOTES = 4000;
 
 export function emptyRecipeFormInput(): RecipeFormInput {
 	return {
@@ -314,6 +329,7 @@ export function importRecipeHtml(html: string): HtmlImportResult {
 	// No structured recipe: keep the readable text so nothing is lost, and let
 	// the user shape it in the form.
 	input.title = titleFromDocument(html);
-	input.notes = stripTags(html);
+	const readable = stripTags(html);
+	input.notes = readable.length <= MAX_USEFUL_NOTES ? readable : '';
 	return { source: 'text', input };
 }

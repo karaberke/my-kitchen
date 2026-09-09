@@ -94,3 +94,44 @@ describe('parseRecipeText', () => {
 		expect(parseRecipeText(['   \n  \n']).empty).toBe(true);
 	});
 });
+
+describe('parseRecipeText with PDF line wrapping', () => {
+	const WRAPPED = [
+		`Boba Shop Cheese Foam
+The actual "cheese foam" boba shops use — cream cheese based, thicker and richer than
+Starbucks-style cold foam, with that signature savory-salty-sweet finish
+Ingredients
+2 tbsp cream cheese
+2 tbsp milk
+Steps
+1. Let 2 tbsp cream cheese sit out for 10-15 minutes until soft, or microwave in 5-second
+bursts.
+2. In a bowl, whisk the softened cream cheese with 2 tbsp milk, 1 tbsp sugar or
+honey, until smooth.`
+	];
+
+	it('keeps a description that wrapped onto a second line whole', () => {
+		const r = parseRecipeText(WRAPPED);
+		expect(r.input.description).toBe(
+			'The actual "cheese foam" boba shops use — cream cheese based, thicker and richer than Starbucks-style cold foam, with that signature savory-salty-sweet finish'
+		);
+	});
+
+	it('joins a step that wrapped mid-sentence instead of splitting it', () => {
+		const r = parseRecipeText(WRAPPED);
+		expect(r.input.steps.map((s) => s.text)).toEqual([
+			'Let 2 tbsp cream cheese sit out for 10-15 minutes until soft, or microwave in 5-second bursts.',
+			'In a bowl, whisk the softened cream cheese with 2 tbsp milk, 1 tbsp sugar or honey, until smooth.'
+		]);
+	});
+
+	it('strips the source numbering, since the form numbers steps itself', () => {
+		const r = parseRecipeText(['Soup\nSteps\n1. Chop.\n2. Simmer.']);
+		expect(r.input.steps.map((s) => s.text)).toEqual(['Chop.', 'Simmer.']);
+	});
+
+	it('never joins two separate ingredient lines', () => {
+		const r = parseRecipeText(WRAPPED);
+		expect(r.input.ingredients.map((i) => i.name)).toEqual(['cream cheese', 'milk']);
+	});
+});

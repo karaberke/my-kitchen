@@ -229,3 +229,36 @@ describe('splitIngredientLine', () => {
 		expect(split('')).toEqual(['', '', '']);
 	});
 });
+
+describe('importRecipeHtml title and notes on an unstructured page', () => {
+	it('prefers the recipe block’s own name over the page title', () => {
+		const r = importRecipeHtml(
+			`<html><head><title>Taiwanese Fried Chicken - The Woks of Life</title></head>
+			<body><h2 class="wprm-recipe-name wprm-block-text-bold">Taiwanese Fried Chicken</h2></body></html>`
+		);
+		expect(r.input.title).toBe('Taiwanese Fried Chicken');
+	});
+
+	it('falls back to the page title when the page names no recipe', () => {
+		const r = importRecipeHtml(
+			'<html><head><title>Nan&#39;s stew</title></head><body><p>Hi.</p></body></html>'
+		);
+		expect(r.input.title).toBe("Nan's stew");
+	});
+
+	it('keeps short readable text in notes', () => {
+		const r = importRecipeHtml('<body><h1>Stew</h1><p>Brown the beef, then simmer.</p></body>');
+		expect(r.input.notes).toContain('Brown the beef');
+	});
+
+	it('does not dump a whole website into notes', () => {
+		// A page that is mostly navigation and furniture, as saved blog pages are.
+		const filler = '<p>Some navigation and boilerplate text.</p>'.repeat(200);
+		const r = importRecipeHtml(
+			`<html><head><title>Big page</title></head><body>${filler}</body></html>`
+		);
+		expect(r.source).toBe('text');
+		// Nothing useful to keep: the original file is the better reference.
+		expect(r.input.notes).toBe('');
+	});
+});
