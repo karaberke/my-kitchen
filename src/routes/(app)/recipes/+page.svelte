@@ -7,11 +7,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data } = $props();
-	// svelte-ignore state_referenced_locally
-	let q = $state(data.params.q);
-	$effect(() => {
-		q = data.params.q;
-	});
+	let q = $derived(data.params.q);
 
 	function link(changes: Record<string, string | null>) {
 		const u = new URL(page.url);

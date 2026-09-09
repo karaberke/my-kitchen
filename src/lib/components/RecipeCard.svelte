@@ -4,11 +4,7 @@
 	import { fmtMinutes, fmtNum } from '$lib/client/format';
 
 	let { recipe, eager = false }: { recipe: RecipeCard; eager?: boolean } = $props();
-	// svelte-ignore state_referenced_locally
-	let fav = $state(recipe.isFavorite);
-	$effect(() => {
-		fav = recipe.isFavorite;
-	});
+	let fav = $derived(recipe.isFavorite);
 	const meta = $derived(
 		[
 			recipe.prepMinutes ? `${fmtMinutes(recipe.prepMinutes)} prep` : '',

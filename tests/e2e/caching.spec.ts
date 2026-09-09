@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { createRecipe, register } from './helpers';
+import { register } from './helpers';
 import path from 'node:path';
 
 test('cache headers: immutable assets, no-store pages/data, private media with authorized 304', async ({

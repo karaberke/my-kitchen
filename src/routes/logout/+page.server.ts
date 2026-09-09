@@ -1,9 +1,9 @@
 import { redirect } from '@sveltejs/kit';
 import { guard } from '$lib/server/http';
-import type { Actions, PageServerLoadEvent } from './$types';
+import type { Actions } from './$types';
 import { auth } from '$lib/server/auth';
 
-const loadImpl = (_event: PageServerLoadEvent) => {
+const loadImpl = () => {
 	throw redirect(303, '/login');
 };
 

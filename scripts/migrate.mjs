@@ -38,6 +38,11 @@ async function waitForDatabase() {
 			return;
 		} catch (err) {
 			await probe.end({ timeout: 1 }).catch(() => {});
+			// Authentication / missing database errors will not fix themselves: fail fast.
+			if (['28P01', '28000', '3D000'].includes(err.code)) {
+				console.error(`migrate: cannot connect: ${err.message}`);
+				process.exit(1);
+			}
 			if (Date.now() > deadline) {
 				console.error(`migrate: database not reachable after ${waitSeconds}s: ${err.message}`);
 				process.exit(1);

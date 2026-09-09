@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { createRecipe, login, register } from './helpers';
+import { createRecipe, register } from './helpers';
 
 test.describe('recipes', () => {
 	test('registration, draft, full save, edit, duplicate, export, delete', async ({ page }) => {

@@ -40,6 +40,13 @@ export const actions: Actions = {
 			return fail(400, { message: 'Enter a valid email address', name, email });
 		if (password.length < 8)
 			return fail(400, { message: 'Use at least 8 characters for the password', name, email });
+		const limit = consume(`signup:${event.getClientAddress()}`, AUTH_LIMITS.signUp);
+		if (!limit.allowed)
+			return fail(429, {
+				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,
+				name,
+				email
+			});
 		try {
 			await auth.api.signUpEmail({
 				body: { name, email, password },

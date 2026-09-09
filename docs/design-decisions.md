@@ -19,6 +19,11 @@ This note explains the choices that are not obvious from the code.
   catalog rows and the caller's own rows. A shared recipe carries its custom
   ingredient names by value (the recipe row stores `name`), so members see the
   recipe without gaining a way to enumerate the owner's other identities.
+- **Auth rate limits**: the form actions for sign-in, sign-up and password change
+  use a small in-process sliding-window limiter keyed by client address (and
+  email for sign-in), because Better Auth's own limiter only guards its HTTP
+  handler and the app calls `auth.api.*` server-side. Single instance only;
+  a restart resets it.
 - **Sessions** are Better Auth database sessions with cookie caching disabled,
   so revoking a session or changing a password (which revokes other sessions)
   takes effect immediately.

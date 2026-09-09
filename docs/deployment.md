@@ -22,6 +22,11 @@ S3 or cloud-database resources.
    `pantry.example.com` → `http://app:3000` (service type HTTP, URL `app:3000`).
    The `cloudflared` container joins the compose network and resolves `app` by name.
 
+Compose interpolates `${...}` values from the `.env` file in the project directory (the
+same file `pnpm dev` and the scripts read). Keep production values there on the server, or
+pass another file with `docker compose --env-file prod.env ...`. `ORIGIN` must be the URL
+users type; a mismatch makes every form post fail the CSRF origin check with 403.
+
 ## Launch
 
 ```sh
@@ -95,6 +100,22 @@ curl -sI https://pantry.example.com/recipes | grep -i -E 'cache-control|cf-cache
 curl -sI https://pantry.example.com/_app/immutable/<hashed file> | grep -i -E 'cache-control|cf-cache-status'
 # expect: public, max-age=31536000, immutable   cf-cache-status: HIT after the first request
 ```
+
+## Notes on static files
+
+- Hashed assets under `/_app/immutable/` are served by adapter-node's static handler with
+  `public, max-age=31536000, immutable` and precompressed (`br`/`gzip`) variants.
+- A request for a missing file under `/_app/immutable/` returns 404 with
+  `public, max-age=0, must-revalidate`, never the one-year TTL.
+- `robots.txt` is served by an app route with `public, max-age=600, must-revalidate`; the
+  favicon is a hashed asset. Keep the `static/` directory for truly public files only;
+  anything there bypasses the app's hooks and gets no explicit `Cache-Control`.
+
+## DATABASE_SSL
+
+`compose.cloud-db.yaml` defaults `DATABASE_SSL` to `require` when the variable is **unset**.
+Set `DATABASE_SSL=` (empty) explicitly to connect without TLS (LAN database), or
+`DATABASE_SSL=no-verify` to accept a self-signed certificate.
 
 ## Optional S3 images
 

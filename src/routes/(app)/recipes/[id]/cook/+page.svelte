@@ -34,11 +34,7 @@
 	let checkedIng = $state<Record<number, boolean>>({});
 	let doneSteps = $state<Record<string, boolean>>({});
 	let finishOpen = $state(false);
-	// svelte-ignore state_referenced_locally
-	let servings = $state(data.preview?.servings ?? data.recipe.baseServings ?? '1');
-	$effect(() => {
-		servings = data.preview?.servings ?? data.recipe.baseServings ?? '1';
-	});
+	let servings = $derived(data.preview?.servings ?? data.recipe.baseServings ?? '1');
 
 	interface Alloc {
 		lotId: string;
@@ -59,6 +55,8 @@
 		note: string;
 		loading: boolean;
 	}
+	// items are edited in place inside the finish sheet, so they stay $state and resync when the preview changes
+	// eslint-disable-next-line svelte/prefer-writable-derived
 	let items = $state<ItemState[]>([]);
 	$effect(() => {
 		items = (data.preview?.items ?? []).map((it) => ({
@@ -140,7 +138,6 @@
 			return `${amt ? formatQuantity(amt, ing.unit) + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}${ing.optional ? ' (optional)' : ''}`;
 		})
 	);
-	let lastEvent = $state<string | null>(null);
 </script>
 
 <PageHeader
@@ -293,7 +290,6 @@
 					await update({ reset: false });
 					if (result.type === 'success') {
 						finishOpen = false;
-						lastEvent = (result.data as { eventId?: string })?.eventId ?? null;
 						pushToast('Pantry updated.', { kind: 'success' });
 						await invalidate('app:cook');
 					}

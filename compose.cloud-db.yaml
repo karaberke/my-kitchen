@@ -8,7 +8,8 @@ x-app-env: &app-env
   DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
   DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-10}
   DATABASE_IDLE_TIMEOUT_SECONDS: ${DATABASE_IDLE_TIMEOUT_SECONDS:-30}
-  DATABASE_SSL: ${DATABASE_SSL:-require}
+  # unset -> require (cloud databases normally mandate TLS); set DATABASE_SSL= (empty) to disable, e.g. for a LAN database
+  DATABASE_SSL: ${DATABASE_SSL-require}
   ORIGIN: ${ORIGIN:?set ORIGIN in .env (https://your-hostname)}
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
   REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}

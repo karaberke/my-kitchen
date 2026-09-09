@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
-import { db, type DbOrTx, type Tx } from '$lib/server/db';
+import { type DbOrTx, type Tx } from '$lib/server/db';
 import {
 	groceryBatchRequirements,
 	groceryBatches,
@@ -494,16 +494,14 @@ export async function recalculateDraft(
 			lineId = created.id;
 		}
 		if (line.sources.length) {
-			await tx
-				.insert(groceryLineSources)
-				.values(
-					line.sources.map((s) => ({
-						lineId,
-						batchId: s.batchId,
-						amount: s.amount ? Dec.from(s.amount).toDb() : null,
-						unit: s.unit
-					}))
-				);
+			await tx.insert(groceryLineSources).values(
+				line.sources.map((s) => ({
+					lineId,
+					batchId: s.batchId,
+					amount: s.amount ? Dec.from(s.amount).toDb() : null,
+					unit: s.unit
+				}))
+			);
 		}
 	}
 	const stale = existing
@@ -1027,21 +1025,19 @@ async function refreshBatchFromRecipe(tx: Tx, batchId: string, recipeId: string)
 	const includeByPos = new Map(previous.map((p) => [p.position, p.include]));
 	await tx.delete(groceryBatchRequirements).where(eq(groceryBatchRequirements.batchId, batchId));
 	if (reqs.length) {
-		await tx
-			.insert(groceryBatchRequirements)
-			.values(
-				reqs.map((r) => ({
-					batchId,
-					position: r.position,
-					ingredientId: r.ingredientId,
-					name: r.name,
-					baseAmount: r.amount,
-					unit: r.unit,
-					preparation: r.preparation,
-					optional: r.optional,
-					include: r.optional ? (includeByPos.get(r.position) ?? false) : true
-				}))
-			);
+		await tx.insert(groceryBatchRequirements).values(
+			reqs.map((r) => ({
+				batchId,
+				position: r.position,
+				ingredientId: r.ingredientId,
+				name: r.name,
+				baseAmount: r.amount,
+				unit: r.unit,
+				preparation: r.preparation,
+				optional: r.optional,
+				include: r.optional ? (includeByPos.get(r.position) ?? false) : true
+			}))
+		);
 	}
 	await tx
 		.update(groceryBatches)

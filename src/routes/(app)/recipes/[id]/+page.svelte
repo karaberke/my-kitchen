@@ -26,11 +26,7 @@
 	const f = $derived(form as LooseForm);
 	const r = $derived(data.recipe);
 
-	// svelte-ignore state_referenced_locally
-	let servings = $state(Dec.from(data.recipe.baseServings ?? '1'));
-	$effect(() => {
-		servings = Dec.from(data.recipe.baseServings ?? '1');
-	});
+	let servings = $derived(Dec.from(data.recipe.baseServings ?? '1'));
 	const base = $derived(Dec.from(r.baseServings ?? '1'));
 	const scaled = $derived(
 		!r.baseServings || servings.eq(base) ? null : servings.div(base).toHuman()
@@ -117,11 +113,7 @@
 	let deleteOpen = $state(false);
 	// svelte-ignore state_referenced_locally
 	let planServings = $state(data.recipe.baseServings ?? '4');
-	// svelte-ignore state_referenced_locally
-	let fav = $state(data.recipe.isFavorite);
-	$effect(() => {
-		fav = data.recipe.isFavorite;
-	});
+	let fav = $derived(data.recipe.isFavorite);
 	const optionalIngredients = $derived(r.ingredients.filter((i) => i.optional));
 	const cookHref = $derived(
 		`/recipes/${r.id}/cook?servings=${encodeURIComponent(servings.toString())}`

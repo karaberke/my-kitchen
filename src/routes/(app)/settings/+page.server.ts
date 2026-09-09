@@ -55,6 +55,12 @@ export const actions: Actions = {
 			return fail(400, { message: 'Use at least 8 characters', form: 'password' });
 		if (newPassword !== String(fd.get('confirm') ?? ''))
 			return fail(400, { message: 'The two passwords do not match', form: 'password' });
+		const limit = consume(`password:${event.locals.user!.id}`, AUTH_LIMITS.password);
+		if (!limit.allowed)
+			return fail(429, {
+				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,
+				form: 'password'
+			});
 		try {
 			await auth.api.changePassword({
 				body: { currentPassword, newPassword, revokeOtherSessions: true },

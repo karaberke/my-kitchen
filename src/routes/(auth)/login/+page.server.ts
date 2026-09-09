@@ -28,8 +28,15 @@ export const actions: Actions = {
 		const password = String(fd.get('password') ?? '').slice(0, 200);
 		const next = safeNext(String(fd.get('next') ?? ''));
 		if (!email || !password) return fail(400, { message: 'Enter your email and password', email });
-		const limit = consume(`signin:${event.getClientAddress()}:${email.toLowerCase()}`, AUTH_LIMITS.signIn);
-		if (!limit.allowed) return fail(429, { message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`, email });
+		const limit = consume(
+			`signin:${event.getClientAddress()}:${email.toLowerCase()}`,
+			AUTH_LIMITS.signIn
+		);
+		if (!limit.allowed)
+			return fail(429, {
+				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,
+				email
+			});
 		try {
 			await auth.api.signInEmail({ body: { email, password }, headers: event.request.headers });
 		} catch (err) {

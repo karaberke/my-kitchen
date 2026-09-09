@@ -111,8 +111,8 @@
 			notes,
 			tags,
 			convention,
-			ingredients: ingredients.map(({ key: _k, ...r }) => r),
-			steps: steps.map(({ key: _k, ...s }) => s),
+			ingredients: ingredients.map((r) => ({ ...r, key: 0 })),
+			steps: steps.map((s) => ({ ...s, key: 0 })),
 			removeImage
 		});
 	const initialSnapshot = snapshot();
