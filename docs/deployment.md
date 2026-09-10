@@ -58,6 +58,39 @@ are set in `.env`, so leaving them blank keeps a password-only install unchanged
 Setup steps, the redirect URI each provider needs, and Apple's six-month secret rotation
 are in [docs/social-sign-in.md](social-sign-in.md).
 
+## Deleting a person and their data
+
+There is no admin screen for this — it is a script, because it is irreversible and
+touches other people's households.
+
+```sh
+docker compose exec app node scripts/delete-user.mjs someone@example.com --dry-run
+docker compose exec app node scripts/delete-user.mjs someone@example.com
+```
+
+Outside Docker: `pnpm delete-user someone@example.com`. Always start with
+`--dry-run`; it prints exactly what would happen and changes nothing. Without
+`--yes` you are asked to retype the address, and `--yes` is required when there is
+no terminal attached.
+
+What it does:
+
+- **Deletes** their recipes, photos, imported source files, private ingredients,
+  favourites, sign-in sessions and linked accounts.
+- **Deletes** any household where they were the only member, including its pantry,
+  grocery lists and history.
+- **Keeps** households that other people are in. If the person was that household's
+  only owner, ownership passes to the longest-standing remaining member, so it is
+  never left without one.
+- **Keeps** cooking and purchase history, which records their name as text so the
+  pantry maths stays correct after they are gone.
+- **Keeps** any private ingredient still sitting in someone's pantry, turning it
+  into a shared catalog entry. Deleting it would break the stock lot pointing at it.
+
+Photos and imported files are removed from local storage as well. On S3 the script
+prints the key prefixes to delete from your bucket, since it does not touch the
+bucket itself.
+
 ## ORIGIN and how the app knows its URL
 
 Form posts are protected by an origin check, so `ORIGIN` must be exactly what people type,

@@ -20,6 +20,7 @@
 		"db:dev:down": "docker compose -f compose.dev.yaml -p my-kitchen-dev down",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "node --env-file=.env scripts/migrate.mjs",
+		"delete-user": "node --env-file=.env scripts/delete-user.mjs",
 		"db:migrate:test": "node --env-file=.env.test scripts/migrate.mjs",
 		"db:studio": "drizzle-kit studio",
 		"db:check": "node --env-file=.env scripts/consistency-check.mjs",
