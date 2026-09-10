@@ -35,7 +35,8 @@ COPY --from=prod-deps --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/build ./build
 COPY --chown=app:app package.json ./
 COPY --chown=app:app drizzle ./drizzle
-COPY --chown=app:app scripts/migrate.mjs scripts/consistency-check.mjs scripts/start.mjs ./scripts/
+COPY --chown=app:app scripts/migrate.mjs scripts/consistency-check.mjs scripts/start.mjs \
+     scripts/delete-user.mjs ./scripts/
 USER app
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 CMD curl -fsS http://127.0.0.1:3000/health?ready=1 || exit 1
