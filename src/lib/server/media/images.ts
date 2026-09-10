@@ -21,9 +21,17 @@ const MAX_DIMENSION = 10000;
 class Semaphore {
 	private queue: (() => void)[] = [];
 	private active = 0;
-	constructor(private readonly max: number) {}
+	constructor(
+		private readonly max: number,
+		/** Waiting slots. Beyond this the upload is refused rather than queued forever. */
+		private readonly maxQueued = 32
+	) {}
 	async run<T>(fn: () => Promise<T>): Promise<T> {
-		if (this.active >= this.max) await new Promise<void>((resolve) => this.queue.push(resolve));
+		if (this.active >= this.max) {
+			if (this.queue.length >= this.maxQueued)
+				throw new AppError(503, 'Too many photos are being processed. Try again in a moment.');
+			await new Promise<void>((resolve) => this.queue.push(resolve));
+		}
 		this.active++;
 		try {
 			return await fn();
@@ -51,9 +59,11 @@ export async function storeRecipeImage(userId: string, file: File): Promise<stri
 			`Images must be under ${Math.round(env.UPLOAD_MAX_BYTES / 1024 / 1024)} MB`
 		);
 	if (file.size < 64) throw new AppError(400, 'That file does not look like an image');
-	const buffer = Buffer.from(await file.arrayBuffer());
 	semaphore ??= new Semaphore(env.IMAGE_CONCURRENCY);
 	return semaphore.run(async () => {
+		// Read inside the semaphore: buffering first would let a burst hold every
+		// upload in memory at once while only IMAGE_CONCURRENCY of them progress.
+		const buffer = Buffer.from(await file.arrayBuffer());
 		let meta: Metadata;
 		try {
 			meta = await sharp(buffer, { limitInputPixels: MAX_DIMENSION * MAX_DIMENSION }).metadata();

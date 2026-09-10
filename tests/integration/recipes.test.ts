@@ -7,8 +7,10 @@ import {
 	exportRecipes,
 	getRecipeDetail,
 	listRecipes,
+	listRecipeOptions,
 	parseListParams,
 	setFavorite,
+	setRecipeArchived,
 	setRecipeShare,
 	updateRecipe
 } from '$lib/server/recipes';
@@ -220,6 +222,46 @@ describe('recipes', () => {
 		expect(search.total).toBe(11);
 		const capped = parseListParams(new URL('http://x/recipes?perPage=5000'));
 		expect(capped.perPage).toBe(100);
+	});
+
+	it('meal options preserve the readable recipe picker results without card metadata', async () => {
+		const alice = await createUser('Alice');
+		const bob = await createUser('Bob');
+		await acceptInvite(bob.id, (await createInvite(db, alice.id, alice.householdId)).token);
+		for (const status of ['active', 'draft'] as const) {
+			const id = await createRecipe(
+				alice.id,
+				recipeInput({ title: status, status, ingredients: [] })
+			);
+			await setRecipeShare(alice.id, id, alice.householdId, true);
+		}
+		// A recipe reaches 'archived' by being archived, never at creation — and the
+		// picker must leave it out even though it is shared.
+		const archived = await createRecipe(
+			alice.id,
+			recipeInput({ title: 'archived', status: 'active', ingredients: [] })
+		);
+		await setRecipeShare(alice.id, archived, alice.householdId, true);
+		await setRecipeArchived(alice.id, archived, true);
+		await createRecipe(alice.id, recipeInput({ title: 'Private', ingredients: [] }));
+		for (const viewer of [alice, bob]) {
+			const cards = await listRecipes(
+				db,
+				viewer.id,
+				parseListParams(new URL('http://x/recipes?perPage=100'))
+			);
+			const options = await listRecipeOptions(db, viewer.id);
+			expect(options).toEqual(
+				cards.items.map(({ id, title, prepMinutes, cookMinutes, baseServings }) => ({
+					id,
+					title,
+					prepMinutes,
+					cookMinutes,
+					baseServings
+				}))
+			);
+			expect(options).toHaveLength(viewer === alice ? 3 : 2);
+		}
 	});
 
 	it('JSON export is versioned, scoped and preserves ingredient/step data', async () => {

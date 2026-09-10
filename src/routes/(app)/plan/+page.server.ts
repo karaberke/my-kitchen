@@ -10,7 +10,7 @@ import {
 	planWeekToGrocery,
 	removePlanEntry
 } from '$lib/server/plan';
-import { listRecipes } from '$lib/server/recipes';
+import { listRecipeOptions } from '$lib/server/recipes';
 import { todayIso } from '$lib/server/pantry';
 import { AppError } from '$lib/server/errors';
 
@@ -24,28 +24,14 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		getWeekPlan(db, household.id, start),
 		loadHouseholdOrThrow(db, household.id),
 		// The picker in the "Add meal" sheet: the user's own and shared recipes.
-		listRecipes(db, user.id, {
-			page: 1,
-			perPage: 100,
-			q: '',
-			tag: null,
-			favorites: false,
-			scope: 'all',
-			status: 'active'
-		})
+		listRecipeOptions(db, user.id)
 	]);
 	return {
 		title: 'This week',
 		today,
 		start,
 		days,
-		recipes: recipes.items.map((r) => ({
-			id: r.id,
-			title: r.title,
-			prepMinutes: r.prepMinutes,
-			cookMinutes: r.cookMinutes,
-			baseServings: r.baseServings
-		})),
+		recipes,
 		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision }
 	};
 };

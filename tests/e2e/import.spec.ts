@@ -274,6 +274,13 @@ test('a saved import offers View source next to Print', async ({ page }) => {
 	await expect(view).toBeVisible();
 	const res = await page.request.get((await view.getAttribute('href'))!);
 	expect(res.status()).toBe(200);
+	expect(res.headers()['cache-control']).toBe('private, max-age=300');
+	const etag = res.headers()['etag'];
+	expect(etag).toBeTruthy();
+	const conditional = await page.request.get((await view.getAttribute('href'))!, {
+		headers: { 'if-none-match': etag }
+	});
+	expect(conditional.status()).toBe(304);
 });
 
 test('a hand-entered recipe has no View source button', async ({ page }) => {
@@ -285,4 +292,89 @@ test('a hand-entered recipe has no View source button', async ({ page }) => {
 		step: 'Cook.'
 	});
 	await expect(page.getByRole('link', { name: 'View source' })).toHaveCount(0);
+});
+
+test('the browser parses the import, so the server never loads pdf.js', async ({ page }) => {
+	await register(page, 'Cly');
+	// Record what the form actually posts, to prove the parse happened client-side.
+	await page.addInitScript(() => {
+		(window as unknown as Record<string, unknown>).__sentClientParse = null;
+		const original = window.fetch;
+		window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const body = init?.body;
+			if (body instanceof FormData && body.has('clientParsed'))
+				(window as unknown as Record<string, unknown>).__sentClientParse = String(
+					body.get('clientParsed')
+				);
+			return original(input, init);
+		};
+	});
+
+	await page.goto('/recipes/import?kind=pdf');
+	await page.locator('#import-file').setInputFiles('tests/e2e/fixtures/dal-recipe.pdf');
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+	// Same result the server used to produce, but computed in the browser.
+	await expect(page.getByLabel('Title')).toHaveValue('Coconut Red Lentil Dal');
+	await expect(page.locator('#ing-1-amount')).toHaveValue('400');
+	await expect(page.locator('#ing-1-unit')).toHaveValue('ml');
+
+	const sent = await page.evaluate(
+		() => (window as unknown as Record<string, string | null>).__sentClientParse
+	);
+	expect(sent).toBeTruthy();
+	const payload = JSON.parse(sent!);
+	expect(payload.source).toBe('pdf');
+	expect(payload.pageCount).toBe(2);
+	expect(payload.input.title).toBe('Coconut Red Lentil Dal');
+});
+
+test('a client parse that is malformed is ignored, not trusted', async ({ page }) => {
+	await register(page, 'Cla');
+	// Forge a payload that fails the schema; the server must fall back to its own parse.
+	await page.addInitScript(() => {
+		const original = window.fetch;
+		window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const body = init?.body;
+			if (body instanceof FormData && body.has('clientParsed'))
+				body.set('clientParsed', JSON.stringify({ source: 'nonsense', input: 'not an object' }));
+			return original(input, init);
+		};
+	});
+
+	await page.goto('/recipes/import?kind=pdf');
+	await page.locator('#import-file').setInputFiles('tests/e2e/fixtures/dal-recipe.pdf');
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+	// Server-side parse produced the same recipe, so the forged payload changed nothing.
+	await expect(page.getByLabel('Title')).toHaveValue('Coconut Red Lentil Dal');
+	await expect(page.locator('#ing-0-amount')).toHaveValue('300');
+});
+
+test('pdf.js is not downloaded until a PDF is actually chosen', async ({ page }) => {
+	await register(page, 'Chu');
+	const scriptBytes = () =>
+		page.evaluate(() =>
+			performance
+				.getEntriesByType('resource')
+				.filter((e) => e.name.endsWith('.js'))
+				.reduce((n, e) => n + (e as PerformanceResourceTiming).transferSize, 0)
+		);
+
+	await page.goto('/recipes/import?kind=pdf');
+	await page.locator('#import-file').waitFor();
+	const onLoad = await scriptBytes();
+	// The page itself stays small: the parser is behind a dynamic import.
+	expect(onLoad).toBeLessThan(500_000);
+
+	await page.locator('#import-file').setInputFiles('tests/e2e/fixtures/dal-recipe.pdf');
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+	await expect(page.getByLabel('Title')).toHaveValue('Coconut Red Lentil Dal');
+
+	// Choosing one pulls the parser in, so the cost falls only on imports that need it.
+	const afterParse = await scriptBytes();
+	console.info(
+		`import page JS: ${(onLoad / 1024).toFixed(0)} KB on load -> ${(afterParse / 1024).toFixed(0)} KB after parsing a PDF`
+	);
+	expect(afterParse).toBeGreaterThan(onLoad);
 });

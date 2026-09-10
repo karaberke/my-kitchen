@@ -5,7 +5,13 @@
 	import Alert from './Alert.svelte';
 	import { parseAmount } from '$lib/shared/amount-parse';
 	import { UNITS, normalizeUnitInput } from '$lib/shared/units';
-	import type { FieldErrors, RecipeFormInput } from '$lib/shared/recipe-input';
+	import { resizeForUpload } from '$lib/client/image-resize';
+	import {
+		parseRecipeForm,
+		validateRecipe,
+		type FieldErrors,
+		type RecipeFormInput
+	} from '$lib/shared/recipe-input';
 
 	interface IngredientRow {
 		key: number;
@@ -28,8 +34,8 @@
 	let {
 		initial,
 		identityLabels = {},
-		errors = {},
-		message = '',
+		errors: serverErrors = {},
+		message: serverMessage = '',
 		conflict = false,
 		mode,
 		expectedRevision = null,
@@ -94,6 +100,15 @@
 	let steps = $state<StepRow[]>(
 		initial.steps.length ? initial.steps.map((s) => ({ key: ++seq, ...s })) : [blankStep()]
 	);
+	/**
+	 * Problems found in the browser before submitting. Merged over whatever the
+	 * server last said, so the markup below reads `errors` either way.
+	 */
+	let clientErrors = $state<FieldErrors>({});
+	let clientMessage = $state('');
+	const errors = $derived<FieldErrors>({ ...serverErrors, ...clientErrors });
+	const message = $derived(clientMessage || serverMessage);
+
 	let removeImage = $state(false);
 	let imagePreview = $state<string | null>(null);
 	let submitting = $state(false);
@@ -186,6 +201,7 @@
 	}
 	function onFile(e: Event) {
 		const file = (e.target as HTMLInputElement).files?.[0];
+		if (imagePreview) URL.revokeObjectURL(imagePreview);
 		imagePreview = file ? URL.createObjectURL(file) : null;
 		if (file) removeImage = false;
 	}
@@ -202,11 +218,26 @@
 	{action}
 	enctype="multipart/form-data"
 	class="flex flex-col gap-6"
-	use:enhance={({ submitter }) => {
-		submitting = true;
-		if (submitter instanceof HTMLButtonElement && submitter.value) {
-			// intent is carried by the submitter's value (draft/save)
+	use:enhance={async ({ formData, cancel }) => {
+		// The very rules the server applies, run here first: a missing title or
+		// servings needs no round trip. The server still validates on arrival, so
+		// the two cannot drift — this is the same function, not a copy of it.
+		const validation = validateRecipe(parseRecipeForm(formData));
+		if (!validation.ok) {
+			clientErrors = validation.errors;
+			clientMessage = 'Please fix the highlighted fields.';
+			cancel();
+			return;
 		}
+		clientErrors = {};
+		clientMessage = '';
+		submitting = true;
+		// Shrink the photo here rather than shipping a 4 MB original for the server to
+		// throw away. resizeForUpload returns the original on any failure, and the
+		// server re-decodes and re-validates whatever arrives regardless.
+		const picked = formData.get('image');
+		if (picked instanceof File && picked.size > 0)
+			formData.set('image', await resizeForUpload(picked));
 		return async ({ result, update }) => {
 			submitting = false;
 			if (result.type === 'redirect') submitting = true;

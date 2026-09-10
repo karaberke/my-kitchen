@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import SocialSignIn from '$lib/components/SocialSignIn.svelte';
 	let { data, form } = $props();
 	let busy = $state(false);
 </script>
@@ -9,6 +10,7 @@
 	<p class="mt-1 text-[13px] text-sage">Sign in to your recipes and household.</p>
 	<form
 		method="post"
+		action="?/signin"
 		class="mt-5 flex flex-col gap-4"
 		use:enhance={() => {
 			busy = true;
@@ -57,6 +59,7 @@
 		</div>
 		<button class="btn-primary w-full" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
 	</form>
+	<SocialSignIn providers={data.providers} next={data.next} />
 </div>
 {#if data.registrationOpen}
 	<p class="text-center text-[13px] text-sage">

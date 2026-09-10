@@ -452,73 +452,106 @@ export async function recalculateDraft(
 	const byKey = new Map(
 		existing.filter((l) => l.kind === 'recipe' && l.planKey).map((l) => [l.planKey!, l])
 	);
-	const keep = new Set<string>();
-	let position = 0;
-	for (const line of plan.lines) {
-		keep.add(line.key);
+	const keep = new Set(plan.lines.map((line) => line.key));
+	const prepared = plan.lines.map((line, position) => {
 		const prev = byKey.get(line.key);
-		const category =
-			prev?.category ??
-			(line.ingredientId ? (meta.get(line.ingredientId)?.category ?? 'Other') : 'Other');
-		const values = {
-			name: prev?.name ?? line.name,
-			category,
-			unit: line.unit,
-			demandAmount: line.demand ? line.demand.toDb() : null,
-			stockConsidered: line.stockConsidered ? line.stockConsidered.toDb() : null,
-			targetAmount: line.suggested ? line.suggested.toDb() : null,
-			unresolvedReason: line.unresolvedReason,
-			otherStock: line.otherStock,
-			position: position++,
-			updatedAt: sql`now()`
+		return {
+			line,
+			prev,
+			values: {
+				name: prev?.name ?? line.name,
+				category:
+					prev?.category ??
+					(line.ingredientId ? (meta.get(line.ingredientId)?.category ?? 'Other') : 'Other'),
+				unit: line.unit,
+				demandAmount: line.demand?.toDb() ?? null,
+				stockConsidered: line.stockConsidered?.toDb() ?? null,
+				targetAmount: line.suggested?.toDb() ?? null,
+				unresolvedReason: line.unresolvedReason,
+				otherStock: line.otherStock,
+				position,
+				updatedAt: sql`now()`
+			}
 		};
-		let lineId: string;
-		if (prev) {
-			lineId = prev.id;
-			await tx
-				.update(groceryLines)
-				.set({ ...values, revision: sql`${groceryLines.revision} + 1` })
-				.where(eq(groceryLines.id, prev.id));
-			await tx.delete(groceryLineSources).where(eq(groceryLineSources.lineId, prev.id));
-		} else {
-			const [created] = await tx
-				.insert(groceryLines)
-				.values({
+	});
+	const touchedIds = prepared.flatMap(({ prev }) => (prev ? [prev.id] : []));
+	if (touchedIds.length)
+		await tx.delete(groceryLineSources).where(inArray(groceryLineSources.lineId, touchedIds));
+
+	const lineIds = new Map(
+		prepared.flatMap(({ line, prev }) => (prev ? [[line.key, prev.id] as const] : []))
+	);
+	const newLines = prepared.filter(({ prev }) => !prev);
+	if (newLines.length) {
+		const created = await tx
+			.insert(groceryLines)
+			.values(
+				newLines.map(({ line, values }) => ({
 					listId,
-					kind: 'recipe',
+					kind: 'recipe' as const,
 					planKey: line.key,
 					ingredientId: line.ingredientId,
 					...values
-				})
-				.returning({ id: groceryLines.id });
-			lineId = created.id;
-		}
-		if (line.sources.length) {
-			await tx.insert(groceryLineSources).values(
-				line.sources.map((s) => ({
-					lineId,
-					batchId: s.batchId,
-					amount: s.amount ? Dec.from(s.amount).toDb() : null,
-					unit: s.unit
 				}))
-			);
-		}
+			)
+			.returning({ id: groceryLines.id, planKey: groceryLines.planKey });
+		for (const row of created) lineIds.set(row.planKey!, row.id);
 	}
+
+	// Cast VALUES columns explicitly: an all-null column otherwise becomes text in Postgres.
+	const updates = prepared.flatMap(({ prev, values: v }) =>
+		prev
+			? [
+					sql`(
+		${prev.id}::uuid, ${v.name}::text, ${v.category}::text, ${v.unit}::text,
+		${v.demandAmount}::numeric, ${v.stockConsidered}::numeric, ${v.targetAmount}::numeric,
+		${v.unresolvedReason}::text, ${JSON.stringify(v.otherStock)}::jsonb, ${v.position}::integer
+	)`
+				]
+			: []
+	);
+	if (updates.length)
+		await tx.execute(sql`
+			update ${groceryLines} as line set
+				name = v.name, category = v.category, unit = v.unit,
+				demand_amount = v.demand, stock_considered = v.stock, target_amount = v.target,
+				unresolved_reason = v.reason, other_stock = v.other_stock, position = v.position,
+				updated_at = now(), revision = line.revision + 1
+			from (values ${sql.join(updates, sql`, `)})
+				as v(id, name, category, unit, demand, stock, target, reason, other_stock, position)
+			where line.id = v.id and line.list_id = ${listId}::uuid
+		`);
+
+	const sources = prepared.flatMap(({ line }) =>
+		line.sources.map((source) => ({
+			lineId: lineIds.get(line.key)!,
+			batchId: source.batchId,
+			amount: source.amount ? Dec.from(source.amount).toDb() : null,
+			unit: source.unit
+		}))
+	);
+	if (sources.length) await tx.insert(groceryLineSources).values(sources);
+
 	const stale = existing
 		.filter((l) => l.kind === 'recipe' && (!l.planKey || !keep.has(l.planKey)))
 		.map((l) => l.id);
 	if (stale.length) await tx.delete(groceryLines).where(inArray(groceryLines.id, stale));
-	for (const m of plan.manual) {
-		await tx
-			.update(groceryLines)
-			.set({
-				stockConsidered: m.stockConsidered ? m.stockConsidered.toDb() : null,
-				targetAmount: m.suggested ? m.suggested.toDb() : null,
-				otherStock: m.otherStock,
-				updatedAt: sql`now()`
-			})
-			.where(eq(groceryLines.id, m.lineId));
+	if (plan.manual.length) {
+		const manualUpdates = plan.manual.map(
+			(m) => sql`(
+			${m.lineId}::uuid, ${m.stockConsidered?.toDb() ?? null}::numeric,
+			${m.suggested?.toDb() ?? null}::numeric, ${JSON.stringify(m.otherStock)}::jsonb
+		)`
+		);
+		await tx.execute(sql`
+			update ${groceryLines} as line set
+				stock_considered = v.stock, target_amount = v.target,
+				other_stock = v.other_stock, updated_at = now()
+			from (values ${sql.join(manualUpdates, sql`, `)}) as v(id, stock, target, other_stock)
+			where line.id = v.id and line.list_id = ${listId}::uuid
+		`);
 	}
+
 	await tx
 		.update(groceryLists)
 		.set({ pantryRevisionAtPreview: pantryRevision, previewAt: sql`now()` })

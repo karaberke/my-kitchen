@@ -49,6 +49,15 @@ regardless of that setting, by opening a valid household invitation link
 (_Household → Invite_) and choosing _Create an account_. Better Auth's raw
 `/api/auth/sign-up` endpoint is disabled; the app's own `/register` action is the only path.
 
+## Social sign-in: Google, Microsoft, Apple
+
+Optional and off by default. Password sign-in always works regardless. Each provider
+appears on the sign-in page only once both of its `_CLIENT_ID` / `_CLIENT_SECRET` variables
+are set in `.env`, so leaving them blank keeps a password-only install unchanged.
+
+Setup steps, the redirect URI each provider needs, and Apple's six-month secret rotation
+are in [docs/social-sign-in.md](social-sign-in.md).
+
 ## ORIGIN and how the app knows its URL
 
 Form posts are protected by an origin check, so `ORIGIN` must be exactly what people type,

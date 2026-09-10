@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { db } from '$lib/server/db';
+import { client, db } from '$lib/server/db';
 import { catalogIngredientId, createUser, d, makeChickenRecipe, opId, resetDb } from './helpers';
 import {
 	addBatch,
@@ -11,6 +11,8 @@ import {
 	addManualLine,
 	refreshDraft
 } from '$lib/server/grocery';
+import { createRecipe } from '$lib/server/recipes';
+import { recipeInput } from './helpers';
 import { addStock, getPantryOverview } from '$lib/server/pantry';
 import { acceptInvite, createInvite } from '$lib/server/households';
 import { ReviewConflict } from '$lib/server/errors';
@@ -27,6 +29,90 @@ async function chickenStock(householdId: string) {
 
 describe('grocery planning, shopping and purchases', () => {
 	beforeEach(resetDb);
+
+	it('recalculates 40 lines with stable identities, order, revisions and sources', async () => {
+		const alice = await createUser('Alice');
+		const recipeId = await createRecipe(
+			alice.id,
+			recipeInput({
+				ingredients: Array.from({ length: 40 }, (_, position) => ({
+					position,
+					name: `Ingredient ${position}`,
+					ingredientId: null,
+					amount: d(position + 1),
+					unit: 'g',
+					preparation: '',
+					groupName: '',
+					optional: false,
+					createIdentity: false
+				}))
+			})
+		);
+		const listId = await createList(alice.ctx, 'Forty lines');
+		await addBatch(alice.ctx, {
+			listId,
+			recipeId,
+			servings: d(4),
+			clientKey: 'forty',
+			includeOptional: []
+		});
+		const before = await getListDetail(db, alice.householdId, listId);
+		expect(before.lines).toHaveLength(40);
+		const statements: string[] = [];
+		const previousDebug = client.options.debug;
+		client.options.debug = (_connection, query) => {
+			statements.push(query);
+		};
+		try {
+			await refreshDraft(alice.ctx, listId);
+		} finally {
+			client.options.debug = previousDebug;
+		}
+		const writes = statements.filter((q) =>
+			/^\s*(insert into|update|delete from)\s+"?grocery_line(?:"|\s|_source)/i.test(q)
+		);
+		console.info(
+			`40-line refresh: ${statements.length} statements, ${writes.length} line/source writes`
+		);
+		expect(writes).toHaveLength(3);
+		const after = await getListDetail(db, alice.householdId, listId);
+		expect(after.lines.map((l) => l.id)).toEqual(before.lines.map((l) => l.id));
+		for (let i = 0; i < 40; i++) {
+			expect(after.lines[i]).toMatchObject({
+				demandAmount: before.lines[i].demandAmount,
+				targetAmount: before.lines[i].targetAmount,
+				revision: before.lines[i].revision + 1,
+				sources: before.lines[i].sources
+			});
+		}
+	});
+
+	it('pantry search matches literal prefixes, ignoring case', async () => {
+		const alice = await createUser('Alice');
+		await addStock(alice.ctx, {
+			operationId: opId(),
+			ingredientId: await catalogIngredientId('chicken breast'),
+			newIngredientName: null,
+			quantity: d(1),
+			unit: 'g',
+			location: '',
+			expiresOn: null,
+			note: ''
+		});
+		for (const [q, count] of [
+			['CHICK', 1],
+			['breast', 0],
+			['chick%', 0],
+			['chick_', 0]
+		] as const) {
+			const result = await getPantryOverview(db, alice.householdId, {
+				q,
+				location: null,
+				filter: 'all'
+			});
+			expect(result.groups).toHaveLength(count);
+		}
+	});
 
 	it('aggregates demand, subtracts pantry once, guards against stale previews, and credits purchases exactly once', async () => {
 		const alice = await createUser('Alice');

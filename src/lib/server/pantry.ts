@@ -80,7 +80,7 @@ export async function getPantryOverview(
 	const conds = [eq(stockLots.householdId, householdId), gt(stockLots.quantity, '0')];
 	if (filters.q)
 		conds.push(
-			sql`${ingredients.nameNormalized} like ${'%' + filters.q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`) + '%'}`
+			sql`${ingredients.nameNormalized} like ${filters.q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`) + '%'}`
 		);
 	if (filters.location) conds.push(eq(stockLots.location, filters.location));
 	if (filters.filter === 'use_soon') conds.push(sql`${stockLots.expiresOn} <= ${soonCutoff}`);

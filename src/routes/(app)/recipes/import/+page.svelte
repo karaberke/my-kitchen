@@ -4,6 +4,7 @@
 	import Alert from '$lib/components/Alert.svelte';
 	import RecipeForm from '$lib/components/RecipeForm.svelte';
 	import type { RecipeFormInput } from '$lib/shared/recipe-input';
+	import { parseFileInBrowser, parseHtmlInBrowser } from '$lib/client/import-parse';
 
 	let { data, form } = $props();
 
@@ -110,8 +111,23 @@
 		action="?/parse"
 		enctype="multipart/form-data"
 		class="flex flex-col gap-4"
-		use:enhance={() => {
+		use:enhance={async ({ formData }) => {
 			busy = true;
+			// Read the file here so the server never has to load pdf.js. Any failure
+			// leaves clientParsed unset and the server parses it exactly as before.
+			try {
+				const picked = formData.get('file');
+				const pastedSource = String(formData.get('html') ?? '');
+				const parsedHere =
+					picked instanceof File && picked.size > 0
+						? await parseFileInBrowser(picked)
+						: pastedSource.trim()
+							? parseHtmlInBrowser(pastedSource)
+							: null;
+				if (parsedHere) formData.set('clientParsed', JSON.stringify(parsedHere));
+			} catch {
+				formData.delete('clientParsed');
+			}
 			return async ({ update }) => {
 				await update({ reset: false });
 				busy = false;

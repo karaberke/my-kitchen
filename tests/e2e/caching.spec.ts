@@ -15,19 +15,16 @@ test('cache headers: immutable assets, no-store pages/data, private media with a
 	expect(rev.headers()['cache-control']).toBe('private, no-store');
 	expect(Number(rev.headers()['content-length'] ?? (await rev.text()).length)).toBeLessThan(200);
 
-	// hashed asset from the page
-	const src = await page
-		.locator('link[rel=modulepreload], script[src]')
+	// SvelteKit can load JavaScript through inline imports, so use its stylesheet.
+	const assetUrl = await page
+		.locator('link[rel="stylesheet"][href*="/_app/immutable/"]')
 		.first()
-		.getAttribute('href')
-		.catch(() => null);
-	const assetUrl =
-		src ?? (await page.locator('script[src*="/_app/immutable/"]').first().getAttribute('src'));
-	if (assetUrl) {
-		const asset = await page.request.get(assetUrl);
-		expect(asset.status()).toBe(200);
-		expect(asset.headers()['cache-control']).toContain('immutable');
-	}
+		.getAttribute('href');
+	expect(assetUrl).toBeTruthy();
+	const asset = await page.request.get(assetUrl!);
+	expect(asset.status()).toBe(200);
+	expect(asset.headers()['cache-control']).toContain('immutable');
+
 	const missing = await page.request.get('/_app/immutable/does-not-exist.js');
 	expect(missing.status()).toBe(404);
 	expect(missing.headers()['cache-control'] ?? '').not.toContain('immutable');
@@ -43,9 +40,31 @@ test('cache headers: immutable assets, no-store pages/data, private media with a
 	await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
 	const img = page.locator('article img').first();
 	const mediaUrl = (await img.getAttribute('src'))!;
+	// Normal repeat navigation (a forced reload explicitly asks the browser to revalidate).
+	await page.goto('/recipes');
+	await page
+		.locator('main img')
+		.first()
+		.evaluate((el) => (el as HTMLImageElement).decode());
+	await page.goto('/plan');
+	await page.goto('/recipes');
+	await page
+		.locator('main img')
+		.first()
+		.evaluate((el) => (el as HTMLImageElement).decode());
+	const mediaTransfers = await page.evaluate(() =>
+		performance
+			.getEntriesByType('resource')
+			.filter((e) => new URL(e.name).pathname.startsWith('/media/'))
+			.map((e) => (e as PerformanceResourceTiming).transferSize)
+	);
+	console.info('Repeat recipes navigation media transfer sizes:', mediaTransfers);
+	expect(mediaTransfers).toEqual([0]);
 	const media = await page.request.get(mediaUrl);
 	expect(media.status()).toBe(200);
-	expect(media.headers()['cache-control']).toBe('private, no-cache');
+	// Content-addressed, so the browser may reuse it briefly without revalidating; the
+	// window bounds how long a revoked viewer keeps seeing their own cached copy.
+	expect(media.headers()['cache-control']).toBe('private, max-age=300');
 	const etag = media.headers()['etag'];
 	expect(etag).toBeTruthy();
 	const conditional = await page.request.get(mediaUrl, { headers: { 'if-none-match': etag } });
@@ -62,4 +81,26 @@ test('cache headers: immutable assets, no-store pages/data, private media with a
 	).request.get(mediaUrl, { headers: { 'if-none-match': etag } });
 	expect(anon.status()).toBe(401);
 	await other.close();
+});
+
+test('with no provider credentials configured, sign-in stays password-only', async ({ page }) => {
+	// The test environment sets no GOOGLE_/MICROSOFT_/APPLE_ variables, so the
+	// buttons must not appear and the social action must refuse.
+	await page.goto('/login');
+	await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+	await expect(page.getByText('or continue with')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: /Continue with/ })).toHaveCount(0);
+
+	const res = await page.request.post(new URL('/login?/social', page.url()).toString(), {
+		form: { provider: 'google', next: '/recipes' },
+		// Same-origin header, so this gets past CSRF and actually reaches the action.
+		headers: { origin: new URL(page.url()).origin, 'x-sveltekit-action': 'true' }
+	});
+	// SvelteKit reports an action failure as 200 with the status inside the body.
+	const body = JSON.parse(await res.text());
+	expect(body.type).toBe('failure');
+	expect(body.status).toBe(400);
+	expect(String(body.data)).toContain('not available');
+	// And crucially, no redirect off to a provider was ever issued.
+	expect(res.headers()['location']).toBeUndefined();
 });

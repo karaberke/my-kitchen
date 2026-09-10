@@ -157,6 +157,41 @@
 		{/if}
 	</section>
 
+	{#if data.providers.length}
+		<section class="card p-4 md:col-span-2">
+			<h2 class="text-[16px]">Sign-in methods</h2>
+			<p class="mt-1 text-[13px] text-sage">
+				Link an account to sign in with one tap. Linking is deliberate here rather than automatic,
+				so nobody who happens to know your email address can attach themselves to this account.
+			</p>
+			<ul class="mt-3 flex flex-col gap-2">
+				{#each data.providers as provider (provider)}
+					{@const account = data.linked.find((a) => a.providerId === provider)}
+					<li
+						class="flex flex-wrap items-center gap-3 rounded-[14px] border border-sand-dark bg-cream px-3.5 py-3"
+					>
+						<span class="flex-1 text-[13.5px] font-semibold capitalize">{provider}</span>
+						{#if account}
+							<span class="text-[11.5px] text-sage">Linked</span>
+							<form method="post" action="?/unlink" use:enhance>
+								<input type="hidden" name="accountId" value={account.id} />
+								<button class="btn-ghost btn-sm text-brick-dark">Remove</button>
+							</form>
+						{:else}
+							<form method="post" action="?/link">
+								<input type="hidden" name="provider" value={provider} />
+								<button class="btn-secondary btn-sm">Link {provider}</button>
+							</form>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+			<p class="mt-3 text-[11.5px] leading-relaxed text-sage">
+				Your password still works after linking. The last remaining way in cannot be removed.
+			</p>
+		</section>
+	{/if}
+
 	<section class="card p-4 md:col-span-2">
 		<h2 class="text-[16px]">This installation</h2>
 		<ul class="mt-2 text-[13px] text-ink-soft">

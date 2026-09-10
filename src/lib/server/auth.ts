@@ -1,4 +1,5 @@
 import { betterAuth } from 'better-auth/minimal';
+import { APIError } from 'better-auth/api';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
 import { getRequestEvent } from '$app/server';
@@ -6,6 +7,7 @@ import { dev } from '$app/environment';
 import { db } from '$lib/server/db';
 import { serverEnv } from '$lib/server/env';
 import { ensurePersonalHousehold } from '$lib/server/households';
+import { socialSignUpAllowed } from '$lib/server/registration';
 
 const env = serverEnv();
 const fixedOrigin = env.ORIGIN || null;
@@ -25,6 +27,38 @@ export function requestOrigin(request: Request): string | null {
 }
 
 /**
+ * Only providers whose credentials are configured are offered, so an install
+ * that sets none keeps exactly today's behaviour and the sign-in page shows
+ * only the buttons that can actually work.
+ */
+function socialProviders() {
+	const p: Record<string, unknown> = {};
+	if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET)
+		p.google = { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET };
+	if (env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET)
+		p.microsoft = {
+			clientId: env.MICROSOFT_CLIENT_ID,
+			clientSecret: env.MICROSOFT_CLIENT_SECRET,
+			tenantId: env.MICROSOFT_TENANT_ID || 'common'
+		};
+	if (env.APPLE_CLIENT_ID && env.APPLE_CLIENT_SECRET)
+		p.apple = {
+			clientId: env.APPLE_CLIENT_ID,
+			// A JWT signed with the .p8 key, which Apple rejects once older than six months.
+			clientSecret: env.APPLE_CLIENT_SECRET,
+			...(env.APPLE_APP_BUNDLE_IDENTIFIER
+				? { appBundleIdentifier: env.APPLE_APP_BUNDLE_IDENTIFIER }
+				: {})
+		};
+	return p;
+}
+
+/** Which providers the sign-in page should offer. */
+export function enabledSocialProviders(): string[] {
+	return Object.keys(socialProviders());
+}
+
+/**
  * Better Auth with database sessions. Cookie caching stays disabled so that a
  * revoked session is rejected on the very next request.
  */
@@ -40,6 +74,21 @@ export const auth = betterAuth({
 		return own ? [own] : [];
 	},
 	database: drizzleAdapter(db, { provider: 'pg' }),
+	socialProviders: socialProviders(),
+	account: {
+		accountLinking: {
+			enabled: true,
+			// Only ever link to a local account whose address is proven. Ours are all
+			// unverified (no mail transport), so this refuses implicit linking and
+			// existing users link deliberately from Settings instead — which closes
+			// the pre-hijack attack, where someone registers your address first and
+			// waits for your social sign-in to be merged into their account.
+			requireLocalEmailVerified: true,
+			// Never merge on a different address than the one already on file.
+			allowDifferentEmails: false,
+			trustedProviders: ['google', 'microsoft', 'apple']
+		}
+	},
 	emailAndPassword: {
 		enabled: true,
 		// Sign-up policy (REGISTRATION_OPEN, invitation links, the ADMIN_* bootstrap) is enforced
@@ -75,6 +124,21 @@ export const auth = betterAuth({
 	databaseHooks: {
 		user: {
 			create: {
+				/**
+				 * The sign-up policy lives in the app's own /register action, and Better
+				 * Auth's HTTP sign-up endpoint is blocked in hooks.server.ts — but a social
+				 * callback creates users through neither of those. Without this, enabling a
+				 * provider would quietly reopen sign-ups on a closed install.
+				 */
+				before: async (user, ctx) => {
+					const allowed = await socialSignUpAllowed(db, ctx?.request ?? null);
+					if (!allowed) {
+						throw new APIError('FORBIDDEN', {
+							message: 'This kitchen is invitation only. Ask a member for an invite link.'
+						});
+					}
+					return { data: user };
+				},
 				after: async (user) => {
 					await ensurePersonalHousehold(db, user.id, user.name);
 				}

@@ -43,7 +43,7 @@ To update later: `git pull && docker compose up -d --build`.
 - At home from other devices: set `APP_BIND=0.0.0.0` and `ORIGIN=http://<LAN IP>:<APP_PORT>` in `.env` (find the IP with `hostname -I` on Linux or `ipconfig getifaddr en0` on macOS), then `docker compose up -d`.
 - Away from home: use a Cloudflare Tunnel, see below.
 
-Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Under _Household_ create an invitation link for everyone who shares your pantry; members share the pantry and grocery lists while recipes stay personal unless shared. Anyone with a valid invitation link can create an account even when sign-ups are closed, so set `REGISTRATION_OPEN=false` for a private install. Each person can change their own name and password under _Settings_.
+Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Under _Household_ create an invitation link for everyone who shares your pantry; members share the pantry and grocery lists while recipes stay personal unless shared. Anyone with a valid invitation link can create an account even when sign-ups are closed, so set `REGISTRATION_OPEN=false` for a private install. Each person can change their own name and password under _Settings_. To let people sign in with Google, Microsoft or Apple instead of a password, see [docs/social-sign-in.md](docs/social-sign-in.md) — it is optional and off until you set the provider's `.env` variables.
 
 ### Reach it from anywhere with Cloudflare
 
@@ -110,5 +110,6 @@ Create the test database once: `docker compose -f compose.dev.yaml -p my-kitchen
 ## Documentation
 
 - [Deployment](docs/deployment.md) – all `deploy.sh` and `.env` options, Cloudflare setup and cache rules, updates, backup/restore, troubleshooting
+- [Social sign-in](docs/social-sign-in.md) – add Google, Microsoft or Apple sign-in alongside passwords
 - [Design decisions](docs/design-decisions.md) – ownership, grocery snapshots, transaction invariants, cache policy, deferred features
 - [Measurements](docs/measurements.md) – dataset, query counts, payload sizes, latencies, verification runs
