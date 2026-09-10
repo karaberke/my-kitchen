@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { guard, MEDIA_CACHE_CONTROL } from '$lib/server/http';
 import type { RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUserApi } from '$lib/server/access';
@@ -35,7 +35,7 @@ const GETImpl = async (event: RequestEvent) => {
 	const etag = `"${att.id}"`;
 	const isPdf = att.mime === 'application/pdf';
 	const headers = new Headers({
-		'cache-control': 'private, no-cache',
+		'cache-control': MEDIA_CACHE_CONTROL,
 		etag,
 		vary: 'Cookie',
 		'x-cache-policy': 'media',

@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
-import { auth } from '$lib/server/auth';
+import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { serverEnv } from '$lib/server/env';
@@ -20,9 +20,27 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		.where(eq(userPreferences.userId, user.id))
 		.limit(1);
 	const env = serverEnv();
+	const providers = enabledSocialProviders();
+	// Which of them this account is already signed in with. Password accounts here
+	// are unverified by design (no mail transport), so implicit linking refuses
+	// them — linking has to be a deliberate act, which is what this shows.
+	let linked: { id: string; providerId: string }[] = [];
+	if (providers.length) {
+		try {
+			const accounts = await auth.api.listUserAccounts({ headers: event.request.headers });
+			linked = (accounts ?? []).map((a: { id: string; providerId: string }) => ({
+				id: a.id,
+				providerId: a.providerId
+			}));
+		} catch {
+			linked = [];
+		}
+	}
 	return {
 		title: 'Settings',
 		convention: pref?.convention ?? 'metric',
+		providers,
+		linked,
 		registrationOpen: env.REGISTRATION_OPEN,
 		storageBackend: env.STORAGE_BACKEND,
 		pollMs: Number(process.env.PUBLIC_REVISION_POLL_MS ?? 20000)
@@ -30,6 +48,46 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 };
 
 export const actions: Actions = {
+	link: async (event) => {
+		requireUser(event);
+		const fd = await event.request.formData();
+		const provider = String(fd.get('provider') ?? '');
+		if (!enabledSocialProviders().includes(provider))
+			return fail(400, { message: 'That sign-in method is not available here.' });
+		let url: string | null | undefined;
+		try {
+			const res = await auth.api.linkSocialAccount({
+				body: { provider, callbackURL: '/settings' },
+				headers: event.request.headers
+			});
+			url = res?.url;
+		} catch (err) {
+			if (err instanceof APIError) return fail(400, { message: 'Could not start linking.' });
+			throw err;
+		}
+		if (!url) return fail(400, { message: 'Could not start linking.' });
+		throw redirect(303, url);
+	},
+	unlink: async (event) => {
+		requireUser(event);
+		const fd = await event.request.formData();
+		const accountId = String(fd.get('accountId') ?? '');
+		if (!accountId) return fail(400, { message: 'Nothing to remove.' });
+		try {
+			await auth.api.unlinkAccount({
+				body: { accountId },
+				headers: event.request.headers
+			});
+		} catch (err) {
+			// Better Auth refuses to remove the last way in, which is exactly right.
+			if (err instanceof APIError)
+				return fail(400, {
+					message: 'That is the only way you can sign in, so it cannot be removed.'
+				});
+			throw err;
+		}
+		return { ok: true, form: 'unlink' };
+	},
 	name: async (event) => {
 		requireUser(event);
 		const fd = await event.request.formData();

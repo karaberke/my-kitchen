@@ -158,6 +158,22 @@ export async function listRecipes(dbx: DbOrTx, userId: string, params: RecipeLis
 	};
 }
 
+/** The meal picker needs no images, favorites, owner join or pagination count. */
+export async function listRecipeOptions(dbx: DbOrTx, userId: string) {
+	return dbx
+		.select({
+			id: recipes.id,
+			title: recipes.title,
+			prepMinutes: recipes.prepMinutes,
+			cookMinutes: recipes.cookMinutes,
+			baseServings: recipes.baseServings
+		})
+		.from(recipes)
+		.where(and(recipeReadableBy(userId), inArray(recipes.status, ['active', 'draft'])))
+		.orderBy(desc(recipes.updatedAt), desc(recipes.id))
+		.limit(100);
+}
+
 export async function listUserTags(dbx: DbOrTx, userId: string, limit = 40): Promise<string[]> {
 	const rows = await dbx
 		.select({ tag: sql<string>`t.tag`, n: sql<number>`count(*)::int` })

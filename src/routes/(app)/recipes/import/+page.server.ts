@@ -13,6 +13,7 @@ import {
 	storeAttachment,
 	MAX_ATTACHMENT_BYTES
 } from '$lib/server/media/attachments';
+import { readImportedRecipe } from '$lib/server/import-payload';
 
 /** Generous for a saved page, small enough to keep parsing cheap. */
 const MAX_HTML_BYTES = 2_000_000;
@@ -40,8 +41,15 @@ async function parseImport(event: RequestEvent) {
 		const bytes = Buffer.from(await file.arrayBuffer());
 
 		if (looksLikePdf(bytes)) {
-			const { pages, pageCount } = await extractPdfText(bytes);
-			const parsed = parseRecipeText(pages);
+			// The browser parses this for us when it can, which keeps pdf.js out of the
+			// server process entirely. Absent or malformed, we do it here as before.
+			const fromClient = readImportedRecipe(fd.get('clientParsed'));
+			const { pages, pageCount } = fromClient
+				? { pages: [] as string[], pageCount: fromClient.pageCount ?? 0 }
+				: await extractPdfText(bytes);
+			const parsed = fromClient
+				? { input: fromClient.input, empty: fromClient.source === 'pdf-empty' }
+				: parseRecipeText(pages);
 			// Kept either way: a scan with no text is still worth having to hand.
 			const attachmentId = await storeAttachment(user.id, {
 				bytes,
@@ -62,7 +70,8 @@ async function parseImport(event: RequestEvent) {
 
 		if (bytes.byteLength > MAX_HTML_BYTES)
 			return fail(413, { message: 'That page is larger than 2 MB.' });
-		const { source, input } = importRecipeHtml(bytes.toString('utf8'));
+		const fromClient = readImportedRecipe(fd.get('clientParsed'));
+		const { source, input } = fromClient ?? importRecipeHtml(bytes.toString('utf8'));
 		const attachmentId = await storeAttachment(user.id, {
 			bytes,
 			filename: file.name,
@@ -76,7 +85,8 @@ async function parseImport(event: RequestEvent) {
 		return fail(413, { message: 'That page is larger than 2 MB.' });
 	if (!pasted.trim()) return fail(400, { message: 'Paste the page source, or choose a file.' });
 
-	const { source, input } = importRecipeHtml(pasted);
+	const fromClient = readImportedRecipe(fd.get('clientParsed'));
+	const { source, input } = fromClient ?? importRecipeHtml(pasted);
 	// Pasted source is kept too, so a recipe can always be traced back.
 	const attachmentId = await storeAttachment(user.id, {
 		bytes: Buffer.from(pasted, 'utf8'),

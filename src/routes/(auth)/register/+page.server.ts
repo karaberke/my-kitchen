@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
-import { auth } from '$lib/server/auth';
+import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { registrationAllowed } from '$lib/server/registration';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
@@ -14,12 +14,35 @@ const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 	return {
 		title: 'Create account',
 		registrationOpen: await registrationAllowed(db, next),
+		// Only offered when this visitor may create an account, so the buttons never
+		// promise something the sign-up gate will refuse.
+		providers: (await registrationAllowed(db, next)) ? enabledSocialProviders() : [],
 		next
 	};
 };
 
 export const actions: Actions = {
-	default: async (event) => {
+	social: async (event) => {
+		const fd = await event.request.formData();
+		const nextRaw = String(fd.get('next') ?? '');
+		const next = nextRaw.startsWith('/') && !nextRaw.startsWith('//') ? nextRaw : '/recipes';
+		const provider = String(fd.get('provider') ?? '');
+		if (!enabledSocialProviders().includes(provider) || !(await registrationAllowed(db, next)))
+			return fail(400, { message: 'That sign-in method is not available here.' });
+		let url: string | null | undefined;
+		try {
+			const res = await auth.api.signInSocial({
+				body: { provider, callbackURL: next },
+				headers: event.request.headers
+			});
+			url = res?.url;
+		} catch {
+			return fail(400, { message: 'Could not start that sign-in.' });
+		}
+		if (!url) return fail(400, { message: 'Could not start that sign-in.' });
+		throw redirect(303, url);
+	},
+	signup: async (event) => {
 		const fd = await event.request.formData();
 		const name = String(fd.get('name') ?? '')
 			.trim()

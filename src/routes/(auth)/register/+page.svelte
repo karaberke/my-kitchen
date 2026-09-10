@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import SocialSignIn from '$lib/components/SocialSignIn.svelte';
 	let { data, form } = $props();
 	let busy = $state(false);
 </script>
@@ -19,6 +20,7 @@
 	{:else}
 		<form
 			method="post"
+			action="?/signup"
 			class="mt-5 flex flex-col gap-4"
 			use:enhance={() => {
 				busy = true;
@@ -78,6 +80,7 @@
 				>{busy ? 'Creating…' : 'Create account'}</button
 			>
 		</form>
+		<SocialSignIn providers={data.providers} next={data.next} />
 	{/if}
 </div>
 <p class="text-center text-[13px] text-sage">

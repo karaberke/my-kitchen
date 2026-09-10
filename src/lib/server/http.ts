@@ -7,9 +7,23 @@ import { AppError } from '$lib/server/errors';
  * - Hashed immutable assets under /_app/immutable/ are emitted by SvelteKit with
  *   `public, max-age=31536000, immutable`; we leave them untouched.
  * - Everything dynamic (HTML, data, auth, API, exports) is `private, no-store`.
- * - The private media endpoint sets its own `private, no-cache` + ETag policy.
+ * - The private media endpoint sets its own `private, max-age=300` + ETag policy.
  * - Unversioned public static files get a short revalidating policy.
  */
+/**
+ * How long a viewer's own browser may reuse media it already fetched.
+ *
+ * Media URLs are content-addressed — images carry `?v={image.version}` and attachments are
+ * write-once — so the bytes behind a given URL never change. This window is therefore not
+ * about freshness but about authorisation: it bounds how long someone who has lost access
+ * keeps seeing a file already in their cache. Short on purpose, for the same reason the
+ * session cookie cache is disabled in auth.ts.
+ *
+ * Previously `no-cache`, which forced a revalidation — and a full auth preamble plus a
+ * correlated EXISTS — for every image on every page view.
+ */
+export const MEDIA_CACHE_CONTROL = 'private, max-age=300';
+
 export function applyResponsePolicy(event: RequestEvent, response: Response): Response {
 	const headers = response.headers;
 	const path = event.url.pathname;

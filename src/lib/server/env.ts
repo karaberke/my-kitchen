@@ -24,6 +24,27 @@ const schema = z.object({
 		.optional()
 		.default('true')
 		.transform((v) => !['false', '0', 'no', 'off'].includes(v.trim().toLowerCase())),
+	/**
+	 * Social sign-in. Each provider turns itself on only when its credentials are
+	 * present, so an install that sets none behaves exactly as before, and one that
+	 * sets only some offers only those buttons.
+	 */
+	GOOGLE_CLIENT_ID: z.string().optional().default(''),
+	GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
+	MICROSOFT_CLIENT_ID: z.string().optional().default(''),
+	MICROSOFT_CLIENT_SECRET: z.string().optional().default(''),
+	/** "common" accepts personal and work accounts; a directory id restricts to one tenant. */
+	MICROSOFT_TENANT_ID: z.string().optional().default('common'),
+	/** Apple Services ID, not the app bundle id. */
+	APPLE_CLIENT_ID: z.string().optional().default(''),
+	/**
+	 * Apple has no static secret: it is a JWT signed with the .p8 key, and Apple
+	 * refuses one older than six months. Supply it pre-generated and rotate it.
+	 */
+	APPLE_CLIENT_SECRET: z.string().optional().default(''),
+	/** Bundle id of the native app, when one shares these accounts. */
+	APPLE_APP_BUNDLE_IDENTIFIER: z.string().optional().default(''),
+
 	/** First account, created at start-up when it does not exist yet (see bootstrap.ts). */
 	ADMIN_EMAIL: z
 		.string()

@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
-import { auth } from '$lib/server/auth';
+import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { serverEnv } from '$lib/server/env';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 
@@ -15,12 +15,32 @@ const loadImpl = ({ locals, url }: PageServerLoadEvent) => {
 	return {
 		title: 'Sign in',
 		registrationOpen: serverEnv().REGISTRATION_OPEN,
+		providers: enabledSocialProviders(),
 		next: safeNext(url.searchParams.get('next'))
 	};
 };
 
 export const actions: Actions = {
-	default: async (event) => {
+	social: async (event) => {
+		const fd = await event.request.formData();
+		const provider = String(fd.get('provider') ?? '');
+		if (!enabledSocialProviders().includes(provider))
+			return fail(400, { message: 'That sign-in method is not available here.' });
+		let url: string | null | undefined;
+		try {
+			const res = await auth.api.signInSocial({
+				body: { provider, callbackURL: safeNext(String(fd.get('next') ?? '')) },
+				headers: event.request.headers
+			});
+			url = res?.url;
+		} catch (err) {
+			if (err instanceof APIError) return fail(400, { message: 'Could not start that sign-in.' });
+			throw err;
+		}
+		if (!url) return fail(400, { message: 'Could not start that sign-in.' });
+		throw redirect(303, url);
+	},
+	signin: async (event) => {
 		const fd = await event.request.formData();
 		const email = String(fd.get('email') ?? '')
 			.trim()
