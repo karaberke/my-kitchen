@@ -72,6 +72,7 @@ set_env() { # set_env KEY VALUE  (replace or append, keeps other lines untouched
 		cat .env > "$tmp"; printf '%s=%s\n' "$key" "$val" >> "$tmp"
 	fi
 	mv "$tmp" .env
+	chmod 600 .env 2>/dev/null || true
 }
 get_env() { grep -E "^$1=" .env | head -1 | cut -d= -f2- ; }
 ask() { # ask VAR "prompt" [silent]  -> reads from the terminal even when piped through curl | bash
@@ -85,10 +86,13 @@ FIRST_RUN=0
 if [ ! -f .env ]; then
 	say "Creating .env with generated secrets"
 	cp .env.example .env
+	chmod 600 .env
 	set_env BETTER_AUTH_SECRET "$(rand)"
 	set_env POSTGRES_PASSWORD "$(rand)"
 	FIRST_RUN=1
 fi
+# Secrets, the database password and (until the first start) a plaintext admin password.
+chmod 600 .env 2>/dev/null || true
 [ -n "$(get_env BETTER_AUTH_SECRET)" ] || set_env BETTER_AUTH_SECRET "$(rand)"
 [ -n "$(get_env POSTGRES_PASSWORD)" ] && [ "$(get_env POSTGRES_PASSWORD)" != "change-me-to-a-long-random-password" ] || set_env POSTGRES_PASSWORD "$(rand)"
 
@@ -137,6 +141,15 @@ elif [ $NO_TUNNEL = 1 ]; then
 fi
 PROFILE="$(get_env COMPOSE_PROFILES)"
 [ "$PROFILE" = tunnel ] && [ -z "$(get_env CLOUDFLARE_TUNNEL_TOKEN)" ] && die "COMPOSE_PROFILES=tunnel needs CLOUDFLARE_TUNNEL_TOKEN (pass --tunnel-token)"
+
+# Auth rate limits need the real client IP. Behind a tunnel every request comes from the
+# cloudflared container, so without this one attacker can lock any account out of sign-in.
+# Only safe while the tunnel is the sole way in, hence cleared when there is no tunnel.
+if [ "$PROFILE" = tunnel ] || [ "$PROFILE" = quicktunnel ]; then
+	set_env ADDRESS_HEADER cf-connecting-ip
+else
+	set_env ADDRESS_HEADER ""
+fi
 
 # Origin: the URL users will type
 if [ -n "$ORIGIN_ARG" ]; then

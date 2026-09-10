@@ -29,7 +29,12 @@ This note explains the choices that are not obvious from the code.
   use a small in-process sliding-window limiter keyed by client address (and
   email for sign-in), because Better Auth's own limiter only guards its HTTP
   handler and the app calls `auth.api.*` server-side. Single instance only;
-  a restart resets it.
+  a restart resets it. Behind a tunnel or proxy every request otherwise carries
+  the proxy's address, which collapses the buckets into one and lets a stranger
+  spend a chosen account's sign-in allowance — so `ADDRESS_HEADER` names the
+  header holding the real client IP (`deploy.sh` sets `cf-connecting-ip` for the
+  tunnel profiles). It must stay unset when the app is reachable directly, since
+  a request without that header then has no address at all.
 - **Sessions** are Better Auth database sessions with cookie caching disabled,
   so revoking a session or changing a password (which revokes other sessions)
   takes effect immediately.
@@ -108,22 +113,46 @@ page has unsaved input, a notice is shown instead of replacing the form.
 
 ## Caching rules
 
-| Response                                | Origin header                                           | Cloudflare |
-| --------------------------------------- | ------------------------------------------------------- | ---------- |
-| `/_app/immutable/*`                     | `public, max-age=31536000, immutable` (SvelteKit)       | cache      |
-| HTML, `__data.json`, auth, API, exports | `private, no-store`                                     | bypass     |
-| `/media/{id}/{variant}`                 | `private, no-cache` + `ETag`; auth happens before a 304 | bypass     |
-| Errors, redirects, missing assets       | `private, no-store` (hook default)                      | not cached |
-| `robots.txt`, favicon                   | `public, max-age=600, must-revalidate`                  | short TTL  |
+| Response                                | Origin header                                              | Cloudflare |
+| --------------------------------------- | ---------------------------------------------------------- | ---------- |
+| `/_app/immutable/*`                     | `public, max-age=31536000, immutable` (SvelteKit)          | cache      |
+| HTML, `__data.json`, auth, API, exports | `private, no-store`                                        | bypass     |
+| `/media/{id}/{variant}`                 | `private, max-age=300` + `ETag`; auth happens before a 304 | bypass     |
+| Errors, redirects, missing assets       | `private, no-store` (hook default)                         | not cached |
+| `robots.txt`, favicon                   | `public, max-age=600, must-revalidate`                     | short TTL  |
 
 The hook applies the default to every response that does not opt out, so a
 long TTL cannot leak onto a dynamic route. Media keys are opaque and include
-the image version, so a replaced photo gets a new URL.
+the image version, so a replaced photo gets a new URL. The five-minute media
+window is an authorisation bound, not a freshness one: the bytes behind a URL
+never change, but someone who has just lost access keeps what their browser
+already cached for that long.
+
+Every response also carries `X-Content-Type-Options`, `Referrer-Policy`,
+`X-Frame-Options` and `Permissions-Policy`, plus `Strict-Transport-Security`
+when the request arrived over https. The Content-Security-Policy comes from
+`kit.csp`: SvelteKit nonces its own hydration script and everything else is
+same-origin, apart from the Google Fonts stylesheet linked in `app.html`.
+
+## Retention
+
+Three things accumulate with no user-facing delete, so `hooks.server.ts` sweeps
+them hourly (and once at start-up):
+
+- **Images** no recipe references, older than an hour. An edit that replaces a
+  photo leaves the old one behind, and a failed save leaves the new one.
+- **Attachments** no recipe references, older than an hour. An import stores its
+  source file during the _parse_ step, before the user decides to keep anything,
+  so every abandoned import leaks one.
+- **Operations** older than 30 days — idempotency records, one per pantry,
+  grocery or cooking mutation, long past any window in which a client retries.
+
+The grace period matters: a sweep that ran immediately would race a review form
+the user still has open. Nothing referenced is ever a candidate.
 
 ## Deferred on purpose
 
 Meal calendars, nutrition, barcode scanning, recommendations, public
 publishing, cross-list stock reservations, offline mutation queues,
-ingredient-to-step linking, recipe import (HTML/JSON/text/AI), email-based
-password reset, alias management UI for custom ingredients, and signed direct
-S3 downloads.
+ingredient-to-step linking, email-based password reset, alias management UI for
+custom ingredients, and signed direct S3 downloads.

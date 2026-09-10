@@ -4,7 +4,7 @@ import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { serverEnv } from '$lib/server/env';
-import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
+import { AUTH_LIMITS, clientKey, consume } from '$lib/server/ratelimit';
 
 function safeNext(raw: string | null): string {
 	return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/recipes';
@@ -48,10 +48,7 @@ export const actions: Actions = {
 		const password = String(fd.get('password') ?? '').slice(0, 200);
 		const next = safeNext(String(fd.get('next') ?? ''));
 		if (!email || !password) return fail(400, { message: 'Enter your email and password', email });
-		const limit = consume(
-			`signin:${event.getClientAddress()}:${email.toLowerCase()}`,
-			AUTH_LIMITS.signIn
-		);
+		const limit = consume(`signin:${clientKey(event)}:${email.toLowerCase()}`, AUTH_LIMITS.signIn);
 		if (!limit.allowed)
 			return fail(429, {
 				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,

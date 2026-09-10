@@ -1,5 +1,5 @@
 import { error, type RequestEvent } from '@sveltejs/kit';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 
 /**
  * Explicit caching policy per response type.
@@ -49,6 +49,10 @@ export function applyResponsePolicy(event: RequestEvent, response: Response): Re
 	headers.set('referrer-policy', 'strict-origin-when-cross-origin');
 	headers.set('x-frame-options', 'DENY');
 	headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+	// Only over https: a plain-http LAN install would lock itself out of its own
+	// hostname for a year. The Content-Security-Policy comes from kit.csp.
+	if (event.url.protocol === 'https:')
+		headers.set('strict-transport-security', 'max-age=31536000; includeSubDomains');
 	return response;
 }
 
@@ -75,10 +79,11 @@ export function guard<F extends (event: any) => any>(fn: F): F {
 		try {
 			return await fn(event);
 		} catch (err) {
-			if (err instanceof AppError)
-				error(err.status, {
-					message: err.message,
-					code: err.status === 401 ? 'unauthorized' : err.status === 403 ? 'forbidden' : undefined
+			const app = asAppError(err);
+			if (app)
+				error(app.status, {
+					message: app.message,
+					code: app.status === 401 ? 'unauthorized' : app.status === 403 ? 'forbidden' : undefined
 				});
 			throw err;
 		}

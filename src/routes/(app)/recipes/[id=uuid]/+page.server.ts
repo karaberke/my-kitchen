@@ -12,7 +12,7 @@ import {
 	setRecipeShare
 } from '$lib/server/recipes';
 import { addBatch, createList, getCurrentListId, getListDetail } from '$lib/server/grocery';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { randomUUID } from 'node:crypto';
@@ -35,7 +35,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 };
 
 function handle(err: unknown) {
-	if (err instanceof AppError) return fail(err.status, { message: err.message });
+	const app = asAppError(err);
+	if (app) return fail(app.status, { message: app.message });
 	throw err;
 }
 

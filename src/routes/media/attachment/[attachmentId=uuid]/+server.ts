@@ -26,6 +26,20 @@ const SANDBOX_CSP = [
 	"form-action 'none'",
 	"base-uri 'none'"
 ].join('; ');
+/**
+ * `Content-Disposition` for a user-supplied filename.
+ *
+ * Header values are ByteStrings, so any code point above 255 makes `new
+ * Headers()` throw — and browsers name a saved page after its <title>, which
+ * routinely carries an emoji, a curly quote or a non-Latin script. RFC 6266
+ * gives the plain `filename` an ASCII fallback and puts the real name in
+ * `filename*`, which every current browser prefers.
+ */
+function contentDisposition(filename: string): string {
+	const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '') || 'source';
+	return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 const GETImpl = async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	if (!/^[0-9a-f-]{36}$/i.test(event.params.attachmentId)) throw error(404, 'Not found');
@@ -40,7 +54,7 @@ const GETImpl = async (event: RequestEvent) => {
 		vary: 'Cookie',
 		'x-cache-policy': 'media',
 		'content-type': isPdf ? 'application/pdf' : 'text/html; charset=utf-8',
-		'content-disposition': `inline; filename="${att.filename.replace(/"/g, '')}"`,
+		'content-disposition': contentDisposition(att.filename),
 		'content-security-policy': SANDBOX_CSP,
 		'x-content-type-options': 'nosniff',
 		'referrer-policy': 'no-referrer'

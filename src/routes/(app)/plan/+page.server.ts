@@ -12,7 +12,7 @@ import {
 } from '$lib/server/plan';
 import { listRecipeOptions } from '$lib/server/recipes';
 import { todayIso } from '$lib/server/pantry';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -37,7 +37,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 };
 
 function handle(err: unknown) {
-	if (err instanceof AppError) return fail(err.status, { message: err.message });
+	const app = asAppError(err);
+	if (app) return fail(app.status, { message: app.message });
 	throw err;
 }
 

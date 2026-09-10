@@ -8,10 +8,44 @@ import { listMemberships } from '$lib/server/households';
 import { resolveActiveHousehold } from '$lib/server/access';
 import { applyResponsePolicy } from '$lib/server/http';
 import { ensureAdminAccount } from '$lib/server/bootstrap';
+import { cleanupUnreferencedImages } from '$lib/server/media/images';
+import { cleanupUnreferencedAttachments } from '$lib/server/media/attachments';
+import { cleanupOperations } from '$lib/server/operations';
+
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Housekeeping the app has no other trigger for.
+ *
+ * An import stores its source file during the *parse* step, before the user has
+ * decided to keep anything, and a replaced photo outlives the recipe that
+ * referenced it — so both leak on every abandoned edit. Idempotency records
+ * accumulate the same way. All three sweeps only ever touch rows nothing
+ * references; a referenced image or attachment is never a candidate.
+ */
+async function sweep(): Promise<void> {
+	for (const [what, run] of [
+		['images', cleanupUnreferencedImages],
+		['attachments', cleanupUnreferencedAttachments],
+		['operations', cleanupOperations]
+	] as const) {
+		try {
+			const n = await run();
+			if (n > 0) console.log(`sweep: removed ${n} unreferenced ${what}`);
+		} catch (err) {
+			console.error(`sweep: ${what} failed`, err);
+		}
+	}
+}
 
 /** Runs once when the server starts: creates the ADMIN_* account if it does not exist yet. */
 export const init: ServerInit = async () => {
-	if (!building) await ensureAdminAccount();
+	if (building) return;
+	await ensureAdminAccount();
+	// Not awaited: start-up must not wait on housekeeping. unref() keeps the
+	// timer from holding the process open during a shutdown.
+	void sweep();
+	setInterval(() => void sweep(), SWEEP_INTERVAL_MS).unref();
 };
 
 /**

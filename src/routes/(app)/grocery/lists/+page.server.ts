@@ -4,7 +4,7 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, requireHousehold } from '$lib/server/access';
 import { createList, listGroceryLists } from '$lib/server/grocery';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -23,7 +23,8 @@ export const actions: Actions = {
 			);
 			throw redirect(303, `/grocery/${id}`);
 		} catch (err) {
-			if (err instanceof AppError) return fail(err.status, { message: err.message });
+			const app = asAppError(err);
+			if (app) return fail(app.status, { message: app.message });
 			throw err;
 		}
 	}

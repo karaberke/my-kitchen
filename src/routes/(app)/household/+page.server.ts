@@ -4,7 +4,7 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { createHousehold, setActiveHousehold } from '$lib/server/households';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 
 /** The list of households. Managing one happens on /household/[id]. */
 const loadImpl = async (event: PageServerLoadEvent) => {
@@ -14,7 +14,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 };
 
 function handle(err: unknown) {
-	if (err instanceof AppError) return fail(err.status, { message: err.message });
+	const app = asAppError(err);
+	if (app) return fail(app.status, { message: app.message });
 	throw err;
 }
 
