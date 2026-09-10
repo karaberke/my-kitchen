@@ -16,8 +16,9 @@ import {
 	revokeInvite,
 	setMemberRole
 } from '$lib/server/households';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 import { serverEnv } from '$lib/server/env';
+import { requestOrigin } from '$lib/server/auth';
 
 /**
  * Manage one household — not necessarily the active one. The id comes from the URL,
@@ -42,12 +43,23 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		invites,
 		isOwner,
 		canLeave: role === 'member' || others,
-		origin: serverEnv().ORIGIN
+		origin: inviteBase(event)
 	};
 };
 
+/**
+ * Absolute base for an invitation link. ORIGIN is empty in auto-origin mode (the
+ * Cloudflare quick tunnel, whose hostname is not known in advance), which used
+ * to yield a bare "/invite/<token>" — a link nobody could follow once pasted
+ * into a message. Fall back to the origin the request actually arrived on.
+ */
+function inviteBase(event: RequestEvent): string {
+	return serverEnv().ORIGIN || requestOrigin(event.request) || event.url.origin;
+}
+
 function handle(err: unknown) {
-	if (err instanceof AppError) return fail(err.status, { message: err.message });
+	const app = asAppError(err);
+	if (app) return fail(app.status, { message: app.message });
 	throw err;
 }
 
@@ -74,7 +86,7 @@ export const actions: Actions = {
 			return {
 				ok: true,
 				action: 'invite',
-				inviteUrl: `${serverEnv().ORIGIN}/invite/${inv.token}`,
+				inviteUrl: `${inviteBase(event)}/invite/${inv.token}`,
 				expiresAt: inv.expiresAt
 			};
 		} catch (err) {

@@ -41,10 +41,19 @@ const ENTITIES: Record<string, string> = {
 	deg: '°'
 };
 
+/** A numeric character reference, or the literal text when it names no character. */
+function codePoint(whole: string, value: number): string {
+	// String.fromCodePoint throws RangeError outside 0..0x10FFFF and on surrogates,
+	// which turned a malformed source page into a 500 during import.
+	if (!Number.isInteger(value) || value <= 0 || value > 0x10ffff) return whole;
+	if (value >= 0xd800 && value <= 0xdfff) return whole;
+	return String.fromCodePoint(value);
+}
+
 function decodeEntities(s: string): string {
 	return s
-		.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-		.replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+		.replace(/&#(\d+);/g, (whole, n) => codePoint(whole, Number(n)))
+		.replace(/&#x([0-9a-f]+);/gi, (whole, n) => codePoint(whole, parseInt(n, 16)))
 		.replace(/&([a-z][a-z0-9]*);/gi, (whole, name) => ENTITIES[name.toLowerCase()] ?? whole);
 }
 

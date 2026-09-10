@@ -19,6 +19,10 @@ x-app-env: &app-env
   ORIGIN: ${ORIGIN:-}
   PROTOCOL_HEADER: x-forwarded-proto
   HOST_HEADER: x-forwarded-host
+  # Real client IP for auth rate limits. Set ONLY when every request arrives through the
+  # tunnel/proxy (deploy.sh sets it for the tunnel profiles); a request without the header
+  # would otherwise have no address. Empty = use the socket peer.
+  ADDRESS_HEADER: ${ADDRESS_HEADER:-}
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
   REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
   # Social sign-in; each provider is offered only when its credentials are set.

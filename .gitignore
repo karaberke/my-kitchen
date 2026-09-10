@@ -50,6 +50,9 @@ pnpm-debug.log*
 /data/uploads
 /data/test-uploads
 
+# Tooling worktrees (agent scratch checkouts), not project config
+/.claude/worktrees/
+
 # Local Docker Compose overrides
 compose.override.yaml
 compose.override.yml
