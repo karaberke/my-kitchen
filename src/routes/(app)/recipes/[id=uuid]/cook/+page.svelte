@@ -9,7 +9,9 @@
 	import { fmtNum, fmtQty } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
 	import { scaleAmount } from '$lib/shared/scaling';
-	import { formatQuantity } from '$lib/shared/units';
+	import { displayQuantity } from '$lib/shared/display-units';
+	import { unitSystem } from '$lib/client/unit-system.svelte';
+	import UnitToggle from '$lib/components/UnitToggle.svelte';
 
 	let { data, form } = $props();
 	type LooseForm =
@@ -135,7 +137,8 @@
 	const lines = $derived(
 		r.ingredients.map((ing) => {
 			const amt = ing.amount ? scaleAmount(Dec.from(ing.amount), base, Dec.from(servings)) : null;
-			return `${amt ? formatQuantity(amt, ing.unit) + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}${ing.optional ? ' (optional)' : ''}`;
+			const qty = amt ? displayQuantity(amt, ing.unit, unitSystem.value, r.convention).text : null;
+			return `${qty ? qty + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}${ing.optional ? ' (optional)' : ''}`;
 		})
 	);
 </script>
@@ -220,7 +223,10 @@
 
 	<div class="grid gap-5 lg:grid-cols-[1fr_1.3fr]">
 		<section class="card p-3.5" aria-labelledby="cook-ing">
-			<h2 id="cook-ing" class="eyebrow mb-2 font-sans">Ingredients · tap to check off</h2>
+			<div class="mb-2 flex items-center justify-between gap-2">
+				<h2 id="cook-ing" class="eyebrow font-sans">Ingredients · tap to check off</h2>
+				<UnitToggle />
+			</div>
 			<ul>
 				{#each r.ingredients as ing, i (ing.id)}
 					<li class="divider-row">
