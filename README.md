@@ -111,5 +111,6 @@ Create the test database once: `docker compose -f compose.dev.yaml -p my-kitchen
 
 - [Deployment](docs/deployment.md) – all `deploy.sh` and `.env` options, Cloudflare setup and cache rules, updates, backup/restore, troubleshooting
 - [Social sign-in](docs/social-sign-in.md) – add Google, Microsoft or Apple sign-in alongside passwords
+- Deleting a person and their data: `pnpm delete-user <email> --dry-run`, see [Deployment](docs/deployment.md#deleting-a-person-and-their-data)
 - [Design decisions](docs/design-decisions.md) – ownership, grocery snapshots, transaction invariants, cache policy, deferred features
 - [Measurements](docs/measurements.md) – dataset, query counts, payload sizes, latencies, verification runs
