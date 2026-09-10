@@ -20,6 +20,14 @@ export const AUTH_LIMITS = {
 	password: { windowMs: 60_000, max: 5 * factor }
 } as const;
 
+/**
+ * URL import. The fetch reaches any address the host can route to, so this
+ * bucket is what stops one cook from using the box as a scanner. Keyed by user.
+ */
+export const IMPORT_LIMITS = {
+	fetch: { windowMs: 60_000, max: 10 }
+} as const;
+
 function sweep(now: number) {
 	if (now - lastSweep < 60_000) return;
 	lastSweep = now;
