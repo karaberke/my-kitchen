@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema';
 import { serverEnv } from '$lib/server/env';
+import { sslOptions } from './ssl';
 
 /**
  * One bounded Postgres.js pool per server process. Never create a client per
@@ -13,11 +14,7 @@ function createClient() {
 		max: env.DATABASE_POOL_MAX,
 		connect_timeout: env.DATABASE_CONNECT_TIMEOUT_SECONDS,
 		idle_timeout: env.DATABASE_IDLE_TIMEOUT_SECONDS,
-		ssl: env.DATABASE_SSL
-			? env.DATABASE_SSL === 'require'
-				? 'require'
-				: { rejectUnauthorized: false }
-			: undefined,
+		ssl: sslOptions(env.DATABASE_SSL),
 		prepare: true,
 		onnotice: () => {}
 	});

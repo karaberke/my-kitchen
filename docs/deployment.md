@@ -199,8 +199,33 @@ curl -sI https://kitchen.example.com/_app/immutable/<hashed file> | grep -i -E '
 ## DATABASE_SSL
 
 `compose.cloud-db.yaml` defaults `DATABASE_SSL` to `require` when the variable is **unset**.
-Set `DATABASE_SSL=` (empty) explicitly to connect without TLS (LAN database), or
-`DATABASE_SSL=no-verify` to accept a self-signed certificate.
+
+| Value       | Connection                                                                                                                             |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `require`   | TLS, certificate and hostname fully verified. Use this over any network you do not control.                                            |
+| `no-verify` | TLS, certificate **not** checked. Self-signed or private-CA servers only — it stops passive sniffing, not an active man-in-the-middle. |
+| (empty)     | No TLS. Only for a database on a trusted local network, e.g. the bundled `db` container.                                               |
+
+Note that `postgres.js` reads the bare string `require` as "encrypt but do not
+check the certificate", so the app converts these values into explicit TLS
+options (`src/lib/server/db/ssl.ts`, mirrored for the maintenance scripts in
+`scripts/db-ssl.mjs`). Both must agree; there is a unit test for the mapping.
+
+## ADDRESS_HEADER
+
+Sign-in and sign-up are rate limited per client address. Behind a Cloudflare
+Tunnel or a reverse proxy every request arrives from the proxy, so without this
+the whole installation shares one bucket — and a stranger can spend a chosen
+account's sign-in allowance and keep its owner locked out.
+
+`./deploy.sh` sets `ADDRESS_HEADER=cf-connecting-ip` whenever a tunnel profile is
+active and clears it otherwise. Setting it by hand: use `cf-connecting-ip` for a
+Cloudflare Tunnel, or `x-forwarded-for` together with `XFF_DEPTH=1` for another
+reverse proxy.
+
+**Leave it empty when the app is reachable directly** (`APP_BIND=0.0.0.0` with no
+proxy). The header would be absent — and, worse, anything a client sent under
+that name would be believed.
 
 ## Optional S3 images
 

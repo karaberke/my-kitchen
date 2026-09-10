@@ -11,6 +11,30 @@ const config = {
 	kit: {
 		adapter: adapter({ precompress: true }),
 		csrf: { trustedOrigins: [] },
+		/**
+		 * Containment layer, not the primary defence — the app renders no
+		 * user HTML (no {@html}, no innerHTML anywhere in src/). SvelteKit adds a
+		 * nonce to its own hydration script; everything else is same-origin.
+		 *   style-src      Google Fonts serves the stylesheet linked in app.html
+		 *   style-src-attr the two static `style=` attributes (app.html, recipe page)
+		 *   font-src       where that stylesheet fetches the font files from
+		 *   connect-src    the /api/revisions poll
+		 */
+		csp: {
+			directives: {
+				'default-src': ['self'],
+				'script-src': ['self'],
+				'style-src': ['self', 'https://fonts.googleapis.com'],
+				'style-src-attr': ['unsafe-inline'],
+				'font-src': ['self', 'https://fonts.gstatic.com'],
+				'img-src': ['self', 'data:'],
+				'connect-src': ['self'],
+				'object-src': ['none'],
+				'base-uri': ['self'],
+				'form-action': ['self'],
+				'frame-ancestors': ['none']
+			}
+		},
 		typescript: {
 			config: (config) => {
 				config.include.push(

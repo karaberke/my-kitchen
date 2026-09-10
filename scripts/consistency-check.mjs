@@ -5,17 +5,14 @@
  * Usage: node scripts/consistency-check.mjs   (reads DATABASE_URL)
  */
 import postgres from 'postgres';
+import { sslOptions } from './db-ssl.mjs';
 
 const url = process.env.DATABASE_URL;
 if (!url) {
 	console.error('DATABASE_URL is not set');
 	process.exit(2);
 }
-const ssl = process.env.DATABASE_SSL
-	? process.env.DATABASE_SSL === 'require'
-		? 'require'
-		: { rejectUnauthorized: false }
-	: undefined;
+const ssl = sslOptions(process.env.DATABASE_SSL);
 const sql = postgres(url, { max: 1, ssl, onnotice: () => {} });
 try {
 	const lots = await sql`

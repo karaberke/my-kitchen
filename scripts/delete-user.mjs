@@ -17,6 +17,7 @@ import postgres from 'postgres';
 import { createInterface } from 'node:readline/promises';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
+import { sslOptions } from './db-ssl.mjs';
 
 const args = process.argv.slice(2);
 const email = args
@@ -35,11 +36,7 @@ if (!url) {
 	console.error('DATABASE_URL is not set');
 	process.exit(2);
 }
-const ssl = process.env.DATABASE_SSL
-	? process.env.DATABASE_SSL === 'require'
-		? 'require'
-		: { rejectUnauthorized: false }
-	: undefined;
+const ssl = sslOptions(process.env.DATABASE_SSL);
 
 const sql = postgres(url, { max: 1, ssl, onnotice: () => {} });
 let exitCode = 0;

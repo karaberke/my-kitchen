@@ -4,7 +4,14 @@
  * adapter-node treats an empty ORIGIN as invalid rather than unset. Drop empty
  * optional variables, then start the SvelteKit server.
  */
-for (const key of ['ORIGIN', 'PROTOCOL_HEADER', 'HOST_HEADER', 'PORT_HEADER', 'DATABASE_SSL']) {
+for (const key of [
+	'ORIGIN',
+	'PROTOCOL_HEADER',
+	'HOST_HEADER',
+	'PORT_HEADER',
+	'ADDRESS_HEADER',
+	'DATABASE_SSL'
+]) {
 	if (process.env[key] !== undefined && process.env[key].trim() === '') delete process.env[key];
 }
 if (!process.env.ORIGIN) {

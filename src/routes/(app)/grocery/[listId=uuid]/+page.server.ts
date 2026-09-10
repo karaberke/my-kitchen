@@ -19,7 +19,7 @@ import {
 	updateLine
 } from '$lib/server/grocery';
 import { undoEvent } from '$lib/server/undo';
-import { AppError, ReviewConflict } from '$lib/server/errors';
+import { ReviewConflict, asAppError } from '$lib/server/errors';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { isOperationId } from '$lib/server/operations';
 import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
@@ -48,7 +48,8 @@ function ctxOf(event: RequestEvent) {
 }
 function handle(err: unknown) {
 	if (err instanceof ReviewConflict) return fail(409, { message: err.message, review: err.review });
-	if (err instanceof AppError) return fail(err.status, { message: err.message });
+	const app = asAppError(err);
+	if (app) return fail(app.status, { message: app.message });
 	throw err;
 }
 const num = (v: FormDataEntryValue | null) => Number(v ?? -1);

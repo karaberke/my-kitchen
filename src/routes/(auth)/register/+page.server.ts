@@ -5,7 +5,7 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { registrationAllowed } from '$lib/server/registration';
-import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
+import { AUTH_LIMITS, clientKey, consume } from '$lib/server/ratelimit';
 
 const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, '/recipes');
@@ -65,7 +65,7 @@ export const actions: Actions = {
 			return fail(400, { message: 'Enter a valid email address', name, email });
 		if (password.length < 8)
 			return fail(400, { message: 'Use at least 8 characters for the password', name, email });
-		const limit = consume(`signup:${event.getClientAddress()}`, AUTH_LIMITS.signUp);
+		const limit = consume(`signup:${clientKey(event)}`, AUTH_LIMITS.signUp);
 		if (!limit.allowed)
 			return fail(429, {
 				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,

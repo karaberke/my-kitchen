@@ -3,7 +3,7 @@ import { guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 import { handleRecipeSubmit } from '$lib/server/recipe-form';
 import { importRecipeHtml } from '$lib/shared/recipe-html';
 import { parseRecipeText } from '$lib/shared/recipe-text';
@@ -110,7 +110,8 @@ export const actions: Actions = {
 			return await parseImport(event);
 		} catch (err) {
 			// An unreadable file is the user's problem to fix, not a crash.
-			if (err instanceof AppError) return fail(err.status, { message: err.message });
+			const app = asAppError(err);
+			if (app) return fail(app.status, { message: app.message });
 			throw err;
 		}
 	},
