@@ -134,6 +134,25 @@ when the request arrived over https. The Content-Security-Policy comes from
 `kit.csp`: SvelteKit nonces its own hydration script and everything else is
 same-origin, apart from the Google Fonts stylesheet linked in `app.html`.
 
+## Importing from a link
+
+`/recipes/import?kind=url` fetches the page in the app process, because a recipe
+site sends no CORS headers and the browser cannot read it. `import-fetch.ts` does
+the request: http(s) only, `redirect: 'manual'` with 3 hops, a 6-second timeout,
+and a 2 MB cap checked against `content-length` and again while the body streams.
+
+**The fetch is not restricted to public addresses, on purpose.** A private,
+loopback or metadata URL is fetched like any other, so any signed-in member can
+make the host request what it can route to. Two things bound this: the response
+is only ever parsed for text, never rendered, and `IMPORT_LIMITS.fetch` allows 10
+link imports a minute per user. Put the address check in `import-fetch.ts` if
+that decision changes; nothing else needs to know.
+
+The fetched bytes are kept as an `html` attachment, named after the host and
+path, and the final URL (after redirects) goes into the recipe's Source field.
+A site that refuses the request is reported with the fallback: save the page in
+the browser, then use the HTML import.
+
 ## Retention
 
 Three things accumulate with no user-facing delete, so `hooks.server.ts` sweeps

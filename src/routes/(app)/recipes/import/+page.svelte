@@ -10,10 +10,12 @@
 
 	let fileName = $state('');
 	let pasted = $state('');
+	let link = $state('');
 	let busy = $state(false);
 
 	const isPdf = $derived(data.kind === 'pdf');
-	const ready = $derived(!!fileName || !!pasted.trim());
+	const isUrl = $derived(data.kind === 'url');
+	const ready = $derived(isUrl ? !!link.trim() : !!fileName || !!pasted.trim());
 
 	/**
 	 * What the parse found, remembered on the client. A save that fails comes
@@ -25,6 +27,8 @@
 		attachmentId: string;
 		filename: string;
 		pageCount: number | null;
+		/** Set for a link import: where the page was fetched from. */
+		url: string;
 		input: RecipeFormInput;
 	} | null>(null);
 	$effect(() => {
@@ -34,6 +38,7 @@
 				attachmentId: String(form.attachmentId ?? ''),
 				filename: String(form.filename ?? 'source file'),
 				pageCount: (form.pageCount as number | null) ?? null,
+				url: String(form.url ?? ''),
 				input: form.input as RecipeFormInput
 			};
 	});
@@ -68,6 +73,14 @@
 				it. Open the original alongside this form and copy across what you want tracked.
 			</Alert>
 		{/if}
+		{#if review.url && review.source === 'text'}
+			<a
+				class="btn-secondary btn-sm self-start"
+				href={review.url}
+				target="_blank"
+				rel="noopener noreferrer">Open the original page in a new tab ↗</a
+			>
+		{/if}
 		{#if review.attachmentId}
 			{@const unstructured = review.source === 'text' || review.source === 'pdf-empty'}
 			{#if unstructured}
@@ -99,8 +112,12 @@
 	{/key}
 {:else}
 	<PageHeader
-		title={isPdf ? 'Import a PDF' : 'Import a recipe'}
-		subtitle={isPdf ? 'From a cookbook export or saved page.' : 'From a saved HTML page.'}
+		title={data.title}
+		subtitle={isPdf
+			? 'From a cookbook export or saved page.'
+			: isUrl
+				? 'From a recipe page on the web.'
+				: 'From a saved HTML page.'}
 		back="/recipes/add"
 	/>
 
@@ -141,50 +158,81 @@
 				id="import-title"
 				name="title"
 				maxlength="200"
-				placeholder="Leave blank to use the title from the file"
+				placeholder={isUrl
+					? 'Leave blank to use the title from the page'
+					: 'Leave blank to use the title from the file'}
 			/>
 			<p class="mt-1.5 text-[11.5px] text-sage">
 				You can change this on the next screen either way.
 			</p>
 		</div>
 
-		<div>
-			<label class="label" for="import-file">{isPdf ? 'PDF file' : 'HTML or PDF file'}</label>
-			<input
-				class="field h-auto py-2.5 text-[12.5px]"
-				id="import-file"
-				name="file"
-				type="file"
-				accept={isPdf ? '.pdf,application/pdf' : '.html,.htm,.pdf,text/html,application/pdf'}
-				onchange={(e) => (fileName = (e.currentTarget as HTMLInputElement).files?.[0]?.name ?? '')}
-			/>
-			{#if isPdf}
-				<p class="mt-1.5 text-[11.5px] leading-relaxed text-sage">
-					Text is read page by page. Scanned pages have no text to read — the file is still kept so
-					you can copy from it by hand.
-				</p>
-			{/if}
-		</div>
-
-		{#if !isPdf}
+		{#if isUrl}
 			<div>
-				<label class="label" for="import-html">Or paste the page source</label>
-				<textarea
-					class="field min-h-44 py-2.5 font-mono text-[12px]"
-					id="import-html"
-					name="html"
-					placeholder="&lt;!DOCTYPE html&gt; …"
-					bind:value={pasted}></textarea>
+				<label class="label" for="import-url">Link</label>
+				<!-- Deliberately not type="url": the server's message is more use than the
+				     browser's tooltip, and it explains the fallback. -->
+				<input
+					class="field"
+					id="import-url"
+					name="url"
+					type="text"
+					inputmode="url"
+					autocomplete="url"
+					spellcheck="false"
+					maxlength="2000"
+					placeholder="https://example.com/recipes/red-lentil-dal"
+					bind:value={link}
+				/>
+				<p class="mt-1.5 text-[11.5px] leading-relaxed text-sage">
+					The page is fetched once and read for text. Many sites refuse this — if yours does, save
+					the page in your browser and use Import an HTML page.
+				</p>
 			</div>
+		{:else}
+			<div>
+				<label class="label" for="import-file">{isPdf ? 'PDF file' : 'HTML or PDF file'}</label>
+				<input
+					class="field h-auto py-2.5 text-[12.5px]"
+					id="import-file"
+					name="file"
+					type="file"
+					accept={isPdf ? '.pdf,application/pdf' : '.html,.htm,.pdf,text/html,application/pdf'}
+					onchange={(e) =>
+						(fileName = (e.currentTarget as HTMLInputElement).files?.[0]?.name ?? '')}
+				/>
+				{#if isPdf}
+					<p class="mt-1.5 text-[11.5px] leading-relaxed text-sage">
+						Text is read page by page. Scanned pages have no text to read — the file is still kept
+						so you can copy from it by hand.
+					</p>
+				{/if}
+			</div>
+
+			{#if !isPdf}
+				<div>
+					<label class="label" for="import-html">Or paste the page source</label>
+					<textarea
+						class="field min-h-44 py-2.5 font-mono text-[12px]"
+						id="import-html"
+						name="html"
+						placeholder="&lt;!DOCTYPE html&gt; …"
+						bind:value={pasted}></textarea>
+				</div>
+			{/if}
 		{/if}
 
 		<p class="px-0.5 text-[11.5px] leading-relaxed text-sage">
-			A file wins if you pick one. Up to 10 MB. Files are kept as the recipe's source: HTML is never
-			run or shown as a page, and the recipe always appears in this app's own layout.
+			{#if isUrl}
+				The fetched page is kept as the recipe's source.
+			{:else}
+				A file wins if you pick one. Up to 10 MB.
+			{/if} Sources are never run or shown as a page, and the recipe always appears in this app's own
+			layout.
 		</p>
 
 		<button class="btn-primary w-full" disabled={!ready || busy}>
-			{busy ? 'Reading…' : 'Read the recipe'}
+			{busy ? (isUrl ? 'Fetching…' : 'Reading…') : 'Read the recipe'}
 		</button>
 	</form>
 {/if}

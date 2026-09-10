@@ -14,14 +14,23 @@ import {
 	MAX_ATTACHMENT_BYTES
 } from '$lib/server/media/attachments';
 import { readImportedRecipe } from '$lib/server/import-payload';
+import { fetchRecipePage } from '$lib/server/import-fetch';
+import { IMPORT_LIMITS, consume } from '$lib/server/ratelimit';
 
 /** Generous for a saved page, small enough to keep parsing cheap. */
 const MAX_HTML_BYTES = 2_000_000;
 
+const TITLES = {
+	pdf: 'Import a PDF',
+	url: 'Import from a link',
+	html: 'Import a recipe'
+} as const;
+
 const loadImpl = (event: PageServerLoadEvent) => {
 	requireUser(event);
-	const kind = event.url.searchParams.get('kind') === 'pdf' ? 'pdf' : 'html';
-	return { title: kind === 'pdf' ? 'Import a PDF' : 'Import a recipe', kind };
+	const asked = event.url.searchParams.get('kind');
+	const kind = asked === 'pdf' ? 'pdf' : asked === 'url' ? 'url' : 'html';
+	return { title: TITLES[kind], kind };
 };
 
 function looksLikePdf(bytes: Buffer): boolean {
@@ -32,6 +41,7 @@ async function parseImport(event: RequestEvent) {
 	const user = requireUser(event);
 	const fd = await event.request.formData();
 	const pasted = String(fd.get('html') ?? '');
+	const link = String(fd.get('url') ?? '').trim();
 	const file = fd.get('file');
 	const titleOverride = String(fd.get('title') ?? '').trim();
 
@@ -81,9 +91,39 @@ async function parseImport(event: RequestEvent) {
 		return { parsed: true, source, input, attachmentId, filename: file.name, pageCount: null };
 	}
 
+	if (link) {
+		// The fetch reaches any address this host can route to, by decision. The
+		// bucket is the only thing bounding that, so it is checked before the request.
+		const limit = consume(`import:${user.id}`, IMPORT_LIMITS.fetch);
+		if (!limit.allowed)
+			return fail(429, {
+				message: `Too many link imports. Try again in ${limit.retryAfterSeconds} seconds.`
+			});
+		const page = await fetchRecipePage(link, { maxBytes: MAX_HTML_BYTES });
+		const { source, input } = importRecipeHtml(page.html);
+		// Kept like every other import source, so a recipe can be traced back.
+		const attachmentId = await storeAttachment(user.id, {
+			bytes: Buffer.from(page.html, 'utf8'),
+			filename: page.filename,
+			kind: 'html'
+		});
+		if (!input.source) input.source = page.finalUrl;
+		if (titleOverride) input.title = titleOverride;
+		return {
+			parsed: true,
+			source,
+			input,
+			attachmentId,
+			filename: page.filename,
+			pageCount: null,
+			url: page.finalUrl
+		};
+	}
+
 	if (pasted.length > MAX_HTML_BYTES)
 		return fail(413, { message: 'That page is larger than 2 MB.' });
-	if (!pasted.trim()) return fail(400, { message: 'Paste the page source, or choose a file.' });
+	if (!pasted.trim())
+		return fail(400, { message: 'Paste the page source, a link, or choose a file.' });
 
 	const fromClient = readImportedRecipe(fd.get('clientParsed'));
 	const { source, input } = fromClient ?? importRecipeHtml(pasted);

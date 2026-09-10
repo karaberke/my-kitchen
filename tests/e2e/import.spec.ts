@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { expect, test } from '@playwright/test';
 import { createRecipe, register } from './helpers';
 
@@ -21,7 +23,31 @@ const PLAIN_PAGE = `<!DOCTYPE html><html><head><title>Nan's stew</title></head>
 <body><script>window.leaked = 'SHOULD_NOT_APPEAR'</script>
 <h1>Stew</h1><p>Brown the beef, then simmer.</p></body></html>`;
 
-test('the add chooser offers both ways in', async ({ page }) => {
+/**
+ * A page on localhost for the server to fetch.
+ *
+ * The import fetch happens in the app process, so the fixture must be reachable
+ * over the network, not just from the browser. Nothing test-only ships in the
+ * app for this.
+ */
+async function servePage(
+	body: string,
+	status = 200,
+	contentType = 'text/html; charset=utf-8'
+): Promise<{ url: string; close: () => Promise<void> }> {
+	const server = createServer((_req, res) => {
+		res.writeHead(status, { 'content-type': contentType });
+		res.end(body);
+	});
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+	const { port } = server.address() as AddressInfo;
+	return {
+		url: `http://127.0.0.1:${port}/recipes/dal`,
+		close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+	};
+}
+
+test('the add chooser offers every way in', async ({ page }) => {
 	await register(page, 'Ivy');
 	await page.goto('/recipes');
 	await page.getByRole('link', { name: '+ Add' }).click();
@@ -29,6 +55,10 @@ test('the add chooser offers both ways in', async ({ page }) => {
 
 	await page.getByRole('link', { name: /Enter manually/ }).click();
 	await expect(page).toHaveURL(/\/recipes\/new$/);
+
+	await page.goto('/recipes/add');
+	await page.getByRole('link', { name: /Import from a link/ }).click();
+	await expect(page).toHaveURL(/\/recipes\/import\?kind=url$/);
 
 	await page.goto('/recipes/add');
 	await page.getByRole('link', { name: /Import an HTML page/ }).click();
@@ -377,4 +407,86 @@ test('pdf.js is not downloaded until a PDF is actually chosen', async ({ page })
 		`import page JS: ${(onLoad / 1024).toFixed(0)} KB on load -> ${(afterParse / 1024).toFixed(0)} KB after parsing a PDF`
 	);
 	expect(afterParse).toBeGreaterThan(onLoad);
+});
+
+test('imports a recipe from a link and keeps the fetched page as the source', async ({ page }) => {
+	const fixture = await servePage(JSONLD_PAGE);
+	try {
+		await register(page, 'Lena');
+		await page.goto('/recipes/import?kind=url');
+		await page.locator('#import-url').fill(fixture.url);
+		await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+		await expect(page.getByText(/Found recipe data in the page/)).toBeVisible();
+		await expect(page.getByLabel('Title')).toHaveValue('Red lentil dal');
+		await expect(page.locator('#ing-0-name')).toHaveValue('red lentils');
+		// The link is remembered as where the recipe came from.
+		await expect(page.getByLabel('Source')).toHaveValue(fixture.url);
+		// The fetched page is kept, named after the address it came from.
+		await expect(page.getByRole('link', { name: /127\.0\.0\.1.*\.html/ })).toBeVisible();
+
+		await page.getByRole('button', { name: 'Save recipe' }).click();
+		await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
+		await expect(page.getByRole('heading', { name: 'Red lentil dal' })).toBeVisible();
+		await expect(page.getByRole('link', { name: /127\.0\.0\.1.*\.html/ })).toBeVisible();
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('a link the site will not serve is reported, and the form stays usable', async ({ page }) => {
+	const fixture = await servePage('gone', 404);
+	try {
+		await register(page, 'Leo');
+		await page.goto('/recipes/import?kind=url');
+		await page.locator('#import-url').fill(fixture.url);
+		await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+		await expect(page.getByText(/could not find that page/i)).toBeVisible();
+		// Nothing is saved, and the address is still there to correct.
+		await expect(page.locator('#import-url')).toHaveValue(fixture.url);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('a link that serves a PDF points at the PDF import', async ({ page }) => {
+	const fixture = await servePage('%PDF-1.7', 200, 'application/pdf');
+	try {
+		await register(page, 'Lia');
+		await page.goto('/recipes/import?kind=url');
+		await page.locator('#import-url').fill(fixture.url);
+		await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+		await expect(page.getByText(/If it is a PDF, use Import a PDF/)).toBeVisible();
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('a link that is not an address is refused before any request', async ({ page }) => {
+	await register(page, 'Lou');
+	await page.goto('/recipes/import?kind=url');
+	await page.locator('#import-url').fill('not a url');
+	await page.getByRole('button', { name: 'Read the recipe' }).click();
+	await expect(page.getByText(/not a web address/i)).toBeVisible();
+});
+
+test('a link with no recipe data offers the original page to copy from', async ({ page }) => {
+	const fixture = await servePage(PLAIN_PAGE);
+	try {
+		await register(page, 'Lars');
+		await page.goto('/recipes/import?kind=url');
+		await page.locator('#import-url').fill(fixture.url);
+		await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+		await expect(page.getByText(/no structured recipe data/i)).toBeVisible();
+		const original = page.getByRole('link', { name: /Open the original page/ });
+		await expect(original).toHaveAttribute('href', fixture.url);
+		await expect(original).toHaveAttribute('target', '_blank');
+		// An outside page must learn nothing about this app from the click.
+		await expect(original).toHaveAttribute('rel', /noreferrer/);
+	} finally {
+		await fixture.close();
+	}
 });

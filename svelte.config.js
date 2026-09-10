@@ -19,6 +19,7 @@ const config = {
 		 *   style-src-attr the two static `style=` attributes (app.html, recipe page)
 		 *   font-src       where that stylesheet fetches the font files from
 		 *   connect-src    the /api/revisions poll
+		 *   form-action    the social sign-in providers, see below
 		 */
 		csp: {
 			directives: {
@@ -31,7 +32,21 @@ const config = {
 				'connect-src': ['self'],
 				'object-src': ['none'],
 				'base-uri': ['self'],
-				'form-action': ['self'],
+				/**
+				 * `self` alone is not enough. "Continue with Google" is a form POST to
+				 * ?/social whose response is a 303 to the provider, and Chrome and Safari
+				 * check form-action against the redirect target too — so the browser
+				 * silently refuses the hop and the button appears to do nothing. Firefox
+				 * does not check redirects, which is what makes this look like a phone-only
+				 * bug. Listing an origin here permits nothing on its own; a provider still
+				 * only appears once its credentials are set.
+				 */
+				'form-action': [
+					'self',
+					'https://accounts.google.com',
+					'https://login.microsoftonline.com',
+					'https://appleid.apple.com'
+				],
 				'frame-ancestors': ['none']
 			}
 		},
