@@ -4,7 +4,7 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { listRecipes, listUserTags, parseListParams, setFavorite } from '$lib/server/recipes';
-import { AppError } from '$lib/server/errors';
+import { asAppError } from '$lib/server/errors';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
@@ -26,7 +26,8 @@ export const actions: Actions = {
 		try {
 			await setFavorite(user.id, recipeId, favorite);
 		} catch (err) {
-			if (err instanceof AppError) return fail(err.status, { message: err.message });
+			const app = asAppError(err);
+			if (app) return fail(app.status, { message: app.message });
 			throw err;
 		}
 		return { ok: true };

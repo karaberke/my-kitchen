@@ -611,8 +611,17 @@ export async function duplicateRecipe(userId: string, recipeId: string): Promise
 				sourceAttribution: own ? '' : `Duplicated from “${src.title}” shared by ${src.ownerName}`
 			})
 			.returning({ id: recipes.id });
+		// Identities the duplicator cannot see are dropped, keeping the ingredient's
+		// name (which the recipe stores by value). Copying the id verbatim pointed the
+		// new recipe at the sharer's private identity, and assertIngredientsVisible
+		// then refused every later save — a copy that could never be edited.
 		await tx.execute(sql`insert into recipe_ingredient (recipe_id, position, group_name, ingredient_id, name, amount, unit, preparation, optional)
-			select ${created.id}, position, group_name, ingredient_id, name, amount, unit, preparation, optional from recipe_ingredient where recipe_id = ${src.id}`);
+			select ${created.id}, position, group_name,
+				case when ingredient_id in (
+					select id from ingredient where owner_user_id is null or owner_user_id = ${userId}
+				) then ingredient_id end,
+				name, amount, unit, preparation, optional
+			from recipe_ingredient where recipe_id = ${src.id}`);
 		await tx.execute(sql`insert into recipe_step (recipe_id, position, section_title, text)
 			select ${created.id}, position, section_title, text from recipe_step where recipe_id = ${src.id}`);
 		return created.id;

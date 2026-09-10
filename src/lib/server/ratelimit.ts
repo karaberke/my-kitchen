@@ -46,6 +46,23 @@ export function consume(
 	return { allowed: true, retryAfterSeconds: 0 };
 }
 
+/**
+ * Client address for rate-limit keys.
+ *
+ * adapter-node's getClientAddress() throws when ADDRESS_HEADER names a header
+ * the request does not carry — a real risk on a host that is reachable both
+ * through the proxy and directly. Falling back to a constant degrades to one
+ * shared bucket (the behaviour before ADDRESS_HEADER existed) instead of
+ * turning every sign-in into a 500.
+ */
+export function clientKey(event: { getClientAddress: () => string }): string {
+	try {
+		return event.getClientAddress() || 'unknown';
+	} catch {
+		return 'unknown';
+	}
+}
+
 /** Test hook. */
 export function resetRateLimits() {
 	buckets.clear();

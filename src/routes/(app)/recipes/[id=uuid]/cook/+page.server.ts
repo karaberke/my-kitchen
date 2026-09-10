@@ -7,7 +7,7 @@ import { requireHousehold } from '$lib/server/access';
 import { finishCooking, previewCooking, type CookItemInput } from '$lib/server/cooking';
 import { getRecipeDetail } from '$lib/server/recipes';
 import { undoEvent } from '$lib/server/undo';
-import { AppError, ReviewConflict } from '$lib/server/errors';
+import { ReviewConflict, asAppError } from '$lib/server/errors';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { Dec } from '$lib/shared/decimal';
 import { isOperationId } from '$lib/server/operations';
@@ -101,7 +101,8 @@ export const actions: Actions = {
 		} catch (err) {
 			if (err instanceof ReviewConflict)
 				return fail(409, { message: err.message, review: err.review });
-			if (err instanceof AppError) return fail(err.status, { message: err.message });
+			const app = asAppError(err);
+			if (app) return fail(app.status, { message: app.message });
 			throw err;
 		}
 	},
@@ -120,7 +121,8 @@ export const actions: Actions = {
 		} catch (err) {
 			if (err instanceof ReviewConflict)
 				return fail(409, { message: err.message, review: err.review });
-			if (err instanceof AppError) return fail(err.status, { message: err.message });
+			const app = asAppError(err);
+			if (app) return fail(app.status, { message: app.message });
 			throw err;
 		}
 	}

@@ -262,3 +262,21 @@ describe('importRecipeHtml title and notes on an unstructured page', () => {
 		expect(r.input.notes).toBe('');
 	});
 });
+
+describe('character references', () => {
+	const parse = (body: string) => importRecipeHtml(`<html><body>${body}</body></html>`);
+
+	it('leaves an out-of-range numeric reference as literal text', () => {
+		// String.fromCodePoint throws above 0x10FFFF, which used to 500 the import.
+		for (const bad of ['&#1114112;', '&#99999999999;', '&#x110000;', '&#55357;', '&#0;']) {
+			const { input } = parse(`<h1>Cake ${bad}</h1><ul><li>200 g flour</li></ul>`);
+			expect(input.title).toContain(bad);
+		}
+	});
+
+	it('still decodes valid references, including astral ones', () => {
+		expect(parse('<h1>Caf&#233; tart</h1>').input.title).toBe('Café tart');
+		expect(parse('<h1>Cake &#x1F370; tart</h1>').input.title).toBe('Cake 🍰 tart');
+		expect(parse('<h1>Salt &amp; pepper</h1>').input.title).toBe('Salt & pepper');
+	});
+});

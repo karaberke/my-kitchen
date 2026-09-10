@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
-import { eq } from 'drizzle-orm';
-import postgres from 'postgres';
+import { eq, sql } from 'drizzle-orm';
 import { db, type Tx } from '$lib/server/db';
 import { operations } from '$lib/server/db/schema';
-import { AppError } from '$lib/server/errors';
+import { AppError, pgError } from '$lib/server/errors';
 
 /** Stable JSON (sorted keys) so equal payloads produce equal fingerprints. */
 export function stableStringify(value: unknown): string {
@@ -27,14 +26,14 @@ export function fingerprint(kind: string, payload: unknown): string {
 const RETRYABLE = new Set(['40001', '40P01']); // serialization_failure, deadlock_detected
 
 function isRetryable(err: unknown): boolean {
-	return err instanceof postgres.PostgresError && RETRYABLE.has(err.code);
+	const pg = pgError(err);
+	return !!pg && RETRYABLE.has(pg.code);
 }
 
 function isUniqueViolation(err: unknown, constraint?: string): boolean {
+	const pg = pgError(err);
 	return (
-		err instanceof postgres.PostgresError &&
-		err.code === '23505' &&
-		(constraint === undefined || err.constraint_name === constraint)
+		!!pg && pg.code === '23505' && (constraint === undefined || pg.constraint_name === constraint)
 	);
 }
 
@@ -131,4 +130,17 @@ export async function runOperation<T extends Record<string, unknown>>(
 		}
 		throw err;
 	}
+}
+
+/**
+ * Drop idempotency records past the window in which a client could still retry.
+ * The table only ever grows otherwise: every pantry, grocery and cooking
+ * mutation writes one row and nothing removed them.
+ */
+export async function cleanupOperations(olderThanDays = 30): Promise<number> {
+	const rows = await db
+		.delete(operations)
+		.where(sql`${operations.createdAt} < now() - make_interval(days => ${olderThanDays})`)
+		.returning({ id: operations.id });
+	return rows.length;
 }

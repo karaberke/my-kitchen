@@ -9,6 +9,7 @@
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
+import { sslOptions } from './db-ssl.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -18,11 +19,7 @@ if (!url) {
 	console.error('migrate: DATABASE_URL is not set');
 	process.exit(2);
 }
-const ssl = process.env.DATABASE_SSL
-	? process.env.DATABASE_SSL === 'require'
-		? 'require'
-		: { rejectUnauthorized: false }
-	: undefined;
+const ssl = sslOptions(process.env.DATABASE_SSL);
 const waitSeconds = Number(process.env.MIGRATE_WAIT_SECONDS ?? 120);
 const folder = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'drizzle');
 
