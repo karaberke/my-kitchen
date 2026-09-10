@@ -5,10 +5,12 @@
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
-	import { fmtMinutes, fmtNum, fmtQty } from '$lib/client/format';
+	import { fmtMinutes, fmtNum } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
 	import { scaleAmount } from '$lib/shared/scaling';
-	import { formatQuantity } from '$lib/shared/units';
+	import { displayQuantity } from '$lib/shared/display-units';
+	import { unitSystem } from '$lib/client/unit-system.svelte';
+	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import { stockStatus, STOCK_STATUS_LABEL, type StockStatus } from '$lib/shared/stock-status';
 
 	let { data, form } = $props();
@@ -46,6 +48,9 @@
 		preparation: string;
 	}
 	const groups = $derived.by(() => {
+		// Reading unitSystem here is what re-renders every quantity on toggle.
+		const show = (amount: Dec | null, unit: string | null) =>
+			displayQuantity(amount, unit, unitSystem.value, r.convention).text;
 		const out: { name: string; rows: Row[] }[] = [];
 		for (const ing of r.ingredients) {
 			const amount = ing.amount ? scaleAmount(Dec.from(ing.amount), base, servings) : null;
@@ -59,13 +64,13 @@
 			});
 			let statusText = STOCK_STATUS_LABEL[status];
 			if (status === 'available' && available)
-				statusText = `In pantry · ${formatQuantity(available, ing.unit)} available`;
+				statusText = `In pantry · ${show(available, ing.unit)} available`;
 			if (status === 'partial' && available && amount)
-				statusText = `Short ${formatQuantity(amount.sub(available), ing.unit)} · ${formatQuantity(available, ing.unit)} in pantry`;
+				statusText = `Short ${show(amount.sub(available), ing.unit)} · ${show(available, ing.unit)} in pantry`;
 			if (status === 'unknown' && ing.stockOther.length)
-				statusText = `Pantry has ${ing.stockOther.map((o) => fmtQty(o.quantity, o.unit)).join(', ')} · check while cooking`;
+				statusText = `Pantry has ${ing.stockOther.map((o) => show(Dec.from(o.quantity), o.unit)).join(', ')} · check while cooking`;
 			if (!ing.amount && ing.ingredientId) statusText = 'Unspecified amount · check while cooking';
-			const line = `${amount ? formatQuantity(amount, ing.unit) + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}`;
+			const line = `${amount ? show(amount, ing.unit) + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}`;
 			const g =
 				out.find((x) => x.name === ing.groupName) ??
 				(out.push({ name: ing.groupName, rows: [] }), out[out.length - 1]);
@@ -291,6 +296,18 @@
 					disabled={!r.baseServings}>+</button
 				>
 			</div>
+		</div>
+
+		<div class="card mt-2.5 flex items-center justify-between gap-3 p-3.5">
+			<div>
+				<div class="text-[13px] font-bold">Units</div>
+				<div class="mt-0.5 text-[11.5px] text-sage">
+					{unitSystem.value === 'as-written'
+						? 'Shown exactly as entered'
+						: 'Converted for display · ~ means rounded to a practical measure'}
+				</div>
+			</div>
+			<UnitToggle />
 		</div>
 
 		<div class="mt-5 mb-2.5 flex items-center justify-between">
