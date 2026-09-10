@@ -46,6 +46,22 @@ This note explains the choices that are not obvious from the code.
   bag, clove ...) never convert and only match themselves.
 - An unknown amount is `null`, distinct from zero. Unknown amounts stay visible
   in previews and lists but never enter arithmetic.
+- A _unit system_ (`as-written`, `metric`, `us`) is a display setting and is not
+  the same thing as a convention: the convention says how big a cup is, the
+  system says which units the reader wants to see. Switching systems never
+  rewrites stored amounts, never reaches the server, and defaults to
+  `as-written`, so a recipe always renders exactly as entered until asked
+  otherwise. The choice lives in `localStorage` only.
+- Display conversion stays inside its dimension — mass to mass, volume to
+  volume — and never uses density, even where one exists. A recipe where only
+  the curated ingredients became cups would read worse than a consistent one.
+  Converted volumes snap to fractions a measuring set actually has (1/8, 1/4,
+  1/3, 1/2, 2/3, 3/4, 7/8) and masses to decimal steps, since scales are
+  decimal. Snapped values are prefixed `~`.
+- Unit switching is confined to the recipe page and cook mode's read-only
+  ingredient list. Grocery lists, the pantry, and cook mode's deduction form
+  stay in stored units, because there the unit is a contract for purchase
+  crediting and lot matching rather than something being read off a page.
 
 ## Grocery snapshots
 
