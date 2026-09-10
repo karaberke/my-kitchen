@@ -73,10 +73,19 @@ describe('values that must never be converted', () => {
 		expect(text('2', 'furlong', 'us')).toBe('2 furlong');
 	});
 
-	it('is exact when the target unit is the one already written', () => {
+	it('does not re-round a scale measurement already in the target unit', () => {
 		expect(text('137', 'g', 'metric')).toBe('137 g');
 		expect(text('237', 'ml', 'metric')).toBe('237 ml');
 		expect(displayQuantity(d('137'), 'g', 'metric', 'metric').approx).toBe(false);
+	});
+
+	it('still renders cups and spoons as fractions when the unit is unchanged', () => {
+		// A recipe already written in US units is exactly where fractions help.
+		expect(text('0.25', 'cup', 'us')).toBe('1/4 cup');
+		expect(text('0.5', 'cup', 'us')).toBe('1/2 cup');
+		expect(text('1.25', 'cup', 'us')).toBe('1 1/4 cups');
+		expect(text('0.13', 'tsp', 'us')).toBe('~1/8 tsp');
+		expect(displayQuantity(d('0.25'), 'cup', 'us', 'metric').approx).toBe(false);
 	});
 });
 

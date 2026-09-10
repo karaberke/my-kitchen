@@ -255,8 +255,12 @@ export function displayQuantity(
 	const ladder = LADDERS[system][info.dimension];
 	const rung = pickRung(value, ladder, convention, from);
 
-	// Selecting the system a recipe was written in must be a no-op.
-	if (rung.unit === from) return passthrough(value, from);
+	// Selecting the system a recipe was written in must not re-round a value
+	// that is already in the target unit: 137 g stays 137 g, never 135 g.
+	// Cup and spoon amounts are the exception, because their fraction rendering
+	// is exact rather than lossy — 0.25 cup and 1/4 cup are the same number,
+	// one is just the one you can measure.
+	if (rung.unit === from && !FRACTION_SETS[rung.unit]) return passthrough(value, from);
 
 	const exact = convertAmount(value, from, rung.unit, convention);
 	if (!exact) return passthrough(value, from);
