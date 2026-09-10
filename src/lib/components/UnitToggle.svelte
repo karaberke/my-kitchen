@@ -13,7 +13,7 @@
 	{#each UNIT_SYSTEMS as sys (sys)}
 		<button
 			type="button"
-			class="h-9 rounded-[11px] px-3 text-[12.5px] font-semibold transition-colors {unitSystem.value ===
+			class="h-9 rounded-[11px] px-3 text-[12.5px] font-semibold whitespace-nowrap transition-colors {unitSystem.value ===
 			sys
 				? 'bg-cream text-ink shadow-sm'
 				: 'text-sage hover:bg-cream/60'}"
