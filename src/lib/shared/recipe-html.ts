@@ -299,13 +299,64 @@ export function emptyRecipeFormInput(): RecipeFormInput {
 		steps: [],
 		intent: 'save',
 		expectedRevision: null,
-		removeImage: false
+		removeImage: false,
+		imageUrl: ''
 	};
 }
 
-export function importRecipeHtml(html: string): HtmlImportResult {
+/**
+ * The picture a page names, as an absolute http(s) address, or ''.
+ *
+ * This runs in the browser too, so it throws nothing: an address that cannot be
+ * used is simply not offered. A `data:` URI is dropped for the same reason —
+ * the server downloads the picture, and there is nothing to download.
+ */
+function absoluteImageUrl(raw: string, pageUrl?: string): string {
+	const value = decodeEntities(raw).trim();
+	if (!value) return '';
+	try {
+		const url = new URL(value, pageUrl);
+		return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : '';
+	} catch {
+		return '';
+	}
+}
+
+/** The content of the first of these meta tags the page carries. */
+function metaContent(html: string, keys: string[]): string {
+	for (const key of keys) {
+		const tag = new RegExp(`<meta[^>]+(?:property|name)\\s*=\\s*["']${key}["'][^>]*>`, 'i').exec(
+			html
+		)?.[0];
+		const content = tag ? /content\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] : '';
+		if (content) return content;
+	}
+	return '';
+}
+
+/** schema.org `image`: a string, a list, or an ImageObject. */
+function schemaImage(value: unknown): string {
+	if (Array.isArray(value)) return value.length ? schemaImage(value[0]) : '';
+	if (typeof value === 'string') return value;
+	if (value && typeof value === 'object') {
+		const o = value as Record<string, unknown>;
+		if (typeof o.url === 'string') return o.url;
+		if (typeof o.contentUrl === 'string') return o.contentUrl;
+	}
+	return '';
+}
+
+export function importRecipeHtml(html: string, pageUrl?: string): HtmlImportResult {
 	const input = emptyRecipeFormInput();
 	if (!html.trim()) return { source: 'text', input };
+
+	// The page's own picture, used unless the recipe names a better one.
+	const pageImage = metaContent(html, [
+		'og:image',
+		'og:image:url',
+		'twitter:image',
+		'twitter:image:src'
+	]);
 
 	for (const block of jsonLdBlocks(html)) {
 		const recipe = findRecipe(block);
@@ -332,12 +383,15 @@ export function importRecipeHtml(html: string): HtmlImportResult {
 				.map(ingredient);
 
 		input.steps = instructionsToSteps(recipe.recipeInstructions);
+		// The recipe's own picture beats og:image, which is sometimes the site logo.
+		input.imageUrl = absoluteImageUrl(schemaImage(recipe.image) || pageImage, pageUrl);
 		return { source: 'json-ld', input };
 	}
 
 	// No structured recipe: keep the readable text so nothing is lost, and let
 	// the user shape it in the form.
 	input.title = titleFromDocument(html);
+	input.imageUrl = absoluteImageUrl(pageImage, pageUrl);
 	const readable = stripTags(html);
 	input.notes = readable.length <= MAX_USEFUL_NOTES ? readable : '';
 	return { source: 'text', input };

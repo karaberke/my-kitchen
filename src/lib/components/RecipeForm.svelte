@@ -113,6 +113,8 @@
 	const message = $derived(clientMessage || serverMessage);
 
 	let removeImage = $state(false);
+	/* svelte-ignore state_referenced_locally */
+	let imageUrl = $state(initial.imageUrl);
 	let imagePreview = $state<string | null>(null);
 	let submitting = $state(false);
 	let amountErrors = $state<Record<number, string>>({});
@@ -131,7 +133,8 @@
 			convention,
 			ingredients: ingredients.map((r) => ({ ...r, key: 0 })),
 			steps: steps.map((s) => ({ ...s, key: 0 })),
-			removeImage
+			removeImage,
+			imageUrl
 		});
 	const initialSnapshot = snapshot();
 	const dirty = $derived(snapshot() !== initialSnapshot);
@@ -206,7 +209,15 @@
 		const file = (e.target as HTMLInputElement).files?.[0];
 		if (imagePreview) URL.revokeObjectURL(imagePreview);
 		imagePreview = file ? URL.createObjectURL(file) : null;
-		if (file) removeImage = false;
+		// The server uses the file and ignores the link, so clear the link here too:
+		// the form must show what is going to happen.
+		if (file) {
+			removeImage = false;
+			imageUrl = '';
+		}
+	}
+	function onImageUrl() {
+		if (imageUrl.trim()) removeImage = false;
 	}
 	const unitOptions = UNITS.map((u) => ({
 		id: u.id,
@@ -395,6 +406,24 @@
 						onchange={onFile}
 					/>
 				</div>
+				<label class="label mt-3" for="imageUrl"
+					>…or a link to a picture <span class="font-normal text-sage">(optional)</span></label
+				>
+				<input
+					class="field"
+					id="imageUrl"
+					name="imageUrl"
+					type="url"
+					inputmode="url"
+					bind:value={imageUrl}
+					oninput={onImageUrl}
+					placeholder="https://example.com/dal.jpg"
+					maxlength="2000"
+				/>
+				<p class="mt-1 text-[13px] text-sage">
+					The picture is downloaded and kept with the recipe, so it stays when the other site
+					changes. A chosen file is used instead of a link.
+				</p>
 				{#if errors.image}<p class="error-text">{errors.image}</p>{/if}
 				{#if image}
 					<label class="mt-2 flex items-center gap-2 text-[13px]"

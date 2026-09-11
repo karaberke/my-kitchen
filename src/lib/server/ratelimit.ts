@@ -21,11 +21,13 @@ export const AUTH_LIMITS = {
 } as const;
 
 /**
- * URL import. The fetch reaches any address the host can route to, so this
- * bucket is what stops one cook from using the box as a scanner. Keyed by user.
+ * Fetching a link the user gave — a recipe page, or a picture. The fetch reaches
+ * any address the host can route to, so these buckets are what stop one cook
+ * from using the box as a scanner. Keyed by user.
  */
 export const IMPORT_LIMITS = {
-	fetch: { windowMs: 60_000, max: 10 }
+	fetch: { windowMs: 60_000, max: 10 },
+	image: { windowMs: 60_000, max: 10 }
 } as const;
 
 function sweep(now: number) {

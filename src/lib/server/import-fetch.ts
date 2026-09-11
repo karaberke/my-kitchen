@@ -1,4 +1,5 @@
 import { AppError } from '$lib/server/errors';
+import { toHttpUrl } from '$lib/server/remote-url';
 
 /**
  * Read a recipe page over the network.
@@ -43,21 +44,6 @@ export interface FetchedPage {
 function tooLarge(maxBytes: number): AppError {
 	const mb = Math.round(maxBytes / 1_000_000);
 	return new AppError(413, `That page is larger than ${mb} MB.`);
-}
-
-/** An absolute http(s) URL, or a 400 the user can act on. */
-function toUrl(raw: string, base?: string): URL {
-	const text = raw.trim();
-	const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(text) || base ? text : `https://${text}`;
-	let url: URL;
-	try {
-		url = new URL(withScheme, base);
-	} catch {
-		throw new AppError(400, 'That is not a web address. Paste a link that starts with https://');
-	}
-	if (url.protocol !== 'http:' && url.protocol !== 'https:')
-		throw new AppError(400, 'That is not a web address. Paste a link that starts with https://');
-	return url;
 }
 
 /** "example.com-recipes-dal.html" — readable in the attachment list. */
@@ -122,7 +108,7 @@ export async function fetchRecipePage(
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const doFetch: FetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
 
-	let url = toUrl(raw);
+	let url = toHttpUrl(raw);
 	for (let hop = 0; ; hop++) {
 		let res: Response;
 		try {
@@ -143,7 +129,7 @@ export async function fetchRecipePage(
 			const location = res.headers.get('location');
 			if (!location) throw new AppError(502, `That link redirects to nothing. ${FALLBACK}`);
 			if (hop >= maxRedirects) throw new AppError(502, `That link has too many redirects.`);
-			url = toUrl(location, url.toString());
+			url = toHttpUrl(location, url.toString());
 			continue;
 		}
 

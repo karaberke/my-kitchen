@@ -24,6 +24,15 @@ describe('parseRecipeForm', () => {
 		expect(input.ingredients.map((i) => i.name)).toEqual(['red lentils', 'lemon']);
 		expect(input.steps.map((s) => s.text)).toEqual(['Rinse', 'Simmer']);
 	});
+
+	it('keeps the link to a picture', () => {
+		const input = parseRecipeForm(fd({ imageUrl: ' https://example.com/dal.jpg ' }));
+		expect(input.imageUrl).toBe('https://example.com/dal.jpg');
+	});
+
+	it('has no picture link when the field is absent', () => {
+		expect(parseRecipeForm(fd({ title: 'Dal' })).imageUrl).toBe('');
+	});
 });
 
 describe('validateRecipe', () => {

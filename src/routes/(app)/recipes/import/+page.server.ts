@@ -102,7 +102,8 @@ async function parseImport(event: RequestEvent) {
 				message: `Too many link imports. Try again in ${limit.retryAfterSeconds} seconds.`
 			});
 		const page = await fetchRecipePage(link, { maxBytes: MAX_HTML_BYTES });
-		const { source, input } = importRecipeHtml(page.html);
+		// The final URL, so a relative og:image on the page becomes a usable address.
+		const { source, input } = importRecipeHtml(page.html, page.finalUrl);
 		// Kept like every other import source, so a recipe can be traced back.
 		const attachmentId = await storeAttachment(user.id, {
 			bytes: Buffer.from(page.html, 'utf8'),

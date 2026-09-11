@@ -39,6 +39,8 @@ export interface RecipeFormInput {
 	intent: RecipeIntent;
 	expectedRevision: number | null;
 	removeImage: boolean;
+	/** A picture named by a link. The server downloads it; it is never hotlinked. */
+	imageUrl: string;
 }
 
 export interface ValidIngredient {
@@ -133,7 +135,9 @@ export function parseRecipeForm(fd: FormData): RecipeFormInput {
 		steps,
 		intent: str(fd, 'intent', 10) === 'draft' ? 'draft' : 'save',
 		expectedRevision: /^\d+$/.test(revisionRaw) ? Number(revisionRaw) : null,
-		removeImage: fd.get('removeImage') === 'on' || fd.get('removeImage') === 'true'
+		removeImage: fd.get('removeImage') === 'on' || fd.get('removeImage') === 'true',
+		// Trimmed here: a pasted address almost always carries a space or a newline.
+		imageUrl: str(fd, 'imageUrl', 2000).trim()
 	};
 }
 

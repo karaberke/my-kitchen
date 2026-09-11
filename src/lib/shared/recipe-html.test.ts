@@ -280,3 +280,64 @@ describe('character references', () => {
 		expect(parse('<h1>Salt &amp; pepper</h1>').input.title).toBe('Salt & pepper');
 	});
 });
+
+describe('importRecipeHtml: the picture', () => {
+	const meta = (property: string, content: string) =>
+		`<!DOCTYPE html><html><head><meta property="${property}" content="${content}"></head><body></body></html>`;
+
+	it('takes the og:image of the page', () => {
+		const { input } = importRecipeHtml(meta('og:image', 'https://example.com/dal.jpg'));
+		expect(input.imageUrl).toBe('https://example.com/dal.jpg');
+	});
+
+	it('takes twitter:image when there is no og:image', () => {
+		const html = `<html><head><meta name="twitter:image" content="https://example.com/t.jpg"></head></html>`;
+		expect(importRecipeHtml(html).input.imageUrl).toBe('https://example.com/t.jpg');
+	});
+
+	it('prefers the picture of the recipe itself over the one of the page', () => {
+		const html = wrap({ ...RECIPE, image: 'https://example.com/recipe.jpg' }).replace(
+			'</head>',
+			'<meta property="og:image" content="https://example.com/page.jpg"></head>'
+		);
+		expect(importRecipeHtml(html).input.imageUrl).toBe('https://example.com/recipe.jpg');
+	});
+
+	it('takes the first picture when the recipe lists several', () => {
+		const html = wrap({
+			...RECIPE,
+			image: ['https://example.com/a.jpg', 'https://example.com/b.jpg']
+		});
+		expect(importRecipeHtml(html).input.imageUrl).toBe('https://example.com/a.jpg');
+	});
+
+	it('reads the address out of an ImageObject', () => {
+		const html = wrap({
+			...RECIPE,
+			image: { '@type': 'ImageObject', url: 'https://example.com/object.jpg' }
+		});
+		expect(importRecipeHtml(html).input.imageUrl).toBe('https://example.com/object.jpg');
+	});
+
+	it('makes a relative address absolute against the page', () => {
+		const { input } = importRecipeHtml(
+			meta('og:image', '/img/dal.jpg'),
+			'https://example.com/recipes/dal'
+		);
+		expect(input.imageUrl).toBe('https://example.com/img/dal.jpg');
+	});
+
+	it('drops a relative address when the page address is unknown', () => {
+		expect(importRecipeHtml(meta('og:image', '/img/dal.jpg')).input.imageUrl).toBe('');
+	});
+
+	it('ignores an address that is not http or https', () => {
+		expect(importRecipeHtml(meta('og:image', 'data:image/gif;base64,AAAA')).input.imageUrl).toBe(
+			''
+		);
+	});
+
+	it('leaves the field empty when the page names no picture', () => {
+		expect(importRecipeHtml(wrap(RECIPE)).input.imageUrl).toBe('');
+	});
+});
