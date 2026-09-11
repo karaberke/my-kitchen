@@ -14,6 +14,8 @@ import {
 	MAX_ATTACHMENT_BYTES
 } from '$lib/server/media/attachments';
 import { readImportedRecipe } from '$lib/server/import-payload';
+import { matchIngredientNames } from '$lib/server/ingredient-match';
+import type { RecipeIngredientInput } from '$lib/shared/recipe-input';
 import { fetchRecipePage } from '$lib/server/import-fetch';
 import { IMPORT_LIMITS, consume } from '$lib/server/ratelimit';
 
@@ -144,10 +146,39 @@ async function parseImport(event: RequestEvent) {
 	};
 }
 
+/**
+ * An import writes the names as the source wrote them, so nothing points at the
+ * pantry yet. Each name the catalog recognises comes back as a proposal that
+ * the review form shows and one ✕ removes; saving is the confirmation.
+ */
+async function withProposals<T extends { input: { ingredients: RecipeIngredientInput[] } }>(
+	event: RequestEvent,
+	result: T
+): Promise<T & { identityLabels: Record<string, string> }> {
+	const user = requireUser(event);
+	const identityLabels: Record<string, string> = {};
+	const open = result.input.ingredients.filter((i) => !i.ingredientId && i.name.trim());
+	if (!open.length) return { ...result, identityLabels };
+	const matches = await matchIngredientNames(
+		db,
+		user.id,
+		open.map((i) => i.name)
+	);
+	for (const ing of open) {
+		const match = matches.get(ing.name);
+		if (!match) continue;
+		ing.ingredientId = match.ingredientId;
+		ing.proposed = true;
+		identityLabels[match.ingredientId] = match.name;
+	}
+	return { ...result, identityLabels };
+}
+
 export const actions: Actions = {
 	parse: async (event) => {
 		try {
-			return await parseImport(event);
+			const result = await parseImport(event);
+			return 'input' in result ? await withProposals(event, result) : result;
 		} catch (err) {
 			// An unreadable file is the user's problem to fix, not a crash.
 			const app = asAppError(err);

@@ -8,6 +8,8 @@
 		ingredientId = $bindable<string | null>(null),
 		identityLabel = $bindable<string | null>(null),
 		createIdentity = $bindable(false),
+		proposed = $bindable(false),
+		propose = false,
 		inputId,
 		fieldName,
 		placeholder = 'e.g. chicken breast',
@@ -17,6 +19,10 @@
 		ingredientId?: string | null;
 		identityLabel?: string | null;
 		createIdentity?: boolean;
+		/** the current match came from the app, not from a choice of the user */
+		proposed?: boolean;
+		/** ask the catalog for a match when the field loses the focus */
+		propose?: boolean;
 		inputId: string;
 		fieldName: string;
 		placeholder?: string;
@@ -69,18 +75,43 @@
 		ingredientId = s.id;
 		identityLabel = s.name;
 		createIdentity = false;
+		proposed = false;
 		open = false;
 	}
 	function chooseNew() {
 		ingredientId = null;
 		identityLabel = null;
 		createIdentity = true;
+		proposed = false;
 		open = false;
 	}
 	function clearIdentity() {
 		ingredientId = null;
 		identityLabel = null;
 		createIdentity = false;
+		proposed = false;
+	}
+	/**
+	 * A name typed by hand never links itself silently: the app fills a proposal,
+	 * which the row shows as a proposal and one ✕ removes.
+	 */
+	async function proposeMatch() {
+		const q = name.trim();
+		if (!propose || ingredientId || createIdentity || q.length < 2) return;
+		try {
+			const res = await fetch(`/api/ingredients/match?name=${encodeURIComponent(q)}`, {
+				headers: { accept: 'application/json' }
+			});
+			if (!res.ok) return;
+			const data = (await res.json()) as { match: { ingredientId: string; name: string } | null };
+			// The field may have changed while the answer was on its way.
+			if (!data.match || ingredientId || createIdentity || name.trim() !== q) return;
+			ingredientId = data.match.ingredientId;
+			identityLabel = data.match.name;
+			proposed = true;
+		} catch {
+			// A proposal is a convenience; a failed one changes nothing.
+		}
 	}
 	function onInput(e: Event) {
 		name = (e.target as HTMLInputElement).value;
@@ -133,7 +164,10 @@
 		onfocus={() => {
 			if (suggestions.length) open = true;
 		}}
-		onblur={() => setTimeout(() => (open = false), 150)}
+		onblur={() => {
+			setTimeout(() => (open = false), 150);
+			void proposeMatch();
+		}}
 	/>
 	{#if open}
 		<ul
@@ -187,8 +221,15 @@
 	{/if}
 </div>
 {#if ingredientId && identityLabel}
-	<div class="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-leaf-dark">
-		<span>✓ Tracked as <strong>{identityLabel}</strong></span>
+	<div
+		class="mt-1.5 flex items-center gap-1.5 text-[11.5px] {proposed
+			? 'text-honey-dark'
+			: 'text-leaf-dark'}"
+	>
+		<span
+			>{#if proposed}Proposed: <strong>{identityLabel}</strong> · saved unless you remove it{:else}✓
+				Tracked as <strong>{identityLabel}</strong>{/if}</span
+		>
 		<button
 			type="button"
 			class="rounded px-1 text-sage hover:text-brick-dark"
