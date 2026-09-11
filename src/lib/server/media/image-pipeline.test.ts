@@ -17,6 +17,31 @@ function picture(
 	).toBuffer();
 }
 
+/**
+ * Photo-like bytes: smooth gradients plus mild grain, already saved as JPEG.
+ * A flat rectangle compresses unrealistically well and hides the case where a
+ * re-encode makes a picture larger. Deterministic: the seed is fixed.
+ */
+function photo(size: number, jpegQuality: number): Promise<Buffer> {
+	const pixels = Buffer.alloc(size * size * 3);
+	let seed = 7;
+	for (let y = 0; y < size; y++) {
+		for (let x = 0; x < size; x++) {
+			seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+			const grain = ((seed >> 16) & 0x1f) - 16;
+			const i = (y * size + x) * 3;
+			const set = (offset: number, value: number) =>
+				(pixels[i + offset] = Math.max(0, Math.min(255, Math.round(value + grain))));
+			set(0, (x / size) * 200 + 30);
+			set(1, (y / size) * 180 + 40);
+			set(2, ((x + y) / (2 * size)) * 160 + 50);
+		}
+	}
+	return sharp(pixels, { raw: { width: size, height: size, channels: 3 } })
+		.jpeg({ quality: jpegQuality })
+		.toBuffer();
+}
+
 async function failure(run: Promise<unknown>): Promise<AppError> {
 	try {
 		await run;
@@ -49,6 +74,37 @@ describe('renderImageVariants', () => {
 		for (const variant of Object.values(out.variants))
 			expect(variant.data.byteLength).toBeLessThan(original.byteLength);
 	});
+
+	it('steps the quality down rather than store a bigger picture', async () => {
+		// A photo saved as a small JPEG re-encodes to a *larger* WebP at the quality
+		// we prefer, because the variant is then a same-size re-encode. The encoder
+		// must not simply keep that result.
+		const original = await photo(1024, 50);
+		const preferred = await sharp(original)
+			.rotate()
+			.resize({ width: IMAGE_VARIANTS.detail.width, withoutEnlargement: true })
+			.webp({ quality: IMAGE_VARIANTS.detail.quality })
+			.toBuffer();
+		expect(preferred.byteLength).toBeGreaterThan(original.byteLength); // the case is real
+
+		const out = await renderImageVariants(original);
+		expect(out.variants.detail.data.byteLength).toBeLessThan(preferred.byteLength);
+		// This source is one the ladder can get under. A source the site has
+		// optimised harder may stop above it: the floor is quality, not size.
+		expect(out.variants.detail.data.byteLength).toBeLessThanOrEqual(original.byteLength);
+	}, 30000);
+
+	it('keeps the best quality when that already compresses the picture', async () => {
+		// The step down must not cost quality on a picture that never needed it.
+		const original = await picture(2000, 1500, 'png');
+		const plain = await sharp(original)
+			.rotate()
+			.resize({ width: IMAGE_VARIANTS.detail.width, withoutEnlargement: true })
+			.webp({ quality: IMAGE_VARIANTS.detail.quality })
+			.toBuffer();
+		const out = await renderImageVariants(original);
+		expect(out.variants.detail.data.byteLength).toBe(plain.byteLength);
+	}, 30000);
 
 	it('does not enlarge a picture that is already small', async () => {
 		const out = await renderImageVariants(await picture(200, 150));
