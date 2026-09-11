@@ -12,6 +12,7 @@ import {
 	getListDetail,
 	recordPurchase,
 	refreshDraft,
+	reopenList,
 	removeBatch,
 	removeLine,
 	startShopping,
@@ -86,6 +87,19 @@ export const actions: Actions = {
 				expectedRevision: num(fd.get('expectedRevision'))
 			});
 			return { ok: true, action: 'complete' };
+		} catch (err) {
+			return handle(err);
+		}
+	},
+	reopen: async (event) => {
+		const ctx = ctxOf(event);
+		const fd = await event.request.formData();
+		try {
+			await reopenList(ctx, {
+				listId: event.params.listId,
+				expectedRevision: num(fd.get('expectedRevision'))
+			});
+			return { ok: true, action: 'reopen' };
 		} catch (err) {
 			return handle(err);
 		}

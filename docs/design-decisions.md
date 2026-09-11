@@ -90,6 +90,12 @@ A list moves `draft → shopping → completed`.
   `target = credited + new remaining` with a revision check. Recipe-derived
   targets are never recalculated automatically; more recipes go into a new
   draft.
+- **Complete trip** only stamps the list with `completed` and `completed_at`; it
+  moves no stock. Therefore the stamp can be removed again: **Reopen trip**
+  (also offered as `Undo` in the toast right after completion) puts the list
+  back into `shopping` with a revision check, and keeps every target, credit and
+  pantry lot as it is. This exists because completion is one click with no
+  confirmation, and an accidental click must not end a trip for good.
 - Separate lists do not reserve stock from each other; the UI says so.
 
 ## Transaction invariants
