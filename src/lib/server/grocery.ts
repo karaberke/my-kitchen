@@ -1103,6 +1103,33 @@ export async function completeList(
 	});
 }
 
+/**
+ * Revert an accidental completion. Completion only stamps the list, so the
+ * revert only removes that stamp: targets, credited purchases and the pantry
+ * stay exactly as they were, and the trip continues where it stopped.
+ */
+export async function reopenList(
+	ctx: ActorContext,
+	input: { listId: string; expectedRevision: number }
+) {
+	return withTransaction(async (tx) => {
+		await assertMember(tx, ctx.householdId, ctx.userId);
+		await lockHousehold(tx, ctx.householdId, { grocery: true });
+		const list = await lockList(tx, ctx.householdId, input.listId);
+		if (list.status === 'shopping') return { revision: list.revision };
+		if (list.status !== 'completed')
+			throw new AppError(409, 'Only a completed trip can be reopened');
+		if (list.revision !== input.expectedRevision)
+			throw new ReviewConflict('The list changed since you loaded it', { revision: list.revision });
+		await tx
+			.update(groceryLists)
+			.set({ status: 'shopping', completedAt: null })
+			.where(eq(groceryLists.id, input.listId));
+		const revision = await bumpList(tx, input.listId);
+		return { revision };
+	});
+}
+
 /* ------------------------------ purchases ------------------------------ */
 
 export interface PurchaseInput {

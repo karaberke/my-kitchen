@@ -87,3 +87,39 @@ test('plan two recipes, review pantry subtraction, shop with partial purchases, 
 	await page.goto('/pantry');
 	await expect(page.getByText('1.5 kg', { exact: true }).first()).toBeVisible();
 });
+
+test('revert an accidental trip completion, from the toast and from the list page', async ({
+	page
+}) => {
+	await register(page, 'Dave');
+	await createRecipe(page, {
+		title: 'Soup',
+		servings: '4',
+		ingredient: { amount: '200', unit: 'g', name: 'carrot', match: 'carrot' },
+		step: 'Simmer.'
+	});
+	await page.goto('/recipes');
+	await page.getByRole('link', { name: 'Soup' }).first().click();
+	await page.getByRole('button', { name: 'Add to grocery list' }).click();
+	await page.getByRole('button', { name: 'Add to list' }).click();
+	await expect(page.getByText(/Planned 4 servings/)).toBeVisible();
+	await page.goto('/grocery');
+	await expect(page).toHaveURL(/\/grocery\/[0-9a-f-]{36}$/);
+	await page.getByRole('button', { name: 'Start shopping' }).click();
+	await expect(page.getByText(/Shopping ·/)).toBeVisible();
+
+	// an accidental click on Complete trip is undone from the toast
+	await page.getByRole('button', { name: 'Complete trip' }).click();
+	await expect(page.getByText(/Completed ·/)).toBeVisible();
+	await page.getByRole('button', { name: 'Undo' }).click();
+	await expect(page.getByText('Trip reopened. You can shop again.')).toBeVisible();
+	await expect(page.getByText(/Shopping ·/)).toBeVisible();
+	await expect(page.getByRole('button', { name: /Buy carrot/ })).toBeVisible();
+
+	// and later from the Reopen trip button on the completed list
+	await page.getByRole('button', { name: 'Complete trip' }).click();
+	await expect(page.getByText(/Completed ·/)).toBeVisible();
+	await page.getByRole('button', { name: 'Reopen trip' }).click();
+	await expect(page.getByText(/Shopping ·/)).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Complete trip' })).toBeVisible();
+});

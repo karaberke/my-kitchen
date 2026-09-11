@@ -9,7 +9,9 @@ import {
 	startShopping,
 	updateLine,
 	addManualLine,
-	refreshDraft
+	refreshDraft,
+	completeList,
+	reopenList
 } from '$lib/server/grocery';
 import { createRecipe } from '$lib/server/recipes';
 import { recipeInput } from './helpers';
@@ -397,5 +399,70 @@ describe('grocery planning, shopping and purchases', () => {
 		});
 		expect(handled.result.lineStatus).toBe('handled');
 		expect(handled.result.lotId).toBeNull();
+	});
+	it('reopens a completed trip so an accidental completion can be reverted', async () => {
+		const alice = await createUser('Alice');
+		const roast = await makeChickenRecipe(alice, 'Roast', '500');
+		const listId = await createList(alice.ctx, 'Weekly');
+		await addBatch(alice.ctx, {
+			listId,
+			recipeId: roast,
+			servings: d(4),
+			clientKey: 'k1',
+			includeOptional: []
+		});
+		let detail = await getListDetail(db, alice.householdId, listId);
+
+		// a draft cannot be reopened
+		await expect(
+			reopenList(alice.ctx, { listId, expectedRevision: detail.revision })
+		).rejects.toMatchObject({ status: 409 });
+
+		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
+		detail = await getListDetail(db, alice.householdId, listId);
+		const startedAt = detail.startedAt;
+		await completeList(alice.ctx, { listId, expectedRevision: detail.revision });
+		detail = await getListDetail(db, alice.householdId, listId);
+		expect(detail.status).toBe('completed');
+		expect(detail.completedAt).not.toBeNull();
+		const completedRevision = detail.revision;
+
+		// a stale revision is refused and changes nothing
+		await expect(
+			reopenList(alice.ctx, { listId, expectedRevision: completedRevision - 1 })
+		).rejects.toBeInstanceOf(ReviewConflict);
+		detail = await getListDetail(db, alice.householdId, listId);
+		expect(detail.status).toBe('completed');
+
+		const reopened = await reopenList(alice.ctx, {
+			listId,
+			expectedRevision: completedRevision
+		});
+		expect(reopened.revision).toBeGreaterThan(completedRevision);
+		detail = await getListDetail(db, alice.householdId, listId);
+		expect(detail.status).toBe('shopping');
+		expect(detail.completedAt).toBeNull();
+		expect(detail.startedAt).toBe(startedAt);
+		expect(detail.lines[0].targetAmount).toBe('500');
+
+		// a second reopen is safe and keeps the list in shopping
+		const again = await reopenList(alice.ctx, { listId, expectedRevision: detail.revision });
+		expect(again.revision).toBe(detail.revision);
+		detail = await getListDetail(db, alice.householdId, listId);
+		expect(detail.status).toBe('shopping');
+
+		// shopping works again after the revert
+		const bought = await recordPurchase(alice.ctx, {
+			operationId: opId(),
+			listId,
+			lineId: detail.lines[0].id,
+			bought: { quantity: d(500), unit: 'g' },
+			ingredientId: null,
+			newIngredientName: null,
+			location: 'Fridge',
+			expiresOn: null,
+			note: ''
+		});
+		expect(bought.result.remaining).toBe('0');
 	});
 });
