@@ -30,6 +30,25 @@ export const IMPORT_LIMITS = {
 	image: { windowMs: 60_000, max: 10 }
 } as const;
 
+/** Barcode lookups a signed-in person may ask for. Keyed by user. */
+export const BARCODE_LIMITS = {
+	lookup: { windowMs: 60_000, max: 40 }
+} as const;
+
+/**
+ * What this server may ask of each product database.
+ *
+ * These buckets are NOT keyed by user. Both providers limit by IP address, and
+ * every household on one install shares the server's address, so the whole
+ * process shares one allowance and stays inside the published limits: Open
+ * Food Facts permits 15 product reads a minute per address, and USDA permits
+ * 1000 requests an hour. Both figures are left some headroom.
+ */
+export const PROVIDER_LIMITS = {
+	usda: { windowMs: 3_600_000, max: 800 },
+	off: { windowMs: 60_000, max: 12 }
+} as const;
+
 function sweep(now: number) {
 	if (now - lastSweep < 60_000) return;
 	lastSweep = now;

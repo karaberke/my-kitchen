@@ -15,6 +15,9 @@ import {
 import { undoEvent } from '$lib/server/undo';
 import { AppError, ReviewConflict, asAppError } from '$lib/server/errors';
 import { parseAmount } from '$lib/shared/amount-parse';
+import { identifyAs, identifyManual, SYMBOLOGIES, type Symbology } from '$lib/shared/gtin';
+import { pantryAmount } from '$lib/shared/package-size';
+import type { LinkOrigin } from '$lib/server/db/schema';
 import { isOperationId } from '$lib/server/operations';
 import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
 
@@ -83,6 +86,76 @@ export const actions: Actions = {
 				note: String(fd.get('note') ?? '')
 			});
 			return { ok: true, action: 'add', eventId: out.result.eventId, replayed: out.replayed };
+		} catch (err) {
+			return handle(err);
+		}
+	},
+	/**
+	 * Add a scanned product.
+	 *
+	 * The same authorised write as `add`, with two differences: the quantity is
+	 * worked out here from what one package holds and how many were bought, and
+	 * the household's link for the barcode is written in the same transaction.
+	 * The barcode is validated again on this side, whatever the phone decoded.
+	 */
+	scanAdd: async (event) => {
+		const ctx = ctxOf(event);
+		const fd = await event.request.formData();
+		try {
+			const code = String(fd.get('code') ?? '').slice(0, 40);
+			const rawSymbology = String(fd.get('symbology') ?? '');
+			const symbology = SYMBOLOGIES.includes(rawSymbology as Symbology)
+				? (rawSymbology as Symbology)
+				: null;
+			const identified = symbology ? identifyAs(code, symbology) : identifyManual(code);
+			if (!identified.ok) return fail(400, { message: identified.message, form: 'scan' });
+
+			const per = parseAmount(String(fd.get('packageQuantity') ?? ''));
+			if (!per.ok || !per.value)
+				return fail(400, {
+					message: per.ok ? 'Enter what one package holds' : per.error,
+					form: 'scan'
+				});
+			const unit = String(fd.get('unit') ?? '');
+			const packageCount = Number(fd.get('packageCount') ?? '1');
+			const total = pantryAmount({ amount: per.value, unit }, packageCount);
+			if (!total.ok) return fail(400, { message: total.error, form: 'scan' });
+
+			const ingredientId = String(fd.get('ingredientId') ?? '') || null;
+			const newName = String(fd.get('name') ?? '').trim();
+			const rawOrigin = String(fd.get('origin') ?? 'manual');
+			const origin: LinkOrigin = ['usda', 'off'].includes(rawOrigin)
+				? (rawOrigin as LinkOrigin)
+				: 'manual';
+
+			const out = await addStock(ctx, {
+				operationId: opIdOf(fd),
+				ingredientId,
+				newIngredientName: ingredientId ? null : newName,
+				category: String(fd.get('category') ?? 'Other'),
+				quantity: total.quantity,
+				unit: total.unit,
+				location: String(fd.get('location') ?? ''),
+				expiresOn: String(fd.get('expiresOn') ?? '') || null,
+				note: String(fd.get('note') ?? ''),
+				barcode: {
+					gtin: identified.identity.gtin,
+					displayName: String(fd.get('displayName') ?? '') || newName,
+					brand: String(fd.get('brand') ?? ''),
+					packageQuantity: per.value,
+					packageUnit: unit,
+					packageCount,
+					packageLabelText: String(fd.get('labelText') ?? ''),
+					origin
+				}
+			});
+			return {
+				ok: true,
+				action: 'scanAdd',
+				eventId: out.result.eventId,
+				replayed: out.replayed,
+				gtin: identified.identity.gtin
+			};
 		} catch (err) {
 			return handle(err);
 		}

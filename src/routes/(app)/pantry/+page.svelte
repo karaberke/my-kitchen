@@ -8,6 +8,8 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PollRevisions from '$lib/components/PollRevisions.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
+	import BarcodeScanner from '$lib/components/BarcodeScanner.svelte';
+	import ScanConfirm, { type Scan } from '$lib/components/ScanConfirm.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
 	import { fmtDate, fmtQty } from '$lib/client/format';
@@ -95,6 +97,62 @@
 				}
 			);
 	}
+	/* --- scanning ------------------------------------------------------- */
+
+	let scannerOpen = $state(false);
+	let scan = $state<Scan | null>(null);
+	let scanOpId = $state(newOperationId());
+	let looking = $state(false);
+	let scanner: BarcodeScanner | undefined = $state();
+
+	/**
+	 * A decoded or typed number goes to the server, which validates it again and
+	 * answers what it means for this household. Nothing is stored by this call.
+	 */
+	async function lookUp(code: { raw: string; symbology: string | null }) {
+		looking = true;
+		try {
+			// Built in one go: nothing here is reactive, and a mutable
+			// URLSearchParams in a component is what the lint rule is guarding.
+			const query = new URLSearchParams(
+				code.symbology ? { code: code.raw, symbology: code.symbology } : { code: code.raw }
+			).toString();
+			const res = await fetch(`/api/barcode?${query}`);
+			const body = await res.json().catch(() => null);
+			if (!res.ok || !body?.ok) {
+				pushToast(body?.message ?? 'That barcode could not be read.', { kind: 'error' });
+				scanner?.resume();
+				return;
+			}
+			scannerOpen = false;
+			scan = {
+				code: code.raw,
+				symbology: code.symbology,
+				lookup: body.lookup,
+				suggestion: body.suggestion
+			};
+		} catch {
+			pushToast('Could not reach the server. Check your connection.', { kind: 'error' });
+			scanner?.resume();
+		} finally {
+			looking = false;
+		}
+	}
+
+	function afterScanSave(result: { type: string; data?: Record<string, unknown> }) {
+		if (result.type !== 'success') return;
+		const d = result.data ?? {};
+		scan = null;
+		scanOpId = newOperationId();
+		const eventId = d.eventId as string | undefined;
+		pushToast('Stock added.', {
+			kind: 'success',
+			action: eventId ? { label: 'Undo', onClick: () => undoEventNow(eventId) } : undefined
+		});
+		// Straight back to the viewfinder for the next item in the trolley.
+		scannerOpen = true;
+	}
+
 	async function undoEventNow(eventId: string) {
 		const fd = new FormData();
 		fd.set('operationId', undoOp);
@@ -122,6 +180,9 @@
 		: 'lots'} in stock"
 >
 	<a href="/pantry/history" class="btn-ghost btn-sm hidden sm:inline-flex">History</a>
+	<button class="btn-secondary btn-sm rounded-full" onclick={() => (scannerOpen = true)}
+		>Scan</button
+	>
 	<button class="btn-primary btn-sm rounded-full" onclick={() => openAdd()}>+ Add stock</button>
 </PageHeader>
 
@@ -470,3 +531,19 @@
 		</form>
 	{/if}
 </Sheet>
+
+<BarcodeScanner
+	bind:this={scanner}
+	bind:open={scannerOpen}
+	busy={looking}
+	ondetected={lookUp}
+	onclose={() => (scannerOpen = false)}
+/>
+
+<ScanConfirm
+	{scan}
+	categories={data.categories}
+	operationId={scanOpId}
+	onclose={() => (scan = null)}
+	onresult={afterScanSave}
+/>

@@ -48,7 +48,9 @@ export function applyResponsePolicy(event: RequestEvent, response: Response): Re
 	headers.set('x-content-type-options', 'nosniff');
 	headers.set('referrer-policy', 'strict-origin-when-cross-origin');
 	headers.set('x-frame-options', 'DENY');
-	headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+	// The barcode scanner needs the camera, and only this origin gets it. The
+	// microphone and location are still refused to everyone, this app included.
+	headers.set('permissions-policy', 'camera=(self), microphone=(), geolocation=()');
 	// Only over https: a plain-http LAN install would lock itself out of its own
 	// hostname for a year. The Content-Security-Policy comes from kit.csp.
 	if (event.url.protocol === 'https:')

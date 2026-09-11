@@ -11,6 +11,7 @@ import { ensureAdminAccount } from '$lib/server/bootstrap';
 import { cleanupUnreferencedImages } from '$lib/server/media/images';
 import { cleanupUnreferencedAttachments } from '$lib/server/media/attachments';
 import { cleanupOperations } from '$lib/server/operations';
+import { cleanupBarcodeCache } from '$lib/server/barcode/lookup';
 
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -20,14 +21,17 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
  * An import stores its source file during the *parse* step, before the user has
  * decided to keep anything, and a replaced photo outlives the recipe that
  * referenced it — so both leak on every abandoned edit. Idempotency records
- * accumulate the same way. All three sweeps only ever touch rows nothing
- * references; a referenced image or attachment is never a candidate.
+ * accumulate the same way, and provider product metadata expires on its own
+ * TTL. All four sweeps only ever touch rows nothing references; a referenced
+ * image or attachment is never a candidate, and a household's own barcode
+ * links are never touched.
  */
 async function sweep(): Promise<void> {
 	for (const [what, run] of [
 		['images', cleanupUnreferencedImages],
 		['attachments', cleanupUnreferencedAttachments],
-		['operations', cleanupOperations]
+		['operations', cleanupOperations],
+		['barcode records', cleanupBarcodeCache]
 	] as const) {
 		try {
 			const n = await run();

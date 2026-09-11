@@ -78,11 +78,60 @@ Equivalent one-liner: `./deploy.sh --tunnel-token <token> --origin https://kitch
 
 Optional hardening: in Zero Trust → **Access** → **Applications** you can put a Cloudflare login in front of the hostname so only your family's emails reach the sign-in page. Recommended cache rules and troubleshooting are in [docs/deployment.md](docs/deployment.md).
 
+### Set up barcode scanning
+
+Scanning uses your phone's rear camera inside the website. Products are named by USDA FoodData Central first, by Open Food Facts when USDA does not hold the barcode, and by your own household after you have confirmed a product once.
+
+**1. Serve the app over https.** Browsers give the camera only to a secure page, so `http://192.168.1.20:3003` on a phone cannot scan however the network is set up. Use one of the Cloudflare Tunnel profiles above and open the app through its `https://` hostname. `http://localhost` on the machine itself also counts as secure, which is enough for a quick try on a laptop.
+
+**2. Get a USDA key** (free, about one minute) at <https://fdc.nal.usda.gov/api-key-signup>. It arrives by email.
+
+**3. Put the settings in `.env`:**
+
+```sh
+USDA_API_KEY=<the key from step 2>   # primary source, public-domain data
+OFF_ENABLED=true                     # fallback, the default
+OFF_CONTACT=you@example.com          # Open Food Facts asks callers to identify themselves
+```
+
+**4. Apply the database migration and restart:**
+
+```sh
+docker compose up -d --build
+```
+
+Compose runs the one-shot `migrate` service before the app starts, so this single command is the whole update: it adds the tables the scanner needs and keeps every existing recipe, pantry lot and grocery list untouched. No product database is downloaded or imported.
+
+**5. Check it.** Open the app on your phone through the https address, go to _Pantry_ → **Scan**, and allow the camera when asked. Hold a packaged grocery inside the frame. Confirm the ingredient and what one package holds, say how many you bought, and press **Add to pantry**.
+
+#### How the three sources fit together
+
+| Asked in this order             | Holds                                                                                             | Kept for                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Your household's saved products | Every barcode a member has confirmed here: the ingredient, the package size and the package count | For ever. Never overwritten by a refresh |
+| USDA FoodData Central           | US branded groceries. Public-domain data (CC0)                                                    | 30 days, then asked again                |
+| Open Food Facts                 | Wider, community-maintained. Database under the ODbL, so the source is stored and shown           | 30 days, then asked again                |
+
+The second database is not asked once the first has answered. A barcode no source holds is not a dead end: name the product, confirm the size, and your household recognises it from then on — this is how store brands and club-store packs end up working. Saved products belong to the household, like pantry stock, so everyone who shares your pantry scans a product once, and no other household can see or change it.
+
+#### If you skip the key
+
+Everything above is optional. With no `USDA_API_KEY` that source is skipped; with `OFF_ENABLED=false` so is the other. The app still starts, the scanner still opens, and every barcode simply arrives unnamed for you to name once. A missing or wrong key can never stop the app or the ordinary pantry from working.
+
+#### Notes
+
+- The key is used by the server only. It never reaches the browser and never appears in a log line.
+- The barcode reader runs on the phone and is served from your own server, so scanning needs no outside service at all. Only naming an unknown product reaches the internet.
+- Both databases limit requests by IP address, and your server has one address for everyone who uses it, so the app keeps a shared budget and asks for the same barcode only once at a time.
+- A failed lookup caused by a timeout or an outage is never remembered as "this product does not exist"; only a database actually saying so is.
+- Barcode lookup cannot tell you when a particular package expires. Type the use-by date yourself, as with any other stock.
+
 ## What you get
 
 - **Recipes** – manual entry with drafts, ingredient groups, fractions, tags, photos, scaling, sharing with your household, favorites, print and JSON export.
 - **Grocery lists** – plan recipe batches, see the combined demand minus what the pantry already has, then shop; purchases go straight into the pantry.
 - **Pantry** – stock with locations and use-by dates, corrections, waste, full history with undo.
+- **Barcode scanning** – scan packaged groceries with the phone's rear camera, named by USDA FoodData Central, then Open Food Facts, then whatever your household has confirmed before. Confirm the product and the package size, and it goes into the pantry. Needs an https address ([setup](#set-up-barcode-scanning)); typing the number always works instead.
 - **Households** – invite links, owner/member roles, several households per account, changes visible on other devices within seconds.
 
 Stack: SvelteKit 2, Svelte 5, TypeScript, Tailwind 4, PostgreSQL 17, Drizzle ORM, Better Auth. Node 24, pnpm.
@@ -111,6 +160,7 @@ Create the test database once: `docker compose -f compose.dev.yaml -p my-kitchen
 
 - [Deployment](docs/deployment.md) – all `deploy.sh` and `.env` options, Cloudflare setup and cache rules, updates, backup/restore, troubleshooting
 - [Social sign-in](docs/social-sign-in.md) – add Google, Microsoft or Apple sign-in alongside passwords
+- [Barcode scanning](docs/design-decisions.md#barcode-scanning) – why the camera needs https, which product databases are used and how they are configured, and what is cached
 - Deleting a person and their data: `pnpm delete-user <email> --dry-run`, see [Deployment](docs/deployment.md#deleting-a-person-and-their-data)
 - [Design decisions](docs/design-decisions.md) – ownership, grocery snapshots, transaction invariants, cache policy, deferred features
 - [Measurements](docs/measurements.md) – dataset, query counts, payload sizes, latencies, verification runs

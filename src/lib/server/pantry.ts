@@ -1,11 +1,13 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db, type DbOrTx } from '$lib/server/db';
 import {
+	barcodeLinks,
 	ingredients,
 	inventoryEvents,
 	inventoryMovements,
 	stockLots,
-	groceryLines
+	groceryLines,
+	type LinkOrigin
 } from '$lib/server/db/schema';
 import { assertMember } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
@@ -223,6 +225,41 @@ function validateUnit(unit: string): string {
 	return unit;
 }
 
+/** Provider and phone text, kept to a length a column and a screen can hold. */
+function text(raw: string, max: number): string {
+	return raw.trim().replace(/\s+/g, ' ').slice(0, max);
+}
+
+function validateBarcodeLink(link: BarcodeLinkInput): void {
+	if (!/^[0-9]{14}$/.test(link.gtin)) throw new AppError(400, 'That is not a barcode number');
+	validateUnit(link.packageUnit);
+	if (!link.packageQuantity.isPositive()) throw new AppError(400, 'Enter what one package holds');
+	if (!Number.isInteger(link.packageCount) || link.packageCount < 1 || link.packageCount > 999)
+		throw new AppError(400, 'Enter how many packages, 1 to 999');
+	if (!['usda', 'off', 'manual'].includes(link.origin))
+		throw new AppError(400, 'Unknown product source');
+}
+
+/**
+ * What a scan should remember for next time.
+ *
+ * The quantity here is what ONE package holds, which is not the quantity being
+ * added: that is this amount times the package count, and the caller has
+ * already worked it out. Every text field arrives from a provider or from a
+ * phone, so all of it is treated as untrusted text and trimmed to length.
+ */
+export interface BarcodeLinkInput {
+	/** canonical GTIN-14, already validated by the caller */
+	gtin: string;
+	displayName: string;
+	brand: string;
+	packageQuantity: Dec;
+	packageUnit: string;
+	packageCount: number;
+	packageLabelText: string;
+	origin: LinkOrigin;
+}
+
 export interface AddStockInput {
 	operationId: string;
 	ingredientId: string | null;
@@ -233,13 +270,23 @@ export interface AddStockInput {
 	location: string;
 	expiresOn: string | null;
 	note: string;
+	/** Present when this lot came from a scan. */
+	barcode?: BarcodeLinkInput | null;
 }
 
 export async function addStock(ctx: ActorContext, input: AddStockInput) {
 	if (!input.quantity.isPositive()) throw new AppError(400, 'Enter the amount you are adding');
 	const unit = validateUnit(input.unit);
 	const expiresOn = validateDate(input.expiresOn);
-	const payload = { ...input, quantity: input.quantity.toString(), householdId: ctx.householdId };
+	if (input.barcode) validateBarcodeLink(input.barcode);
+	const payload = {
+		...input,
+		quantity: input.quantity.toString(),
+		barcode: input.barcode
+			? { ...input.barcode, packageQuantity: input.barcode.packageQuantity.toString() }
+			: null,
+		householdId: ctx.householdId
+	};
 	return runOperation(
 		{ operationId: input.operationId, userId: ctx.userId, kind: 'add_stock', payload },
 		async (tx) => {
@@ -285,6 +332,40 @@ export async function addStock(ctx: ActorContext, input: AddStockInput) {
 				expiresOn,
 				note: input.note.trim().slice(0, 300)
 			});
+			if (input.barcode) {
+				// Same transaction as the lot: a household never ends up having
+				// recorded stock it cannot recognise again, or the reverse.
+				const b = input.barcode;
+				const values = {
+					householdId: ctx.householdId,
+					gtin: b.gtin,
+					ingredientId,
+					displayName: text(b.displayName, 120) || name,
+					brand: text(b.brand, 80),
+					defaultQuantity: b.packageQuantity.toDb(),
+					defaultUnit: b.packageUnit,
+					defaultPackageCount: b.packageCount,
+					packageLabelText: text(b.packageLabelText, 120),
+					origin: b.origin
+				};
+				await tx
+					.insert(barcodeLinks)
+					.values({ ...values, createdBy: ctx.userId })
+					.onConflictDoUpdate({
+						target: [barcodeLinks.householdId, barcodeLinks.gtin],
+						// createdBy and origin record the first confirmation and stay put.
+						set: {
+							ingredientId: values.ingredientId,
+							displayName: values.displayName,
+							brand: values.brand,
+							defaultQuantity: values.defaultQuantity,
+							defaultUnit: values.defaultUnit,
+							defaultPackageCount: values.defaultPackageCount,
+							packageLabelText: values.packageLabelText,
+							updatedAt: sql`now()`
+						}
+					});
+			}
 			return { eventId, lotId, ingredientId };
 		}
 	);
