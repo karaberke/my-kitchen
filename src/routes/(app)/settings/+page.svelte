@@ -143,6 +143,13 @@
 		<p class="hint">
 			Versioned JSON with units and ordering metadata. Importing is not part of this release.
 		</p>
+		<div class="mt-3">
+			<a class="btn-secondary btn-sm" href="/settings/ingredient-links">Pantry links</a>
+			<p class="hint">
+				Point the ingredients of your recipes at pantry ingredients, so the recipe pages can show
+				what you have in stock.
+			</p>
+		</div>
 		<form method="post" action="?/consistency" class="mt-3" use:enhance>
 			<button class="btn-ghost btn-sm">Run pantry consistency check</button>
 		</form>

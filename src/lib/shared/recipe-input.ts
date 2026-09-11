@@ -14,6 +14,8 @@ export interface RecipeIngredientInput {
 	optional: boolean;
 	/** user confirmed “create this as my own ingredient” */
 	createIdentity: boolean;
+	/** the app filled the link itself; the form shows it as a proposal to refuse */
+	proposed?: boolean;
 }
 
 export interface RecipeStepInput {
