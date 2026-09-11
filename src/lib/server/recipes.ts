@@ -199,7 +199,6 @@ export interface RecipeIngredientView {
 	/** stock of this ingredient in the household expressed in the ingredient's unit, null when not convertible/untracked */
 	stockAvailable: string | null;
 	stockOther: { quantity: string; unit: string }[];
-	stockTracked: boolean;
 }
 
 export interface RecipeDetail {
@@ -347,13 +346,11 @@ export async function getRecipeDetail(
 		const m = r.ingredientId ? meta.get(r.ingredientId) : undefined;
 		let stockAvailable: string | null = null;
 		const stockOther: { quantity: string; unit: string }[] = [];
-		let tracked = false;
 		if (r.ingredientId) {
 			let sum = Dec.zero;
 			let any = false;
 			for (const lot of lots) {
 				if (lot.ingredientId !== r.ingredientId) continue;
-				tracked = true;
 				const q = Dec.from(lot.quantity);
 				if (r.unit) {
 					const density = m?.gramsPerMl ? Dec.from(m.gramsPerMl) : null;
@@ -382,8 +379,7 @@ export async function getRecipeDetail(
 			optional: r.optional,
 			ingredientCategory: m?.category ?? null,
 			stockAvailable,
-			stockOther,
-			stockTracked: tracked
+			stockOther
 		};
 	});
 

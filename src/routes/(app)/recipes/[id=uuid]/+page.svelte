@@ -56,10 +56,10 @@
 			const amount = ing.amount ? scaleAmount(Dec.from(ing.amount), base, servings) : null;
 			const available = ing.stockAvailable ? Dec.from(ing.stockAvailable) : null;
 			const status = stockStatus({
+				hasPantry: !!data.household,
 				hasIdentity: !!ing.ingredientId,
 				scaledAmount: amount,
 				available,
-				tracked: ing.stockTracked,
 				otherStockCount: ing.stockOther.length
 			});
 			let statusText = STOCK_STATUS_LABEL[status];
@@ -69,7 +69,6 @@
 				statusText = `Short ${show(amount.sub(available), ing.unit)} · ${show(available, ing.unit)} in pantry`;
 			if (status === 'unknown' && ing.stockOther.length)
 				statusText = `Pantry has ${ing.stockOther.map((o) => show(Dec.from(o.quantity), o.unit)).join(', ')} · check while cooking`;
-			if (!ing.amount && ing.ingredientId) statusText = 'Unspecified amount · check while cooking';
 			const line = `${amount ? show(amount, ing.unit) + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}`;
 			const g =
 				out.find((x) => x.name === ing.groupName) ??
@@ -101,14 +100,12 @@
 		available: 'bg-leaf',
 		partial: 'bg-honey',
 		missing: 'bg-brick',
-		untracked: 'bg-fog',
 		unknown: 'bg-fog'
 	};
 	const statusColor: Record<StockStatus, string> = {
 		available: 'text-leaf-dark',
 		partial: 'text-honey-dark',
 		missing: 'text-brick-dark',
-		untracked: 'text-sage-soft',
 		unknown: 'text-sage-soft'
 	};
 
