@@ -78,9 +78,11 @@ services:
     stop_grace_period: 30s
 
   migrate:
-    build:
-      context: .
-      target: runtime
+    # No build: block. It is the same image as `app`, and two services that each
+    # declare a build for one image name make Compose export that image twice —
+    # the second export is pure duplicate work. `app` below builds it; Compose
+    # builds every buildable service before it starts any of them, so the image
+    # is present by the time this one runs.
     image: my-kitchen:latest
     restart: 'no'
     environment: *app-env

@@ -8,6 +8,23 @@ build
 data
 test-results
 playwright-report
-docs/measurements
+docs
 *.log
 .DS_Store
+
+# Worktrees hold whole extra checkouts (node_modules included). Without this
+# line `COPY . .` pulled ~370 MB of them into the build stage.
+.claude
+.vscode
+
+# Test and tooling files. None are read by `vite build`, and leaving them in
+# means every edit to a test busts the cache of the COPY . . layer.
+tests
+playwright.config.ts
+vitest.config.ts
+eslint.config.js
+prettier.config.js
+.prettierignore
+compose*.yaml
+deploy.sh
+*.md
