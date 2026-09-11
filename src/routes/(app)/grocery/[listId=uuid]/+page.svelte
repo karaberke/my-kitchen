@@ -124,7 +124,12 @@
 				kind: 'success'
 			});
 		else if (d.action === 'complete')
-			pushToast('Trip completed and archived.', { kind: 'success' });
+			pushToast('Trip completed and archived.', {
+				kind: 'success',
+				action: { label: 'Undo', onClick: () => reopenNow() }
+			});
+		else if (d.action === 'reopen')
+			pushToast('Trip reopened. You can shop again.', { kind: 'success' });
 		else if (d.action === 'refresh')
 			pushToast('Preview recalculated from current pantry.', { kind: 'success' });
 	}
@@ -142,6 +147,20 @@
 		if (json?.type === 'success')
 			pushToast('Purchase undone: pantry and list credit reversed.', { kind: 'success' });
 		else pushToast('Could not undo. See history for details.', { kind: 'error' });
+		await invalidate('app:grocery');
+	}
+	async function reopenNow() {
+		const fd = new FormData();
+		fd.set('expectedRevision', String(list.revision));
+		const res = await fetch(`/grocery/${list.id}?/reopen`, {
+			method: 'POST',
+			body: fd,
+			headers: { 'x-sveltekit-action': 'true' }
+		});
+		const json = await res.json().catch(() => null);
+		if (json?.type === 'success')
+			pushToast('Trip reopened. You can shop again.', { kind: 'success' });
+		else pushToast('Could not reopen the trip. Reload the page and try again.', { kind: 'error' });
 		await invalidate('app:grocery');
 	}
 	const statusLabel: Record<string, string> = {
@@ -364,6 +383,20 @@
 		>
 			<input type="hidden" name="expectedRevision" value={list.revision} />
 			<button class="btn-primary">Complete trip</button>
+		</form>
+	{:else}
+		<form
+			method="post"
+			action="?/reopen"
+			use:enhance={() =>
+				async ({ result, update }) => {
+					await update({ reset: false });
+					afterMutation(result as never);
+					if (result.type === 'failure') await invalidate('app:grocery');
+				}}
+		>
+			<input type="hidden" name="expectedRevision" value={list.revision} />
+			<button class="btn-secondary">Reopen trip</button>
 		</form>
 	{/if}
 	<a href="/grocery/lists" class="btn-ghost">All lists</a>
