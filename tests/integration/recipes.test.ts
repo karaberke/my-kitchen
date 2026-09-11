@@ -14,7 +14,12 @@ import {
 	setRecipeShare,
 	updateRecipe
 } from '$lib/server/recipes';
-import { acceptInvite, createInvite } from '$lib/server/households';
+import {
+	acceptInvite,
+	createHousehold,
+	createInvite,
+	setActiveHousehold
+} from '$lib/server/households';
 import { addBatch, createList } from '$lib/server/grocery';
 import { addStock } from '$lib/server/pantry';
 import { opId } from './helpers';
@@ -128,7 +133,7 @@ describe('recipes', () => {
 		expect(detail.ingredients[0].amount).toBe('500');
 	});
 
-	it('duplicating a shared recipe records attribution and becomes a private recipe of the duplicator', async () => {
+	it('duplicating a shared recipe records attribution and shares the copy with the duplicator’s active household', async () => {
 		const alice = await createUser('Alice');
 		const bob = await createUser('Bob');
 		await acceptInvite(bob.id, (await createInvite(db, alice.id, alice.householdId)).token);
@@ -157,6 +162,12 @@ describe('recipes', () => {
 		expect(detail.isOwner).toBe(true);
 		expect(detail.sourceAttribution).toContain('Alice');
 		expect(detail.ingredients).toHaveLength(1);
+		// Accepting the invite made Alice's kitchen Bob's active household, so the copy
+		// lands there like any other recipe he adds. It stays his to edit.
+		const aliceView = await getRecipeDetail(db, alice.id, copy, alice.householdId);
+		expect(aliceView.isOwner).toBe(false);
+		// A duplicate the owner unshares is invisible to the rest of the household again.
+		await setRecipeShare(bob.id, copy, alice.householdId, false);
 		await expect(getRecipeDetail(db, alice.id, copy, alice.householdId)).rejects.toMatchObject({
 			status: 404
 		});
@@ -243,7 +254,10 @@ describe('recipes', () => {
 		);
 		await setRecipeShare(alice.id, archived, alice.householdId, true);
 		await setRecipeArchived(alice.id, archived, true);
-		await createRecipe(alice.id, recipeInput({ title: 'Private', ingredients: [] }));
+		// New recipes are shared with the active household at birth, so a private one
+		// is a recipe its owner unshared again.
+		const priv = await createRecipe(alice.id, recipeInput({ title: 'Private', ingredients: [] }));
+		await setRecipeShare(alice.id, priv, alice.householdId, false);
 		for (const viewer of [alice, bob]) {
 			const cards = await listRecipes(
 				db,
@@ -306,5 +320,43 @@ describe('recipes', () => {
 		const collection = await exportRecipes(db, bob.id, { scope: 'mine' });
 		expect(collection.recipes).toHaveLength(0);
 		await updateRecipe(alice.id, id, recipeInput({ title: 'Exportable 2', ingredients: [] }), null);
+	});
+
+	it('a new recipe is shared with the active household automatically', async () => {
+		const alice = await createUser('Alice');
+		const bob = await createUser('Bob');
+		await acceptInvite(bob.id, (await createInvite(db, alice.id, alice.householdId)).token);
+		const id = await createRecipe(
+			alice.id,
+			recipeInput({ title: 'Shared on save', ingredients: [] })
+		);
+		const detail = await getRecipeDetail(db, bob.id, id, alice.householdId);
+		expect(detail.title).toBe('Shared on save');
+		expect(detail.isOwner).toBe(false);
+	});
+
+	it('an edit does not re-share a recipe the owner unshared', async () => {
+		const alice = await createUser('Alice');
+		const bob = await createUser('Bob');
+		await acceptInvite(bob.id, (await createInvite(db, alice.id, alice.householdId)).token);
+		const id = await createRecipe(alice.id, recipeInput({ title: 'Secret', ingredients: [] }));
+		await setRecipeShare(alice.id, id, alice.householdId, false);
+		await updateRecipe(alice.id, id, recipeInput({ title: 'Secret v2', ingredients: [] }), null);
+		await expect(getRecipeDetail(db, bob.id, id, alice.householdId)).rejects.toMatchObject({
+			status: 404
+		});
+	});
+
+	it('only the active household of two gets the new recipe', async () => {
+		const alice = await createUser('Alice');
+		const second = await createHousehold(db, alice.id, 'Beach house');
+		await setActiveHousehold(db, alice.id, second);
+		const id = await createRecipe(
+			alice.id,
+			recipeInput({ title: 'Beach dinner', ingredients: [] })
+		);
+		const detail = await getRecipeDetail(db, alice.id, id, second);
+		expect(detail.shares.find((s) => s.householdId === second)?.shared).toBe(true);
+		expect(detail.shares.find((s) => s.householdId === alice.householdId)?.shared).toBe(false);
 	});
 });

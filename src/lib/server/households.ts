@@ -59,6 +59,28 @@ export async function listMemberships(db: DbOrTx, userId: string): Promise<Membe
 	return rows;
 }
 
+/**
+ * The active household read straight from the database, for server code that has
+ * no request locals. Same rule as resolveActiveHousehold: the stored preference
+ * while the user is still a member, otherwise their first membership.
+ */
+export async function getActiveHouseholdId(db: DbOrTx, userId: string): Promise<string | null> {
+	const rows = await db
+		.select({ householdId: householdMembers.householdId })
+		.from(householdMembers)
+		.innerJoin(households, eq(households.id, householdMembers.householdId))
+		.where(eq(householdMembers.userId, userId))
+		.orderBy(
+			desc(
+				sql`${householdMembers.householdId} = (select p.active_household_id from user_preference p where p.user_id = ${userId})`
+			),
+			asc(households.createdAt),
+			asc(households.id)
+		)
+		.limit(1);
+	return rows[0]?.householdId ?? null;
+}
+
 export async function getMembership(db: DbOrTx, householdId: string, userId: string) {
 	const rows = await db
 		.select({ role: householdMembers.role })

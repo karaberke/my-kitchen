@@ -67,7 +67,7 @@ test.describe('recipes', () => {
 		expect(gone.status()).toBe(404);
 	});
 
-	test('a private recipe is denied to another user until shared, then visible via household', async ({
+	test('a recipe is denied to a stranger, reaches the household automatically, and follows unshare and removal', async ({
 		browser
 	}) => {
 		const ctxA = await browser.newContext();
@@ -96,15 +96,24 @@ test.describe('recipes', () => {
 		await expect(b).toHaveURL(/\/household/);
 		await expect(b.getByText('Bob (you)')).toBeVisible();
 
-		// share
-		await a.goto(`/recipes/${id}`);
-		await a.getByRole('button', { name: 'Share…' }).click();
-		await a.getByRole('button', { name: 'Share', exact: true }).click();
-		await expect(a.getByRole('button', { name: 'Unshare' })).toBeVisible();
+		// Alice never pressed Share: the recipe went to her active household when she
+		// saved it, so joining that household is enough for Bob to read it.
 		await b.goto(`/recipes/${id}`);
 		await expect(b.getByRole('heading', { name: 'Alice private dal' })).toBeVisible();
 		await expect(b.getByRole('link', { name: 'Edit' })).toHaveCount(0);
 		expect((await b.request.get(`/recipes/${id}/edit`)).status()).toBe(403);
+
+		// unshare, then share again: the owner keeps control of the share
+		await a.goto(`/recipes/${id}`);
+		await a.getByRole('button', { name: 'Share…' }).click();
+		await a.getByRole('button', { name: 'Unshare' }).click();
+		await expect(a.getByRole('button', { name: 'Share', exact: true })).toBeVisible();
+		await b.goto(`/recipes/${id}`);
+		await expect(b.getByText('Nothing here')).toBeVisible();
+		await a.getByRole('button', { name: 'Share', exact: true }).click();
+		await expect(a.getByRole('button', { name: 'Unshare' })).toBeVisible();
+		await b.goto(`/recipes/${id}`);
+		await expect(b.getByRole('heading', { name: 'Alice private dal' })).toBeVisible();
 
 		// remove Bob from the household: access ends immediately
 		await a.goto('/household');
