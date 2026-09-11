@@ -39,7 +39,10 @@ export const importedRecipeSchema = z.object({
 		tags: str(500),
 		convention: str(20),
 		ingredients: z.array(ingredient).max(200).catch([]),
-		steps: z.array(step).max(200).catch([])
+		steps: z.array(step).max(200).catch([]),
+		// Only prefills the field. The server downloads it when the user saves, and
+		// the user can see it and clear it first.
+		imageUrl: str(2000)
 	})
 });
 

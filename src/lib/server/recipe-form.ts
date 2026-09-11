@@ -3,7 +3,12 @@ import type { RequestEvent } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { createCustomIngredient } from '$lib/server/ingredients';
-import { deleteImageIfUnreferenced, storeRecipeImage } from '$lib/server/media/images';
+import {
+	deleteImageIfUnreferenced,
+	storeRecipeImage,
+	storeRecipeImageFromUrl
+} from '$lib/server/media/images';
+import { IMPORT_LIMITS, consume } from '$lib/server/ratelimit';
 import { createRecipe, updateRecipe } from '$lib/server/recipes';
 import { parseRecipeForm, validateRecipe, type RecipeFormInput } from '$lib/shared/recipe-input';
 
@@ -32,8 +37,19 @@ export async function handleRecipeSubmit(event: RequestEvent, recipeId: string |
 	let imageId: string | null | undefined = undefined;
 	const file = fd.get('image');
 	try {
+		// A chosen file beats a pasted link: the file is the more deliberate act.
 		if (file instanceof File && file.size > 0) imageId = await storeRecipeImage(user.id, file);
-		else if (input.removeImage) imageId = null;
+		else if (input.imageUrl) {
+			// The fetch reaches any address this host can route to, by decision. The
+			// bucket is the only thing bounding that, so it is checked before the request.
+			const limit = consume(`image-url:${user.id}`, IMPORT_LIMITS.image);
+			if (!limit.allowed)
+				throw new AppError(
+					429,
+					`Too many pictures from links. Try again in ${limit.retryAfterSeconds} seconds.`
+				);
+			imageId = await storeRecipeImageFromUrl(user.id, input.imageUrl);
+		} else if (input.removeImage) imageId = null;
 	} catch (err) {
 		if (err instanceof AppError)
 			return fail(err.status, {
@@ -86,6 +102,7 @@ export function emptyRecipeInput(): RecipeFormClientInput {
 		steps: [],
 		intent: 'save',
 		expectedRevision: null,
-		removeImage: false
+		removeImage: false,
+		imageUrl: ''
 	};
 }

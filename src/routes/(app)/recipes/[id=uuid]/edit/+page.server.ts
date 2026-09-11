@@ -41,7 +41,10 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		steps: recipe.steps.map((s) => ({ section: s.sectionTitle, text: s.text })),
 		intent: 'save',
 		expectedRevision: recipe.revision,
-		removeImage: false
+		removeImage: false,
+		// Always empty: the picture the recipe has is shown as a picture, not as a
+		// link, and a link left here would be downloaded again on every save.
+		imageUrl: ''
 	};
 	return {
 		title: `Edit ${recipe.title}`,
