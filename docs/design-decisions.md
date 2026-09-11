@@ -191,9 +191,98 @@ them hourly (and once at start-up):
 The grace period matters: a sweep that ran immediately would race a review form
 the user still has open. Nothing referenced is ever a candidate.
 
+## Barcode scanning
+
+**The camera needs https.** `getUserMedia` is only given to a secure context,
+so a phone opening `http://<LAN IP>:3003` cannot scan however well the network
+works. The Cloudflare Tunnel profiles already serve https; that is the access
+path to document to anyone who wants to scan. The scanner says so itself rather
+than appearing broken, and manual entry stays available beside the viewfinder.
+
+`Permissions-Policy` therefore grants `camera=(self)`; the microphone and
+location stay refused. `script-src` carries `wasm-unsafe-eval`, without which
+Chrome refuses to compile the reader's WebAssembly while Safari carries on —
+which would look like an Android-only fault. It permits WebAssembly only, not
+`eval`.
+
+**The decoder is on the device.** `zxing-wasm/reader` is imported only when the
+scanner opens, and its `.wasm` file is imported with Vite's `?url` so it is
+emitted as a hashed asset under `_app/immutable/` and served from this origin
+with the immutable policy. The library would otherwise fetch it from jsDelivr,
+which a home install cannot rely on. The version is whatever is installed;
+nothing is pinned by hand.
+
+**Identity is a canonical GTIN.** `src/lib/shared/gtin.ts` validates the check
+digit, expands a UPC-E before padding, and compares on 14 digits, so a UPC-A,
+the EAN-13 that carries its leading zero, and the UPC-E that expands to it are
+one product. Eight digits are ambiguous — UPC-E and EAN-8 share that length and
+mean different things — so the reading must be stated, never guessed. Arbitrary
+text is never reduced to its digits: a QR code, a URL or a retailer's own
+variable-weight label goes to manual entry, because those are not globally
+unique product numbers. A failed check digit is a refusal, not a way into the
+shared product cache; ordinary pantry entry is the answer.
+
+**Package size, package count and serving size are three things.** The
+confirmation screen asks what one package holds and how many were bought, and
+stores their product: two 500 g bags are 1000 g, in one lot, because one
+purchase is one lot. A serving size is never used as a package size. Provider
+text such as `9.5 oz (269 g)` is parsed conservatively into an editable
+suggestion — two statements of one quantity are accepted, `1 lb 8 oz` is not —
+and ounces are kept apart from fluid ounces. `12 x 330 ml` sets the package
+count. Anything unclear stays unknown, and the user types the amount.
+
+**Ownership follows the pantry.** `barcode_link` is keyed by household, like
+stock, so every member scans a product once. `barcode_product` and
+`barcode_miss` are shared provider metadata with a TTL; a household's link is
+personal, has no TTL, and is never overwritten by a refresh. The confirmation
+screen shows the provider's values beside the household's own, so a correction
+is visible rather than silently replaced.
+
+**Lookup is a read.** `/api/barcode` re-validates the number server-side,
+whatever the phone decoded, and answers for the caller's household only. It may
+write provider metadata; it never touches inventory. The save reuses
+`addStock`, so the existing operation-id idempotency and `assertMember` guard it
+unchanged, and the link is written in the same transaction as the lot.
+
+**Providers.** USDA first (public domain), Open Food Facts second, and the
+second is not asked once the first has answered. USDA's search is a text search,
+so results are filtered by GTIN equality and the newest publication date wins,
+with the fdcId breaking ties; a fuzzy name match is never accepted. Both
+adapters check that the record they got back is the record that was asked for.
+Found, confirmed-missing, disabled, throttled and temporarily unavailable are
+five different answers: only a confirmed miss is stored, so an outage never
+becomes a remembered absence. Successful metadata lives 30 days, a confirmed
+miss 24 hours, recorded per source.
+
+Both providers limit by IP address and every household here shares one, so
+`PROVIDER_LIMITS` is a process-wide budget rather than a per-user one, and
+concurrent lookups of the same barcode are collapsed into one request. Missing
+configuration is never a failure: without `USDA_API_KEY` that source is skipped,
+and with `OFF_ENABLED=false` so is the other. The app starts and the pantry
+works either way.
+
+**Licensing.** USDA data are CC0. Open Food Facts database data are ODbL, which
+carries attribution and share-alike duties that a separate table does not
+remove, so `source` is stored with every cached record and shown on screen. No
+product images are requested; their terms differ again. Nothing is published,
+and no correction is ever sent back to a provider.
+
+**Not tested on a phone by the test suite.** Desktop emulation and a mocked
+video stream prove the transitions, not the hardware. Before trusting this on a
+shopping trip, check on the real devices: an iPhone on Safari and an Android on
+Chrome, both over the https address; the permission prompt, and a refusal; a
+small barcode in poor light; the torch button where it exists; locking the
+phone mid-scan and coming back; and a rotated or curved label.
+
 ## Deferred on purpose
 
-Meal calendars, nutrition, barcode scanning, recommendations, public
-publishing, cross-list stock reservations, offline mutation queues,
-ingredient-to-step linking, email-based password reset, alias management UI for
-custom ingredients, and signed direct S3 downloads.
+Meal calendars, nutrition display, recommendations, public publishing,
+cross-list stock reservations, offline mutation queues, ingredient-to-step
+linking, email-based password reset, alias management UI for custom
+ingredients, and signed direct S3 downloads.
+
+Nutrition _metadata_ is stored although nothing shows it: nutrient identifier
+and number, unit, value, the 100 g or 100 ml basis, the serving, and the source
+with its version and date. Storing it while a record is being fetched anyway
+avoids fetching every product again later. A missing value is null, which is
+unknown and is not zero.

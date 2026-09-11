@@ -14,6 +14,10 @@ export async function resetDb() {
 	await db.execute(sql`delete from household`);
 	await db.execute(sql`delete from "user"`);
 	await db.execute(sql`delete from ingredient where owner_user_id is not null`);
+	// Provider metadata is a shared cache, not tenant data, so no cascade
+	// reaches it. Clearing it keeps one test from seeing another's lookups.
+	await db.execute(sql`delete from barcode_product`);
+	await db.execute(sql`delete from barcode_miss`);
 }
 
 export interface TestUser {

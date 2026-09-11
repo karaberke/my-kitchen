@@ -602,3 +602,157 @@ export const mealPlanEntries = pgTable(
 		check('meal_plan_entry_title_chk', sql`length(btrim(${t.title})) > 0`)
 	]
 );
+
+/* ------------------------------------------------------------------------ */
+/* Barcode products                                                          */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Three kinds of row are kept apart on purpose.
+ *
+ * `barcode_product` and `barcode_miss` are provider metadata, shared by every
+ * household and thrown away when their TTL passes. `barcode_link` is what a
+ * household confirmed: it is personal data, it is never overwritten by a
+ * refresh, and it outlives any provider record.
+ *
+ * USDA data are CC0. Open Food Facts database data are ODbL, which carries
+ * attribution and share-alike duties, so `source` travels with every cached
+ * row and with every link that was seeded from one. Keeping the rows in
+ * separate tables does not remove those duties.
+ */
+
+export type BarcodeSource = 'usda' | 'off';
+export type LinkOrigin = 'usda' | 'off' | 'manual';
+/** What a nutrient value is measured against. Never inferred. */
+export type NutritionBasis = 'serving' | 'per_100g' | 'per_100ml';
+
+export const barcodeProducts = pgTable(
+	'barcode_product',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		/** canonical GTIN-14, the only equality key */
+		gtin: text('gtin').notNull(),
+		source: text('source').$type<BarcodeSource>().notNull(),
+		/** USDA fdcId, or the Open Food Facts code */
+		sourceRef: text('source_ref').notNull(),
+		/** USDA dataset version, or the OFF revision */
+		sourceVersion: text('source_version'),
+		/** publication or last-modified date the provider reported */
+		sourceDate: date('source_date', { mode: 'string' }),
+		brand: text('brand').notNull().default(''),
+		name: text('name').notNull(),
+		/** net contents, when the provider stated them in a unit we support */
+		packageAmount: qty('package_amount'),
+		packageUnit: text('package_unit'),
+		/** the net-contents text exactly as printed, kept even when unparsed */
+		packageLabelText: text('package_label_text').notNull().default(''),
+		/** the nutrition panel's serving, never a package size */
+		servingAmount: qty('serving_amount'),
+		servingUnit: text('serving_unit'),
+		servingBasis: text('serving_basis').$type<NutritionBasis>(),
+		retrievedAt: timestamptz('retrieved_at').notNull().defaultNow(),
+		expiresAt: timestamptz('expires_at').notNull()
+	},
+	(t) => [
+		uniqueIndex('barcode_product_gtin_source_uq').on(t.gtin, t.source),
+		index('barcode_product_expires_idx').on(t.expiresAt),
+		check('barcode_product_source_chk', sql`${t.source} in ('usda','off')`),
+		check('barcode_product_gtin_chk', sql`${t.gtin} ~ '^[0-9]{14}$'`),
+		check(
+			'barcode_product_serving_basis_chk',
+			sql`${t.servingBasis} is null or ${t.servingBasis} in ('serving','per_100g','per_100ml')`
+		)
+	]
+);
+
+/**
+ * One nutrient as the provider reported it. A missing value stays null, which
+ * is unknown and is not zero. USDA nutrient ids and nutrient numbers are
+ * different identifiers and both are kept.
+ */
+export const barcodeProductNutrients = pgTable(
+	'barcode_product_nutrient',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		productId: uuid('product_id')
+			.notNull()
+			.references(() => barcodeProducts.id, { onDelete: 'cascade' }),
+		/** USDA nutrient id (a number); null for a provider that has none */
+		nutrientId: integer('nutrient_id'),
+		/** USDA nutrient number ("203"), or the OFF field key ("proteins") */
+		nutrientNumber: text('nutrient_number').notNull(),
+		name: text('name').notNull(),
+		unit: text('unit').notNull(),
+		value: numeric('value', { precision: 16, scale: 6 }),
+		basis: text('basis').$type<NutritionBasis>().notNull()
+	},
+	(t) => [
+		uniqueIndex('barcode_product_nutrient_uq').on(t.productId, t.nutrientNumber, t.basis),
+		check(
+			'barcode_product_nutrient_basis_chk',
+			sql`${t.basis} in ('serving','per_100g','per_100ml')`
+		)
+	]
+);
+
+/**
+ * A source that answered "this product is not in my database". A timeout, a
+ * throttle or a malformed answer is never written here: those are temporary
+ * and must not become a stored miss.
+ */
+export const barcodeMisses = pgTable(
+	'barcode_miss',
+	{
+		gtin: text('gtin').notNull(),
+		source: text('source').$type<BarcodeSource>().notNull(),
+		confirmedAt: timestamptz('confirmed_at').notNull().defaultNow(),
+		expiresAt: timestamptz('expires_at').notNull()
+	},
+	(t) => [
+		primaryKey({ columns: [t.gtin, t.source] }),
+		index('barcode_miss_expires_idx').on(t.expiresAt),
+		check('barcode_miss_source_chk', sql`${t.source} in ('usda','off')`),
+		check('barcode_miss_gtin_chk', sql`${t.gtin} ~ '^[0-9]{14}$'`)
+	]
+);
+
+/**
+ * What one household confirmed for one barcode: which ingredient it is, and
+ * the package it comes in. Pantry stock belongs to a household, so this does
+ * too, and one household can never read or change another's.
+ *
+ * A refresh of provider metadata never touches these columns. The confirmation
+ * screen shows the provider's values beside them, so a local edit is visible
+ * as a difference rather than as a hidden overwrite.
+ */
+export const barcodeLinks = pgTable(
+	'barcode_link',
+	{
+		householdId: uuid('household_id')
+			.notNull()
+			.references(() => households.id, { onDelete: 'cascade' }),
+		gtin: text('gtin').notNull(),
+		ingredientId: uuid('ingredient_id')
+			.notNull()
+			.references(() => ingredients.id, { onDelete: 'cascade' }),
+		/** the name this household reads, which may differ from the provider's */
+		displayName: text('display_name').notNull(),
+		brand: text('brand').notNull().default(''),
+		defaultQuantity: qty('default_quantity'),
+		defaultUnit: text('default_unit'),
+		defaultPackageCount: integer('default_package_count').notNull().default(1),
+		packageLabelText: text('package_label_text').notNull().default(''),
+		/** where the first confirmation came from; 'manual' means nobody had it */
+		origin: text('origin').$type<LinkOrigin>().notNull(),
+		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		createdAt: timestamptz('created_at').notNull().defaultNow(),
+		updatedAt: timestamptz('updated_at').notNull().defaultNow()
+	},
+	(t) => [
+		primaryKey({ columns: [t.householdId, t.gtin] }),
+		index('barcode_link_ingredient_idx').on(t.ingredientId),
+		check('barcode_link_origin_chk', sql`${t.origin} in ('usda','off','manual')`),
+		check('barcode_link_gtin_chk', sql`${t.gtin} ~ '^[0-9]{14}$'`),
+		check('barcode_link_package_count_chk', sql`${t.defaultPackageCount} between 1 and 999`)
+	]
+);

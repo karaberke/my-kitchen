@@ -75,6 +75,52 @@ const schema = z.object({
 		.min(1024)
 		.default(5 * 1024 * 1024),
 	IMAGE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
+
+	/**
+	 * Barcode lookup. Every value is optional: an install that sets none still
+	 * scans, still recognises what the household saved before, and still adds
+	 * stock by hand. USDA is simply skipped when it has no key.
+	 */
+	USDA_API_KEY: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim()),
+	/**
+	 * Only ever changed to point the tests at a local stub. Provider calls are
+	 * made by this process, not by the browser, so a browser-side mock cannot
+	 * reach them.
+	 */
+	USDA_BASE_URL: z
+		.string()
+		.optional()
+		.default('https://api.nal.usda.gov')
+		.transform((v) => v.trim().replace(/\/+$/, ''))
+		.refine(
+			(v) => /^https?:\/\/[^\s/]+$/.test(v),
+			'USDA_BASE_URL must be an origin such as https://api.nal.usda.gov'
+		),
+	OFF_ENABLED: z
+		.string()
+		.optional()
+		.default('true')
+		.transform((v) => !['false', '0', 'no', 'off'].includes(v.trim().toLowerCase())),
+	/** Point this at https://world.openfoodfacts.net to work against staging. */
+	OFF_BASE_URL: z
+		.string()
+		.optional()
+		.default('https://world.openfoodfacts.org')
+		.transform((v) => v.trim().replace(/\/+$/, ''))
+		.refine(
+			(v) => /^https:\/\/[^\s/]+$/.test(v),
+			'OFF_BASE_URL must be an https origin such as https://world.openfoodfacts.org'
+		),
+	/** Open Food Facts asks every caller to identify itself and leave a contact. */
+	OFF_CONTACT: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim().slice(0, 120)),
 	NODE_ENV: z.string().optional().default('development')
 });
 

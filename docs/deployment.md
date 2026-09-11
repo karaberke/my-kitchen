@@ -58,6 +58,35 @@ are set in `.env`, so leaving them blank keeps a password-only install unchanged
 Setup steps, the redirect URI each provider needs, and Apple's six-month secret rotation
 are in [docs/social-sign-in.md](social-sign-in.md).
 
+## Barcode scanning: USDA_API_KEY, OFF_ENABLED, OFF_CONTACT
+
+Optional, like social sign-in, and off in the sense that matters: with none of these set
+the scanner still opens, still reads a barcode, and still adds stock — it just cannot name
+a product nobody in your household has confirmed yet. Nothing here can stop the app from
+starting.
+
+| Variable       | Effect when empty or false                                                             |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `USDA_API_KEY` | USDA is skipped entirely. Free key from <https://fdc.nal.usda.gov/api-key-signup>.     |
+| `OFF_ENABLED`  | `false` skips Open Food Facts. Default `true`.                                         |
+| `OFF_CONTACT`  | Open Food Facts is told your `ORIGIN` instead. It asks callers to identify themselves. |
+
+The key is read by the app process only, is never sent to the browser, and never appears
+in a log line: failures are reported as the kind of failure, not the request. In Compose it
+reaches the container the same way every other variable does, from `.env`; nothing extra is
+needed.
+
+**The camera needs https.** Browsers give `getUserMedia` only to a secure context, so a
+phone opening `http://192.168.1.20:3003` cannot scan whatever the permissions say. Use one
+of the Cloudflare Tunnel profiles above and open the app through the https hostname. The
+scanner explains this on screen rather than looking broken, and the number can always be
+typed instead.
+
+Caching: successful product metadata is kept for 30 days, a confirmed "not in this
+database" for 24 hours, recorded per source. Timeouts and throttling are never cached. What
+your household confirmed is kept separately, has no expiry, and is never overwritten by a
+refresh. The hourly sweep drops expired provider rows and touches nothing else.
+
 ## Deleting a person and their data
 
 There is no admin screen for this — it is a script, because it is irreversible and
@@ -195,6 +224,10 @@ curl -sI https://kitchen.example.com/_app/immutable/<hashed file> | grep -i -E '
 - `robots.txt` is served by an app route with `public, max-age=600, must-revalidate`; the
   favicon is a hashed asset. Keep the `static/` directory for truly public files only;
   anything there bypasses the app's hooks and gets no explicit `Cache-Control`.
+- The barcode reader's `zxing_reader.<hash>.wasm` is one of those hashed assets, about
+  930 KB, fetched once when the scanner is first opened and then cached for a year. It is
+  built into the image; the app never downloads it from a CDN. To check an image you have
+  built: `docker run --rm my-kitchen:latest sh -c 'ls build/client/_app/immutable/assets/*.wasm'`.
 
 ## DATABASE_SSL
 
