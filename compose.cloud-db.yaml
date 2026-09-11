@@ -48,9 +48,8 @@ x-cloudflared: &cloudflared
 
 services:
   migrate:
-    build:
-      context: .
-      target: runtime
+    # No build: block — see the note in compose.yaml. Two services declaring a
+    # build for one image name make Compose export that image twice.
     image: my-kitchen:latest
     restart: 'no'
     environment: *app-env
