@@ -1,31 +1,30 @@
 import { Dec } from './decimal';
 
-export type StockStatus = 'available' | 'partial' | 'missing' | 'untracked' | 'unknown';
+export type StockStatus = 'available' | 'partial' | 'missing' | 'unknown';
 
 /**
  * Availability indicator for one recipe ingredient at the current scale.
- * - unknown: no identity, no amount, or stock only in incompatible units
- * - untracked: identity known but nothing in the pantry
+ * - missing: the pantry holds none of this ingredient
+ * - unknown: no pantry, no identity, or stock only in incompatible units
  */
 export function stockStatus(input: {
+	hasPantry: boolean;
 	hasIdentity: boolean;
 	scaledAmount: Dec | null;
 	available: Dec | null;
-	tracked: boolean;
 	otherStockCount: number;
 }): StockStatus {
-	if (!input.hasIdentity || input.scaledAmount === null) return 'unknown';
-	if (!input.tracked) return 'untracked';
-	if (input.available === null) return input.otherStockCount ? 'unknown' : 'untracked';
-	if (input.available.gte(input.scaledAmount)) return 'available';
-	if (input.available.isPositive()) return 'partial';
-	return input.otherStockCount ? 'unknown' : 'missing';
+	if (!input.hasPantry || !input.hasIdentity) return 'unknown';
+	const none = input.otherStockCount ? 'unknown' : 'missing';
+	if (input.available === null) return none;
+	if (!input.available.isPositive()) return none;
+	if (input.scaledAmount === null) return 'available';
+	return input.available.gte(input.scaledAmount) ? 'available' : 'partial';
 }
 
 export const STOCK_STATUS_LABEL: Record<StockStatus, string> = {
 	available: 'In pantry',
 	partial: 'Partly in pantry',
-	missing: 'Missing',
-	untracked: 'Not tracked in pantry',
+	missing: 'Not in pantry',
 	unknown: 'Check while cooking'
 };
