@@ -13,6 +13,7 @@ import {
 	user
 } from '$lib/server/db/schema';
 import { assertRecipeOwner, assertRecipeReadable, recipeReadableBy } from '$lib/server/access';
+import { getActiveHouseholdId } from '$lib/server/households';
 import { assertIngredientsVisible, getIngredientMeta } from '$lib/server/ingredients';
 import { AppError, ReviewConflict, notFound } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
@@ -229,7 +230,7 @@ export interface RecipeDetail {
 	ingredients: RecipeIngredientView[];
 	steps: { id: string; position: number; sectionTitle: string; text: string }[];
 	/** households the viewer belongs to, with share flag (owner only) */
-	shares: { householdId: string; name: string; shared: boolean }[];
+	shares: { householdId: string; name: string; shared: boolean; memberCount: number }[];
 	createdAt: string;
 	updatedAt: string;
 	cookable: boolean;
@@ -312,12 +313,19 @@ export async function getRecipeDetail(
 			? dbx
 					.select({
 						householdId: householdMembers.householdId,
-						name: sql<string>`(select h.name from household h where h.id = ${householdMembers.householdId})`,
-						shared: sql<boolean>`exists (select 1 from ${recipeShares} rs where rs.recipe_id = ${recipeId} and rs.household_id = ${householdMembers.householdId})`
+						// The outer column is spelled out: interpolating householdMembers.householdId
+						// renders it unqualified, and inside the subquery that name binds to the
+						// inner table instead — rs.household_id = rs.household_id, true for every
+						// household as soon as the recipe was shared with any one of them.
+						name: sql<string>`(select h.name from household h where h.id = household_member.household_id)`,
+						shared: sql<boolean>`exists (select 1 from recipe_share rs where rs.recipe_id = ${recipeId} and rs.household_id = household_member.household_id)`,
+						memberCount: sql<number>`(select count(*)::int from household_member m2 where m2.household_id = household_member.household_id)`
 					})
 					.from(householdMembers)
 					.where(eq(householdMembers.userId, userId))
-			: Promise.resolve([] as { householdId: string; name: string; shared: boolean }[])
+			: Promise.resolve(
+					[] as { householdId: string; name: string; shared: boolean; memberCount: number }[]
+				)
 	]);
 
 	const ingredientIds = ingRows.map((r) => r.ingredientId).filter((x): x is string => !!x);
@@ -494,8 +502,20 @@ export async function createRecipe(
 			})
 			.returning({ id: recipes.id });
 		await writeRows(tx, row.id, value);
+		await shareWithActiveHousehold(tx, userId, row.id);
 		return row.id;
 	});
+}
+
+/**
+ * A recipe belongs to the kitchen its author was standing in: every new recipe is
+ * shared with the author's active household at birth. Sharing later remains the
+ * owner's call — an edit never re-shares what they unshared.
+ */
+async function shareWithActiveHousehold(tx: DbOrTx, userId: string, recipeId: string) {
+	const householdId = await getActiveHouseholdId(tx, userId);
+	if (!householdId) return;
+	await tx.insert(recipeShares).values({ recipeId, householdId }).onConflictDoNothing();
 }
 
 /** Update with optimistic concurrency: the expected revision must match. */
@@ -620,6 +640,7 @@ export async function duplicateRecipe(userId: string, recipeId: string): Promise
 			from recipe_ingredient where recipe_id = ${src.id}`);
 		await tx.execute(sql`insert into recipe_step (recipe_id, position, section_title, text)
 			select ${created.id}, position, section_title, text from recipe_step where recipe_id = ${src.id}`);
+		await shareWithActiveHousehold(tx, userId, created.id);
 		return created.id;
 	});
 }

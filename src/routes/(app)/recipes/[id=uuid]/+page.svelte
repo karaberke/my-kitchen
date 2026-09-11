@@ -5,7 +5,7 @@
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
-	import { fmtMinutes, fmtNum } from '$lib/client/format';
+	import { fmtMinutes, fmtNum, ownerShareLabel } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
 	import { scaleAmount } from '$lib/shared/scaling';
 	import { displayQuantity } from '$lib/shared/display-units';
@@ -124,14 +124,7 @@
 
 <PageHeader
 	title={r.title}
-	subtitle={r.isOwner
-		? r.shares.some((s) => s.shared)
-			? `Yours · shared with ${r.shares
-					.filter((s) => s.shared)
-					.map((s) => s.name)
-					.join(', ')}`
-			: 'Yours · private'
-		: `Shared by ${r.ownerName}`}
+	subtitle={r.isOwner ? ownerShareLabel(r.shares) : `Shared by ${r.ownerName}`}
 	back="/recipes"
 >
 	{#if r.isOwner}<a href="/recipes/{r.id}/edit" class="btn-secondary btn-sm">Edit</a>{/if}

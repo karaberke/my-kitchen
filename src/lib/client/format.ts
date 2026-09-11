@@ -48,6 +48,19 @@ export function fmtMinutes(min: number | null | undefined): string {
 	return m ? `${h} h ${m} min` : `${h} h`;
 }
 
+/**
+ * The owner's one-line share status. Every new recipe is shared with the active
+ * household, so a household the owner is alone in says nothing: naming it is
+ * noise, and calling the recipe private would be a lie once someone joins.
+ */
+export function ownerShareLabel(
+	shares: { name: string; shared: boolean; memberCount: number }[]
+): string {
+	const withOthers = shares.filter((s) => s.shared && s.memberCount > 1);
+	if (withOthers.length) return `Yours · shared with ${withOthers.map((s) => s.name).join(', ')}`;
+	return shares.some((s) => s.shared) ? 'Yours' : 'Yours · private';
+}
+
 export function initials(name: string): string {
 	return name
 		.split(/\s+/)
