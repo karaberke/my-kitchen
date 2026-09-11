@@ -10,6 +10,7 @@
 	import { Dec } from '$lib/shared/decimal';
 	import { scaleAmount } from '$lib/shared/scaling';
 	import { displayQuantity } from '$lib/shared/display-units';
+	import { ingredientLine } from '$lib/shared/ingredient-line';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 
@@ -138,7 +139,12 @@
 		r.ingredients.map((ing) => {
 			const amt = ing.amount ? scaleAmount(Dec.from(ing.amount), base, Dec.from(servings)) : null;
 			const qty = amt ? displayQuantity(amt, ing.unit, unitSystem.value, r.convention).text : null;
-			return `${qty ? qty + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}${ing.optional ? ' (optional)' : ''}`;
+			const line = ingredientLine({
+				quantity: qty ?? '',
+				name: ing.name,
+				preparation: ing.preparation
+			});
+			return `${line}${ing.optional ? ' (optional)' : ''}`;
 		})
 	);
 </script>

@@ -12,6 +12,7 @@
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import { stockStatus, STOCK_STATUS_LABEL, type StockStatus } from '$lib/shared/stock-status';
+	import { ingredientLine } from '$lib/shared/ingredient-line';
 
 	let { data, form } = $props();
 	type LooseForm =
@@ -69,7 +70,11 @@
 				statusText = `Short ${show(amount.sub(available), ing.unit)} · ${show(available, ing.unit)} in pantry`;
 			if (status === 'unknown' && ing.stockOther.length)
 				statusText = `Pantry has ${ing.stockOther.map((o) => show(Dec.from(o.quantity), o.unit)).join(', ')} · check while cooking`;
-			const line = `${amount ? show(amount, ing.unit) + ' ' : ''}${ing.name}${ing.preparation ? ', ' + ing.preparation : ''}`;
+			const line = ingredientLine({
+				quantity: amount ? show(amount, ing.unit) : '',
+				name: ing.name,
+				preparation: ing.preparation
+			});
 			const g =
 				out.find((x) => x.name === ing.groupName) ??
 				(out.push({ name: ing.groupName, rows: [] }), out[out.length - 1]);
