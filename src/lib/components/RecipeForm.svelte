@@ -19,6 +19,7 @@
 		ingredientId: string | null;
 		identityLabel: string | null;
 		createIdentity: boolean;
+		proposed: boolean;
 		amount: string;
 		unit: string;
 		preparation: string;
@@ -62,6 +63,7 @@
 		ingredientId: i.ingredientId,
 		identityLabel: i.ingredientId ? (identityLabels[i.ingredientId] ?? i.name) : null,
 		createIdentity: !!i.createIdentity,
+		proposed: !!i.proposed,
 		amount: i.amount,
 		unit: i.unit,
 		preparation: i.preparation,
@@ -74,6 +76,7 @@
 		ingredientId: null,
 		identityLabel: null,
 		createIdentity: false,
+		proposed: false,
 		amount: '',
 		unit: '',
 		preparation: '',
@@ -481,6 +484,8 @@
 									bind:ingredientId={row.ingredientId}
 									bind:identityLabel={row.identityLabel}
 									bind:createIdentity={row.createIdentity}
+									bind:proposed={row.proposed}
+									propose
 									onenter={() => focusRow('ing', i, 'preparation')}
 								/>
 								{#if errors[`ing.${i}.name`]}<p class="error-text">

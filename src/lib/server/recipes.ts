@@ -18,6 +18,7 @@ import { assertIngredientsVisible, getIngredientMeta } from '$lib/server/ingredi
 import { AppError, ReviewConflict, notFound } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
 import { UNITS, convertAmount, unitsCompatible, type Convention } from '$lib/shared/units';
+import { ingredientLine } from '$lib/shared/ingredient-line';
 import type { ValidRecipe } from '$lib/shared/recipe-input';
 import { withTransaction } from '$lib/server/operations';
 
@@ -861,10 +862,9 @@ export function recipeToPlainText(r: RecipeDetail): string {
 			group = i.groupName;
 			lines.push(`  ${group}:`);
 		}
-		const amt = i.amount ? `${Dec.from(i.amount).toHuman()}${i.unit ? ' ' + i.unit : ''} ` : '';
-		lines.push(
-			`  - ${amt}${i.name}${i.preparation ? ', ' + i.preparation : ''}${i.optional ? ' (optional)' : ''}`
-		);
+		const amt = i.amount ? `${Dec.from(i.amount).toHuman()}${i.unit ? ' ' + i.unit : ''}` : '';
+		const line = ingredientLine({ quantity: amt, name: i.name, preparation: i.preparation });
+		lines.push(`  - ${line}${i.optional ? ' (optional)' : ''}`);
 	}
 	lines.push('', 'STEPS');
 	let section = '';

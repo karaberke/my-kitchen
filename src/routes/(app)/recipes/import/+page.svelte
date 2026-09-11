@@ -30,6 +30,8 @@
 		/** Set for a link import: where the page was fetched from. */
 		url: string;
 		input: RecipeFormInput;
+		/** catalog names for the links the import proposed, keyed by ingredient id */
+		identityLabels: Record<string, string>;
 	} | null>(null);
 	$effect(() => {
 		if (form && 'parsed' in form && form.parsed)
@@ -39,7 +41,9 @@
 				filename: String(form.filename ?? 'source file'),
 				pageCount: (form.pageCount as number | null) ?? null,
 				url: String(form.url ?? ''),
-				input: form.input as RecipeFormInput
+				input: form.input as RecipeFormInput,
+				identityLabels:
+					('identityLabels' in form ? (form.identityLabels as Record<string, string>) : {}) ?? {}
 			};
 	});
 	const saveAction = $derived(
@@ -106,6 +110,7 @@
 			mode="new"
 			action={saveAction}
 			initial={submitted ?? review.input}
+			identityLabels={review.identityLabels}
 			errors={form?.errors ?? {}}
 			message={form?.message ?? ''}
 		/>
