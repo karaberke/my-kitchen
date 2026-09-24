@@ -37,11 +37,13 @@ export async function createRecipe(
 		ingredient?: { amount: string; unit: string; name: string; match?: string };
 		step?: string;
 		draft?: boolean;
+		tags?: string;
 	}
 ) {
 	await page.goto('/recipes/new');
 	await page.getByLabel('Title').fill(opts.title);
 	if (opts.servings) await page.getByLabel('Base servings').fill(opts.servings);
+	if (opts.tags) await page.getByLabel('Tags').fill(opts.tags);
 	if (opts.ingredient) {
 		await page.locator('#ing-0-amount').fill(opts.ingredient.amount);
 		await page.locator('#ing-0-unit').fill(opts.ingredient.unit);
