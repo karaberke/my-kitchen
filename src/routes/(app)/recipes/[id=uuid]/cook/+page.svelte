@@ -13,6 +13,14 @@
 	import { ingredientLine } from '$lib/shared/ingredient-line';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
+	import {
+		COOK_MODES,
+		COOK_TEXT_STEP_MAX,
+		COOK_TEXT_STEP_MIN,
+		cookTextSizes,
+		cookView,
+		setCookView
+	} from '$lib/client/cook-view.svelte';
 
 	let { data, form } = $props();
 	type LooseForm =
@@ -37,6 +45,12 @@
 	let checkedIng = $state<Record<number, boolean>>({});
 	let doneSteps = $state<Record<string, boolean>>({});
 	let finishOpen = $state(false);
+	let settingsOpen = $state(false);
+	let slideIndex = $state(0);
+	const sizes = $derived(cookTextSizes(cookView.textStep));
+	const slide = $derived(Math.min(slideIndex, Math.max(0, r.steps.length - 1)));
+	const stepLabel = (i: number) =>
+		`${r.steps[i].sectionTitle ? r.steps[i].sectionTitle + ' · ' : ''}Step ${i + 1}`;
 	let servings = $derived(data.preview?.servings ?? data.recipe.baseServings ?? '1');
 
 	interface Alloc {
@@ -227,6 +241,74 @@
 		</div>
 	{/if}
 
+	<div class="mb-3.5 flex items-center justify-end gap-3.5">
+		<div class="flex items-center gap-3.5" role="group" aria-label="Cooking view">
+			{#each COOK_MODES as m (m.value)}
+				<button
+					type="button"
+					class="border-b-[1.5px] py-1 text-[12.5px] font-semibold transition-colors {cookView.mode ===
+					m.value
+						? 'border-ink text-ink'
+						: 'border-transparent text-sage-soft hover:text-ink'}"
+					aria-pressed={cookView.mode === m.value}
+					onclick={() => setCookView({ mode: m.value })}>{m.label}</button
+				>
+			{/each}
+		</div>
+		<button
+			type="button"
+			class="flex h-8 w-8 items-center justify-center rounded-[10px] text-moss-soft transition-colors hover:bg-linen {settingsOpen
+				? 'bg-linen'
+				: ''}"
+			aria-label="Cooking view settings"
+			aria-expanded={settingsOpen}
+			aria-controls="cook-settings"
+			onclick={() => (settingsOpen = !settingsOpen)}
+		>
+			<svg
+				width="17"
+				height="17"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.8"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+				><circle cx="12" cy="12" r="3"></circle><path
+					d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+				></path></svg
+			>
+		</button>
+	</div>
+	{#if settingsOpen}
+		<div
+			id="cook-settings"
+			class="mb-3.5 flex items-center justify-between gap-3 rounded-[14px] border border-sand bg-parchment py-2.5 pr-3 pl-3.5"
+		>
+			<div class="text-[13px] font-semibold">Text size</div>
+			<div class="flex items-center gap-2">
+				<button
+					type="button"
+					class="h-9 w-10 rounded-[10px] border border-sand-dark bg-card text-[13px] font-bold disabled:text-fog"
+					aria-label="Smaller text"
+					disabled={cookView.textStep <= COOK_TEXT_STEP_MIN}
+					onclick={() => setCookView({ textStep: cookView.textStep - 1 })}>A−</button
+				>
+				<div class="min-w-11 text-center text-[12.5px] text-moss-soft" aria-live="polite">
+					{sizes.percent}
+				</div>
+				<button
+					type="button"
+					class="h-9 w-10 rounded-[10px] border border-sand-dark bg-card text-[16px] font-bold disabled:text-fog"
+					aria-label="Larger text"
+					disabled={cookView.textStep >= COOK_TEXT_STEP_MAX}
+					onclick={() => setCookView({ textStep: cookView.textStep + 1 })}>A+</button
+				>
+			</div>
+		</div>
+	{/if}
+
 	<div class="grid gap-5 lg:grid-cols-[1fr_1.3fr]">
 		<section class="card p-3.5" aria-labelledby="cook-ing">
 			<div class="mb-2 flex items-center justify-between gap-2">
@@ -249,9 +331,8 @@
 									: 'border-[#c6c2a6] bg-card'}">{checkedIng[i] ? '✓' : ''}</span
 							>
 							<span
-								class="flex-1 text-[15.5px] leading-snug {checkedIng[i]
-									? 'text-sage line-through'
-									: ''}">{lines[i]}</span
+								class="flex-1 leading-snug {checkedIng[i] ? 'text-sage line-through' : ''}"
+								style:font-size={sizes.ingredient}>{lines[i]}</span
 							>
 						</button>
 					</li>
@@ -261,31 +342,84 @@
 				Checking items here changes nothing in the pantry.
 			</p>
 		</section>
-		<section class="flex flex-col gap-3" aria-label="Steps">
-			{#each r.steps as step, i (step.id)}
-				<button
-					class="card w-full p-4 text-left transition-colors {doneSteps[step.id]
-						? 'bg-parchment'
-						: ''}"
-					aria-pressed={!!doneSteps[step.id]}
-					onclick={() => (doneSteps[step.id] = !doneSteps[step.id])}
+		{#if cookView.mode === 'slides' && r.steps.length}
+			<section class="flex flex-col" aria-label="Steps">
+				<div
+					class="card mb-3.5 flex min-h-[280px] flex-col gap-3.5 rounded-[20px] px-5 py-[22px]"
+					aria-live="polite"
 				>
-					<div class="eyebrow mb-2 font-sans">
-						{step.sectionTitle ? step.sectionTitle + ' · ' : ''}Step {i + 1}{doneSteps[step.id]
-							? ' · done'
-							: ''}
+					<div class="eyebrow flex items-baseline justify-between gap-2.5 font-sans">
+						<span>{stepLabel(slide)}</span>
+						<span class="tracking-normal">{slide + 1} / {r.steps.length}</span>
 					</div>
-					<p class="text-[17px] leading-relaxed {doneSteps[step.id] ? 'text-sage' : 'text-ink'}">
-						{step.text}
+					<p class="font-serif leading-relaxed text-pretty" style:font-size={sizes.slide}>
+						{r.steps[slide].text}
 					</p>
-				</button>
-			{/each}
-			<button
-				class="btn-primary h-12 w-full rounded-[16px] text-[14px]"
-				onclick={() => (finishOpen = true)}
-				disabled={!!f?.ok}>Finish &amp; update pantry</button
-			>
-		</section>
+				</div>
+				<div class="mb-2.5 flex items-center justify-between gap-2.5">
+					<button
+						type="button"
+						class="h-12 w-12 rounded-full border border-sand-dark text-[18px] disabled:text-fog"
+						aria-label="Previous step"
+						disabled={slide === 0}
+						onclick={() => (slideIndex = slide - 1)}>←</button
+					>
+					<div class="flex flex-wrap justify-center gap-1.5">
+						{#each r.steps as step, i (step.id)}
+							<button
+								type="button"
+								class="h-1.5 w-1.5 rounded-full {i === slide ? 'bg-ink' : 'bg-sand-dark'}"
+								aria-label="Go to step {i + 1}"
+								aria-current={i === slide ? 'step' : undefined}
+								onclick={() => (slideIndex = i)}
+							></button>
+						{/each}
+					</div>
+					{#if slide < r.steps.length - 1}
+						<button
+							type="button"
+							class="h-12 w-12 rounded-full bg-leaf text-[18px] text-cream transition-colors hover:bg-leaf-dark"
+							aria-label="Next step"
+							onclick={() => (slideIndex = slide + 1)}>→</button
+						>
+					{:else}
+						<button
+							type="button"
+							class="btn-primary h-12 rounded-full px-[18px]"
+							onclick={() => (finishOpen = true)}
+							disabled={!!f?.ok}>Finish</button
+						>
+					{/if}
+				</div>
+			</section>
+		{:else}
+			<section class="flex flex-col gap-3" aria-label="Steps">
+				{#each r.steps as step, i (step.id)}
+					<button
+						class="card w-full p-4 text-left transition-colors {doneSteps[step.id]
+							? 'bg-parchment'
+							: ''}"
+						aria-pressed={!!doneSteps[step.id]}
+						onclick={() => (doneSteps[step.id] = !doneSteps[step.id])}
+					>
+						<div class="eyebrow mb-2 font-sans">
+							{stepLabel(i)}{doneSteps[step.id] ? ' · done' : ''}
+						</div>
+						<p
+							class="leading-relaxed {doneSteps[step.id] ? 'text-sage' : 'text-ink'}"
+							style:font-size={sizes.step}
+						>
+							{step.text}
+						</p>
+					</button>
+				{/each}
+				<button
+					class="btn-primary h-12 w-full rounded-[16px] text-[14px]"
+					onclick={() => (finishOpen = true)}
+					disabled={!!f?.ok}>Finish &amp; update pantry</button
+				>
+			</section>
+		{/if}
 	</div>
 
 	<Sheet
