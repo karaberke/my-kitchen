@@ -29,6 +29,7 @@ git clone <repo> my-kitchen && cd my-kitchen && ./deploy.sh [options]
 Without `deploy.sh`: copy `.env.example` to `.env`, fill in the same keys, then `docker compose up -d --build`
 (or `docker compose -f compose.cloud-db.yaml up -d --build`). Compose interpolates `${...}` values
 from `.env` and activates the Cloudflare service from `COMPOSE_PROFILES`.
+A managed database (`--cloud-db`) must allow `CREATE EXTENSION pg_trgm`; migration 0006 needs it for the ingredient search.
 
 Services: `db` (persistent volume), `migrate` (one-shot, advisory-locked), `app` (Node on
 `0.0.0.0:3000` inside the container, published on `APP_BIND:APP_PORT`, default `127.0.0.1:3003`), and one of

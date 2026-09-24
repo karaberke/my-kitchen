@@ -12,7 +12,19 @@ import {
 	type PackageSizeReason,
 	type PackageSizeSuggestion
 } from '$lib/shared/package-size';
+import type { IdentityHit } from '$lib/server/ingredient-match';
+import type { IngredientSuggestion } from '$lib/server/ingredients';
 import type { BarcodeLookup } from './lookup';
+
+/** What the provider's title points at, found by `scanBarcode`. */
+export interface ScanMatch {
+	/** An identity the title names with only harmless words around it. */
+	proposal: IdentityHit | null;
+	/** Choices to list when there is no proposal; nothing is preselected. */
+	candidates: IngredientSuggestion[];
+}
+
+export const NO_SCAN_MATCH: ScanMatch = { proposal: null, candidates: [] };
 
 export interface ScanSuggestion {
 	/** The ingredient this household linked before, if any. */
@@ -30,6 +42,10 @@ export interface ScanSuggestion {
 	from: 'household' | 'usda' | 'off' | 'none';
 	/** Why no package size is offered, when none is. */
 	sizeReason?: PackageSizeReason;
+	/** The identity proposed from the provider's title. Null with a household link. */
+	proposal: IdentityHit | null;
+	/** Identities to choose from when nothing is proposed. Empty with a household link. */
+	candidates: IngredientSuggestion[];
 }
 
 function fromProvider(lookup: BarcodeLookup): {
@@ -47,14 +63,22 @@ function fromProvider(lookup: BarcodeLookup): {
 	return {
 		size: packageSizeSuggestion(
 			{ amount: p.packageAmount === null ? null : Dec.from(p.packageAmount), unit: p.packageUnit },
-			p.packageLabelText
+			p.packageLabelText,
+			p.servingBasis
 		),
 		name: p.name,
 		brand: p.brand
 	};
 }
 
-export function suggestionFor(lookup: BarcodeLookup): ScanSuggestion {
+/**
+ * The confirmation screen's starting values. `match` comes from the caller,
+ * so this stays a pure function of its arguments.
+ */
+export function suggestionFor(
+	lookup: BarcodeLookup,
+	match: ScanMatch = NO_SCAN_MATCH
+): ScanSuggestion {
 	const provider = fromProvider(lookup);
 	const link = lookup.link;
 
@@ -68,7 +92,8 @@ export function suggestionFor(lookup: BarcodeLookup): ScanSuggestion {
 			packageCount: link.defaultPackageCount,
 			// Prefer what the household recorded; fall back to the provider's text.
 			packageLabelText: link.packageLabelText || provider.size.labelText,
-			from: 'household'
+			from: 'household',
+			...NO_SCAN_MATCH
 		};
 	}
 
@@ -81,6 +106,8 @@ export function suggestionFor(lookup: BarcodeLookup): ScanSuggestion {
 		packageCount: provider.size.packagesInLabel,
 		packageLabelText: provider.size.labelText,
 		from: lookup.product ? lookup.product.source : 'none',
-		sizeReason: provider.size.size ? undefined : provider.size.reason
+		sizeReason: provider.size.size ? undefined : provider.size.reason,
+		proposal: match.proposal,
+		candidates: match.proposal ? [] : match.candidates
 	};
 }

@@ -37,9 +37,12 @@ import {
 } from '$lib/shared/gtin';
 import { usdaAdapter } from './usda';
 import { offAdapter } from './off';
-import { suggestionFor } from './suggest';
+import { proposeFromProductTitle } from '$lib/server/ingredient-match';
+import { searchIngredients } from '$lib/server/ingredients';
+import { NO_SCAN_MATCH, suggestionFor, type ScanMatch } from './suggest';
 import type {
 	BarcodeSource,
+	NutritionBasis,
 	ProviderAdapter,
 	ProviderProduct,
 	ProviderResult,
@@ -69,6 +72,7 @@ export interface ProductView {
 	packageLabelText: string;
 	servingAmount: string | null;
 	servingUnit: string | null;
+	servingBasis: NutritionBasis | null;
 }
 
 export interface LinkView {
@@ -147,7 +151,8 @@ function productView(row: typeof barcodeProducts.$inferSelect): ProductView {
 		packageUnit: row.packageUnit,
 		packageLabelText: row.packageLabelText,
 		servingAmount: row.servingAmount === null ? null : Dec.from(row.servingAmount).toString(),
-		servingUnit: row.servingUnit
+		servingUnit: row.servingUnit,
+		servingBasis: row.servingBasis
 	};
 }
 
@@ -165,7 +170,8 @@ function liveView(p: ProviderProduct): ProductView {
 		packageUnit: p.packageUnit,
 		packageLabelText: p.packageLabelText,
 		servingAmount: p.servingAmount?.toString() ?? null,
-		servingUnit: p.servingUnit
+		servingUnit: p.servingUnit,
+		servingBasis: p.servingBasis
 	};
 }
 
@@ -382,7 +388,34 @@ export async function scanBarcode(
 		return { ok: false as const, reason: identified.reason, message: identified.message };
 
 	const lookup = await lookupBarcode(identified.identity, household.id, providers);
-	return { ok: true as const, lookup, suggestion: suggestionFor(lookup) };
+	const match = await scanMatch(lookup, user.id, household.id);
+	return { ok: true as const, lookup, suggestion: suggestionFor(lookup, match) };
+}
+
+/** How many candidates the confirmation screen lists when nothing is proposed. */
+export const SCAN_CANDIDATE_LIMIT = 5;
+
+/**
+ * The identity the provider's title names, or candidates to choose from.
+ * A household link already answers the question, so nothing is looked up.
+ */
+async function scanMatch(
+	lookup: BarcodeLookup,
+	userId: string,
+	householdId: string
+): Promise<ScanMatch> {
+	const product = lookup.product;
+	if (lookup.link || !product?.name.trim()) return NO_SCAN_MATCH;
+	const proposal = await proposeFromProductTitle(db, userId, product.name, product.brand);
+	if (proposal) return { proposal, candidates: [] };
+	const candidates = await searchIngredients(
+		db,
+		userId,
+		product.name,
+		SCAN_CANDIDATE_LIMIT,
+		householdId
+	);
+	return { proposal: null, candidates };
 }
 
 export async function lookupBarcode(

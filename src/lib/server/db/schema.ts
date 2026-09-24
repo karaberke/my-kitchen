@@ -120,6 +120,8 @@ export const ingredients = pgTable(
 	(t) => [
 		unique('ingredient_owner_name_uq').on(t.ownerUserId, t.nameNormalized).nullsNotDistinct(),
 		index('ingredient_name_prefix_idx').on(t.nameNormalized.op('text_pattern_ops')),
+		/** Trigram search for the autocomplete; needs the pg_trgm extension (0006_pg_trgm). */
+		index('ingredient_name_trgm_idx').using('gin', t.nameNormalized.op('gin_trgm_ops')),
 		index('ingredient_owner_idx').on(t.ownerUserId)
 	]
 );
@@ -135,7 +137,8 @@ export const ingredientAliases = pgTable(
 	},
 	(t) => [
 		uniqueIndex('ingredient_alias_uq').on(t.ingredientId, t.aliasNormalized),
-		index('ingredient_alias_prefix_idx').on(t.aliasNormalized.op('text_pattern_ops'))
+		index('ingredient_alias_prefix_idx').on(t.aliasNormalized.op('text_pattern_ops')),
+		index('ingredient_alias_trgm_idx').using('gin', t.aliasNormalized.op('gin_trgm_ops'))
 	]
 );
 

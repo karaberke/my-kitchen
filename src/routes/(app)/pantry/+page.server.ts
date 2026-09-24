@@ -117,7 +117,13 @@ export const actions: Actions = {
 			const out = await addStock(ctx, {
 				operationId: operationIdFrom(fd),
 				ingredientId,
-				newIngredientName: ingredientId ? null : newName,
+				// The untouched product title is not a choice: a scan makes a new identity
+				// only from a typed name or the explicit "new ingredient" option.
+				newIngredientName:
+					ingredientId ||
+					(fd.get('createIdentity') !== '1' && newName === String(fd.get('providerTitle') ?? ''))
+						? null
+						: newName,
 				category: String(fd.get('category') ?? 'Other'),
 				quantity: total.quantity,
 				unit: total.unit,

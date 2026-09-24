@@ -40,6 +40,40 @@ describe('unit catalog', () => {
 	});
 });
 
+describe('US package volume units', () => {
+	it('defines gal_us, qt_us and pt_us as volume units', () => {
+		expect(unitInfo('gal_us')?.dimension).toBe('volume');
+		expect(unitInfo('qt_us')?.dimension).toBe('volume');
+		expect(unitInfo('pt_us')?.dimension).toBe('volume');
+	});
+
+	it('normalises gallon, quart and pint spellings', () => {
+		expect(normalizeUnitInput('gal')).toBe('gal_us');
+		expect(normalizeUnitInput('gallon')).toBe('gal_us');
+		expect(normalizeUnitInput('gallons')).toBe('gal_us');
+		expect(normalizeUnitInput('qt')).toBe('qt_us');
+		expect(normalizeUnitInput('quart')).toBe('qt_us');
+		expect(normalizeUnitInput('quarts')).toBe('qt_us');
+		expect(normalizeUnitInput('pt')).toBe('pt_us');
+		expect(normalizeUnitInput('pint')).toBe('pt_us');
+		expect(normalizeUnitInput('pints')).toBe('pt_us');
+	});
+
+	it('holds the same ml size under both conventions, because a US gallon is fixed', () => {
+		for (const id of ['gal_us', 'qt_us', 'pt_us']) {
+			const metric = convertAmount(Dec.from('1'), id, 'ml', 'metric');
+			const us = convertAmount(Dec.from('1'), id, 'ml', 'us');
+			expect(metric, `${id} must convert to ml`).not.toBeNull();
+			expect(us, `${id} must convert to ml`).not.toBeNull();
+			expect(metric?.toString()).toBe(us?.toString());
+		}
+	});
+
+	it('holds 128 US fluid ounces in a US gallon', () => {
+		expect(convertAmount(Dec.from('1'), 'gal_us', 'fl_oz', 'us')?.toString()).toBe('128');
+	});
+});
+
 describe('unitsCompatible', () => {
 	it('matches within mass, volume and count dimensions', () => {
 		expect(unitsCompatible('g', 'kg')).toBe(true);

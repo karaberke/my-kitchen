@@ -49,6 +49,11 @@ This note explains the choices that are not obvious from the code.
   convention (metric 250 ml / 15 ml or US 236.588 ml / 14.7868 ml). Volume to
   mass only happens with an explicit ingredient density. Package units (can,
   bag, clove ...) never convert and only match themselves.
+- Package sizes know the US gallon, quart and pint (`gal_us`, `qt_us`,
+  `pt_us`, 128/32/16 US fl oz; Imperial is not supported). A label "oz" is a
+  weight unless a printed volume beside it agrees as US fl oz ("128 OZ
+  (3.78 L)"); a bare oz on a per-100 ml product is `ambiguous_oz` and the
+  user chooses.
 - An unknown amount is `null`, distinct from zero. Unknown amounts stay visible
   in previews and lists but never enter arithmetic.
 - A _unit system_ (`as-written`, `metric`, `us`) is a display setting and is not
