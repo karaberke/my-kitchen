@@ -68,11 +68,15 @@ export function isOperationId(value: unknown): value is string {
 	return typeof value === 'string' && UUID_RE.test(value);
 }
 
-/** The `operationId` field every mutating form posts, or a 400 the caller's try/catch maps to `fail(400, ...)`. */
+/** A client-supplied operation id, or a 400 the caller maps to `fail(400, ...)` or an HTTP error. */
+export function requireOperationId(value: unknown): string {
+	if (!isOperationId(value)) throw new AppError(400, 'Missing operation id; reload and try again');
+	return value;
+}
+
+/** The `operationId` field every mutating form posts; see `requireOperationId`. */
 export function operationIdFrom(fd: FormData): string {
-	const id = String(fd.get('operationId') ?? '');
-	if (!isOperationId(id)) throw new AppError(400, 'Missing operation id; reload and try again');
-	return id;
+	return requireOperationId(String(fd.get('operationId') ?? ''));
 }
 
 /**

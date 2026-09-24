@@ -9,7 +9,8 @@
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
-	import { postAction } from '$lib/client/actions';
+	import { undo } from '$lib/remote/pantry.remote';
+	import { reopenList } from '$lib/remote/grocery.remote';
 	import { fmtDateTime, fmtNum, fmtQty } from '$lib/client/format';
 	import { UNITS } from '$lib/shared/units';
 	import type { LineView, BatchView } from '$lib/server/grocery';
@@ -135,23 +136,22 @@
 			pushToast('Preview recalculated from current pantry.', { kind: 'success' });
 	}
 	async function undoNow(eventId: string) {
-		const result = await postAction(`/grocery/${list.id}?/undo`, {
-			operationId: undoOp,
-			eventId
-		});
-		undoOp = newOperationId();
-		if (result.type === 'success')
+		try {
+			await undo({ operationId: undoOp, eventId });
 			pushToast('Purchase undone: pantry and list credit reversed.', { kind: 'success' });
-		else pushToast('Could not undo. See history for details.', { kind: 'error' });
+		} catch {
+			pushToast('Could not undo. See history for details.', { kind: 'error' });
+		}
+		undoOp = newOperationId();
 		await invalidate('app:grocery');
 	}
 	async function reopenNow() {
-		const result = await postAction(`/grocery/${list.id}?/reopen`, {
-			expectedRevision: String(list.revision)
-		});
-		if (result.type === 'success')
+		try {
+			await reopenList({ listId: list.id, expectedRevision: list.revision });
 			pushToast('Trip reopened. You can shop again.', { kind: 'success' });
-		else pushToast('Could not reopen the trip. Reload the page and try again.', { kind: 'error' });
+		} catch {
+			pushToast('Could not reopen the trip. Reload the page and try again.', { kind: 'error' });
+		}
 		await invalidate('app:grocery');
 	}
 	const statusLabel: Record<string, string> = {

@@ -11,9 +11,15 @@ test('cache headers: immutable assets, no-store pages/data, private media with a
 	expect(html.headers()['cache-control']).toBe('private, no-store');
 	const data = await page.request.get('/recipes/__data.json');
 	expect(data.headers()['cache-control']).toBe('private, no-store');
-	const rev = await page.request.get('/api/revisions');
+	// The revision poll is a remote query under /_app/remote/, outside the
+	// immutable exemption; a window focus makes PollRevisions ask at once.
+	await page.goto('/pantry');
+	const poll = page.waitForResponse((r) => new URL(r.url()).pathname.startsWith('/_app/remote/'));
+	await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+	const rev = await poll;
+	expect(rev.status()).toBe(200);
 	expect(rev.headers()['cache-control']).toBe('private, no-store');
-	expect(Number(rev.headers()['content-length'] ?? (await rev.text()).length)).toBeLessThan(200);
+	expect((await rev.text()).length).toBeLessThan(200);
 
 	// SvelteKit can load JavaScript through inline imports, so use its stylesheet.
 	const assetUrl = await page

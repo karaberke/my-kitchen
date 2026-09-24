@@ -1,4 +1,5 @@
 import { error, fail, type RequestEvent } from '@sveltejs/kit';
+import { getRequestEvent } from '$app/server';
 import { asAppError, ReviewConflict } from '$lib/server/errors';
 
 /**
@@ -64,11 +65,15 @@ function isPublicStaticAsset(path: string): boolean {
 	);
 }
 
-export function noStoreJson(data: unknown, init: ResponseInit = {}): Response {
-	const headers = new Headers(init.headers);
-	headers.set('content-type', 'application/json; charset=utf-8');
-	headers.set('cache-control', 'private, no-store');
-	return new Response(JSON.stringify(data), { ...init, headers });
+/** Rethrow an application error as the matching HTTP error; anything else unchanged. */
+function rethrowAsHttp(err: unknown): never {
+	const app = asAppError(err);
+	if (app)
+		error(app.status, {
+			message: app.message,
+			code: app.status === 401 ? 'unauthorized' : app.status === 403 ? 'forbidden' : undefined
+		});
+	throw err;
 }
 
 /**
@@ -81,15 +86,24 @@ export function guard<F extends (event: any) => any>(fn: F): F {
 		try {
 			return await fn(event);
 		} catch (err) {
-			const app = asAppError(err);
-			if (app)
-				error(app.status, {
-					message: app.message,
-					code: app.status === 401 ? 'unauthorized' : app.status === 403 ? 'forbidden' : undefined
-				});
-			throw err;
+			rethrowAsHttp(err);
 		}
 	}) as F;
+}
+
+/**
+ * The remote-function twin of `guard`: hand the handler the current request
+ * event (a remote function gets only its argument) and map application errors
+ * the same way. Handlers take the event explicitly so tests can call them.
+ */
+export function remote<A, R>(fn: (event: RequestEvent, arg: A) => Promise<R>) {
+	return async (arg: A): Promise<R> => {
+		try {
+			return await fn(getRequestEvent(), arg);
+		} catch (err) {
+			rethrowAsHttp(err);
+		}
+	};
 }
 
 /**

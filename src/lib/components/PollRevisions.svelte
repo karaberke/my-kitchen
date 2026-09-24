@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { invalidate } from '$app/navigation';
+	import { isHttpError } from '@sveltejs/kit';
 	import { pushToast } from '$lib/client/toast.svelte';
+	import { fetchFresh } from '$lib/client/remote';
+	import { householdRevisions } from '$lib/remote/household.remote';
 
 	/**
-	 * Polls the tiny revision endpoint while the page is visible and online.
+	 * Polls the tiny revision query while the page is visible and online.
 	 * Only when a relevant counter changes are the page's loads re-run, unless
 	 * the page reports unsaved input — then a notice is shown instead.
 	 */
@@ -29,27 +32,17 @@
 	let lastChecked = $state<Date | null>(null);
 	let failures = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	let controller: AbortController | undefined;
+	/** Bumped by each check and on unmount, so an answer that arrives late is dropped. */
+	let latest = 0;
 	let refreshing = $state(false);
 
 	async function check() {
 		if (document.hidden || !navigator.onLine) return schedule();
-		controller?.abort();
-		controller = new AbortController();
+		const mine = ++latest;
 		const forHousehold = householdId;
 		try {
-			const res = await fetch(`/api/revisions?household=${encodeURIComponent(forHousehold)}`, {
-				signal: controller.signal,
-				headers: { accept: 'application/json' }
-			});
-			if (res.status === 401 || res.status === 403) return; // stop polling: not authorized any more
-			if (!res.ok) throw new Error(String(res.status));
-			const rev = (await res.json()) as {
-				household: string;
-				pantry: number;
-				grocery: number;
-				plan: number;
-			};
+			const rev = await fetchFresh(householdRevisions({ household: forHousehold }));
+			if (mine !== latest) return; // a newer check, or the component is gone
 			if (rev.household !== householdId) return; // household switched meanwhile
 			failures = 0;
 			lastChecked = new Date();
@@ -60,7 +53,9 @@
 				else await refresh();
 			}
 		} catch (err) {
-			if ((err as Error).name === 'AbortError') return;
+			if (mine !== latest) return;
+			// stop polling: not authorized any more
+			if (isHttpError(err, 401) || isHttpError(err, 403)) return;
 			failures++;
 		}
 		schedule();
@@ -89,7 +84,7 @@
 		schedule();
 		return () => {
 			clearTimeout(timer);
-			controller?.abort();
+			latest++;
 		};
 	});
 	export function manualRefresh() {

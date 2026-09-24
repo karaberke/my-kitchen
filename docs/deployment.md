@@ -195,11 +195,11 @@ URL alone does not move data.
 
 Do **not** enable "Cache Everything". Create these rules (Caching → Cache Rules), in order:
 
-| #   | When                                                                                                                   | Then                                                                      |
-| --- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1   | URI Path starts with `/_app/immutable/`                                                                                | Eligible for cache, Edge TTL: respect origin, Browser TTL: respect origin |
-| 2   | URI Path starts with `/media/` **or** `/api/` **or** contains `/__data.json` **or** starts with `/recipes/export.json` | Bypass cache                                                              |
-| 3   | (default)                                                                                                              | Bypass cache                                                              |
+| #   | When                                                                                                                                          | Then                                                                      |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 1   | URI Path starts with `/_app/immutable/`                                                                                                       | Eligible for cache, Edge TTL: respect origin, Browser TTL: respect origin |
+| 2   | URI Path starts with `/media/` **or** `/api/` **or** `/_app/remote/` **or** contains `/__data.json` **or** starts with `/recipes/export.json` | Bypass cache                                                              |
+| 3   | (default)                                                                                                                                     | Bypass cache                                                              |
 
 Set **Browser Cache TTL** to _Respect Existing Headers_. The origin already sends
 `private, no-store` on every dynamic response, so a mistaken cache rule would still not

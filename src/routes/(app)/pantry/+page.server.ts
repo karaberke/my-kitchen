@@ -16,7 +16,6 @@ import {
 	updateLotMetadata,
 	wasteLot
 } from '$lib/server/pantry';
-import { undoEvent } from '$lib/server/undo';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { identifyAs, identifyManual, SYMBOLOGIES, type Symbology } from '$lib/shared/gtin';
 import { pantryAmount } from '$lib/shared/package-size';
@@ -204,19 +203,6 @@ export const actions: Actions = {
 				note: String(fd.get('note') ?? '')
 			});
 			return { ok: true, action: 'metadata' };
-		} catch (err) {
-			return actionError(err);
-		}
-	},
-	undo: async (event) => {
-		const ctx = householdActor(event);
-		const fd = await event.request.formData();
-		try {
-			await undoEvent(ctx, {
-				operationId: operationIdFrom(fd),
-				eventId: String(fd.get('eventId') ?? '')
-			});
-			return { ok: true, action: 'undo' };
 		} catch (err) {
 			return actionError(err);
 		}
