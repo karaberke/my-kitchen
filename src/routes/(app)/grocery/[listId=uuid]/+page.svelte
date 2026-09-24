@@ -9,6 +9,7 @@
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
+	import { postAction } from '$lib/client/actions';
 	import { fmtDateTime, fmtNum, fmtQty } from '$lib/client/format';
 	import { UNITS } from '$lib/shared/units';
 	import type { LineView, BatchView } from '$lib/server/grocery';
@@ -134,31 +135,21 @@
 			pushToast('Preview recalculated from current pantry.', { kind: 'success' });
 	}
 	async function undoNow(eventId: string) {
-		const fd = new FormData();
-		fd.set('operationId', undoOp);
-		fd.set('eventId', eventId);
-		const res = await fetch(`/grocery/${list.id}?/undo`, {
-			method: 'POST',
-			body: fd,
-			headers: { 'x-sveltekit-action': 'true' }
+		const result = await postAction(`/grocery/${list.id}?/undo`, {
+			operationId: undoOp,
+			eventId
 		});
-		const json = await res.json().catch(() => null);
 		undoOp = newOperationId();
-		if (json?.type === 'success')
+		if (result.type === 'success')
 			pushToast('Purchase undone: pantry and list credit reversed.', { kind: 'success' });
 		else pushToast('Could not undo. See history for details.', { kind: 'error' });
 		await invalidate('app:grocery');
 	}
 	async function reopenNow() {
-		const fd = new FormData();
-		fd.set('expectedRevision', String(list.revision));
-		const res = await fetch(`/grocery/${list.id}?/reopen`, {
-			method: 'POST',
-			body: fd,
-			headers: { 'x-sveltekit-action': 'true' }
+		const result = await postAction(`/grocery/${list.id}?/reopen`, {
+			expectedRevision: String(list.revision)
 		});
-		const json = await res.json().catch(() => null);
-		if (json?.type === 'success')
+		if (result.type === 'success')
 			pushToast('Trip reopened. You can shop again.', { kind: 'success' });
 		else pushToast('Could not reopen the trip. Reload the page and try again.', { kind: 'error' });
 		await invalidate('app:grocery');

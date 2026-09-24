@@ -1,4 +1,5 @@
 import { env as dynamic } from '$env/dynamic/private';
+import { env as dynamicPublic } from '$env/dynamic/public';
 import { building } from '$app/environment';
 import { z } from 'zod';
 
@@ -157,6 +158,11 @@ export function serverEnv(): ServerEnv {
 	return cached;
 }
 
-export function isProduction(): boolean {
-	return serverEnv().NODE_ENV === 'production';
+/**
+ * How often the client polls `/api/revisions`, floored so a low or missing
+ * override can't hammer it. Shared by the session layout (every page) and the
+ * settings page, which both send `pollMs` to the client.
+ */
+export function revisionPollMs(): number {
+	return Math.max(3000, Number(dynamicPublic.PUBLIC_REVISION_POLL_MS ?? 20000) || 20000);
 }

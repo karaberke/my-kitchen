@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import SocialSignIn from '$lib/components/SocialSignIn.svelte';
+	import Alert from '$lib/components/Alert.svelte';
 	let { data, form } = $props();
 	let busy = $state(false);
 </script>
@@ -22,12 +23,7 @@
 	>
 		<input type="hidden" name="next" value={data.next} />
 		{#if form?.message}
-			<div
-				class="rounded-[14px] border border-brick-line bg-brick-soft px-3.5 py-3 text-[13px] text-brick-dark"
-				role="alert"
-			>
-				{form.message}
-			</div>
+			<Alert kind="error">{form.message}</Alert>
 		{/if}
 		<div>
 			<label class="label" for="email">Email</label>

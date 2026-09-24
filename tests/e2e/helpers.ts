@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 
 let seq = 0;
-export function uniqueEmail(prefix: string): string {
+function uniqueEmail(prefix: string): string {
 	seq++;
 	return `${prefix}-${Date.now()}-${seq}@example.test`;
 }

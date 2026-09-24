@@ -266,12 +266,13 @@ describe('recipes', () => {
 			);
 			const options = await listRecipeOptions(db, viewer.id);
 			expect(options).toEqual(
-				cards.items.map(({ id, title, prepMinutes, cookMinutes, baseServings }) => ({
+				cards.items.map(({ id, title, prepMinutes, cookMinutes, baseServings, yieldNote }) => ({
 					id,
 					title,
 					prepMinutes,
 					cookMinutes,
-					baseServings
+					baseServings,
+					yieldNote
 				}))
 			);
 			expect(options).toHaveLength(viewer === alice ? 3 : 2);

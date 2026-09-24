@@ -6,11 +6,8 @@
 	import Alert from '$lib/components/Alert.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
-	import { fmtNum, fmtQty } from '$lib/client/format';
+	import { fmtNum, fmtQty, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
-	import { scaleAmount } from '$lib/shared/scaling';
-	import { displayQuantity } from '$lib/shared/display-units';
-	import { ingredientLine } from '$lib/shared/ingredient-line';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import {
@@ -151,13 +148,13 @@
 	const base = $derived(Dec.from(r.baseServings ?? '1'));
 	const lines = $derived(
 		r.ingredients.map((ing) => {
-			const amt = ing.amount ? scaleAmount(Dec.from(ing.amount), base, Dec.from(servings)) : null;
-			const qty = amt ? displayQuantity(amt, ing.unit, unitSystem.value, r.convention).text : null;
-			const line = ingredientLine({
-				quantity: qty ?? '',
-				name: ing.name,
-				preparation: ing.preparation
-			});
+			const { line } = scaledIngredientLine(
+				ing,
+				base,
+				Dec.from(servings),
+				unitSystem.value,
+				r.convention
+			);
 			return `${line}${ing.optional ? ' (optional)' : ''}`;
 		})
 	);

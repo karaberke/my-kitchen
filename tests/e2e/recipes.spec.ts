@@ -45,13 +45,9 @@ test.describe('recipes', () => {
 		await page.getByRole('button', { name: 'Save changes' }).click();
 		await expect(page.getByRole('heading', { name: 'Sheet-pan chicken with lemon' })).toBeVisible();
 
-		// export JSON
+		// export JSON — shape and versioning are covered by tests/integration/recipes.test.ts
 		const res = await page.request.get(`/recipes/${id}/export.json`);
 		expect(res.status()).toBe(200);
-		expect(res.headers()['cache-control']).toContain('no-store');
-		const json = await res.json();
-		expect(json.schemaVersion).toBe(1);
-		expect(json.recipes[0].ingredients[0].amount).toBe('1.5');
 
 		// duplicate lands in edit of the copy
 		await page.getByRole('button', { name: 'Duplicate' }).click();
@@ -129,7 +125,7 @@ test.describe('recipes', () => {
 	});
 });
 
-test('a recipe missing required fields is caught in the browser, with no request', async ({
+test('a recipe missing required fields is caught in the browser, with no request, and fixing one field clears just that error', async ({
 	page
 }) => {
 	await register(page, 'Val');
@@ -156,17 +152,13 @@ test('a recipe missing required fields is caught in the browser, with no request
 	await page.getByRole('button', { name: 'Save draft' }).click();
 	await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
 	expect(posts).toBe(1);
-});
 
-test('fixing a flagged field clears it and lets the recipe save', async ({ page }) => {
-	await register(page, 'Vin');
+	// A fresh recipe missing only servings is flagged for just that.
 	await page.goto('/recipes/new');
 	await page.getByLabel('Title').fill('Almost there');
 	await page.locator('#ing-0-name').fill('salt');
 	await page.locator('#step-0-text').fill('Season.');
 	await page.getByRole('button', { name: 'Save recipe' }).click();
-
-	// Only servings is missing, and only servings is reported.
 	await expect(page.getByText('Base servings are needed for scaling')).toBeVisible();
 	await expect(page.getByText('Add at least one ingredient')).toHaveCount(0);
 

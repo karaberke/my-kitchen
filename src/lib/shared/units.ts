@@ -174,8 +174,6 @@ for (const u of UNITS) {
 	for (const a of u.aliases) BY_ALIAS.set(a.toLowerCase(), u.id);
 }
 
-export const UNIT_IDS: readonly string[] = UNITS.map((u) => u.id);
-
 export function unitInfo(id: string | null | undefined): UnitDef | undefined {
 	return id ? BY_ID.get(id) : undefined;
 }
@@ -266,5 +264,3 @@ export function formatQuantity(
 	if (!unitId) return text;
 	return `${text} ${unitLabel(unitId, value)}`;
 }
-
-export const CONVENTIONS: readonly Convention[] = ['metric', 'us'];

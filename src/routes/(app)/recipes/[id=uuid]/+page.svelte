@@ -4,15 +4,14 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
+	import FavoriteButton from '$lib/components/FavoriteButton.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
-	import { fmtMinutes, fmtNum, ownerShareLabel } from '$lib/client/format';
+	import { fmtMinutes, fmtNum, ownerShareLabel, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
-	import { scaleAmount } from '$lib/shared/scaling';
 	import { displayQuantity } from '$lib/shared/display-units';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import { stockStatus, STOCK_STATUS_LABEL, type StockStatus } from '$lib/shared/stock-status';
-	import { ingredientLine } from '$lib/shared/ingredient-line';
 
 	let { data, form } = $props();
 	type LooseForm =
@@ -54,7 +53,13 @@
 			displayQuantity(amount, unit, unitSystem.value, r.convention).text;
 		const out: { name: string; rows: Row[] }[] = [];
 		for (const ing of r.ingredients) {
-			const amount = ing.amount ? scaleAmount(Dec.from(ing.amount), base, servings) : null;
+			const { amount, line } = scaledIngredientLine(
+				ing,
+				base,
+				servings,
+				unitSystem.value,
+				r.convention
+			);
 			const available = ing.stockAvailable ? Dec.from(ing.stockAvailable) : null;
 			const status = stockStatus({
 				hasPantry: !!data.household,
@@ -70,11 +75,6 @@
 				statusText = `Short ${show(amount.sub(available), ing.unit)} · ${show(available, ing.unit)} in pantry`;
 			if (status === 'unknown' && ing.stockOther.length)
 				statusText = `Pantry has ${ing.stockOther.map((o) => show(Dec.from(o.quantity), o.unit)).join(', ')} · check while cooking`;
-			const line = ingredientLine({
-				quantity: amount ? show(amount, ing.unit) : '',
-				name: ing.name,
-				preparation: ing.preparation
-			});
 			const g =
 				out.find((x) => x.name === ing.groupName) ??
 				(out.push({ name: ing.groupName, rows: [] }), out[out.length - 1]);
@@ -203,22 +203,7 @@
 		</div>
 
 		<div class="no-print mt-4 flex flex-wrap gap-2">
-			<form
-				method="post"
-				action="?/favorite"
-				use:enhance={() => {
-					fav = !fav;
-					return async ({ result, update }) => {
-						if (result.type !== 'success') fav = !fav;
-						await update({ reset: false, invalidateAll: false });
-					};
-				}}
-			>
-				<input type="hidden" name="favorite" value={fav ? '0' : '1'} />
-				<button class="btn-secondary btn-sm" aria-pressed={fav}
-					>{fav ? '★ Favorited' : '☆ Favorite'}</button
-				>
-			</form>
+			<FavoriteButton isFavorite={fav} action="?/favorite" variant="text" />
 			{#if r.isOwner && r.shares.length}
 				<button class="btn-secondary btn-sm" onclick={() => (shareOpen = true)}>Share…</button>
 			{/if}

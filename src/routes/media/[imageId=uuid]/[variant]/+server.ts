@@ -20,7 +20,6 @@ const GETImpl = async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	const variant = event.params.variant as ImageVariant;
 	if (!(variant in IMAGE_VARIANTS)) throw error(404, 'Not found');
-	if (!/^[0-9a-f-]{36}$/i.test(event.params.imageId)) throw error(404, 'Not found');
 	const image = await loadReadableImage(db, user.id, event.params.imageId);
 	if (!image) throw error(404, 'Not found');
 

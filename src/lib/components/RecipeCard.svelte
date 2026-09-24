@@ -1,19 +1,10 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
 	import type { RecipeCard } from '$lib/server/recipes';
-	import { fmtMinutes, fmtNum } from '$lib/client/format';
+	import { recipeMetaLine } from '$lib/client/format';
+	import FavoriteButton from '$lib/components/FavoriteButton.svelte';
 
 	let { recipe, eager = false }: { recipe: RecipeCard; eager?: boolean } = $props();
-	let fav = $derived(recipe.isFavorite);
-	const meta = $derived(
-		[
-			recipe.prepMinutes ? `${fmtMinutes(recipe.prepMinutes)} prep` : '',
-			recipe.cookMinutes ? `${fmtMinutes(recipe.cookMinutes)} cook` : '',
-			recipe.baseServings ? `${fmtNum(recipe.baseServings)} servings` : recipe.yieldNote
-		]
-			.filter(Boolean)
-			.join(' · ')
-	);
+	const meta = $derived(recipeMetaLine(recipe));
 </script>
 
 <article class="card relative flex gap-3 p-2.5 transition-colors hover:border-[#c6c9a8]">
@@ -45,28 +36,11 @@
 	<div class="min-w-0 flex-1 py-0.5">
 		<div class="flex items-start gap-2">
 			<h3 class="flex-1 text-[14.5px] leading-snug">{recipe.title}</h3>
-			<form
-				method="post"
+			<FavoriteButton
+				recipeId={recipe.id}
+				isFavorite={recipe.isFavorite}
 				action="/recipes?/favorite"
-				class="relative z-10 -mt-1 -mr-1"
-				use:enhance={() => {
-					fav = !fav;
-					return async ({ result, update }) => {
-						if (result.type !== 'success') fav = !fav;
-						await update({ reset: false, invalidateAll: false });
-					};
-				}}
-			>
-				<input type="hidden" name="recipeId" value={recipe.id} />
-				<input type="hidden" name="favorite" value={fav ? '0' : '1'} />
-				<button
-					class="flex h-9 w-9 items-center justify-center rounded-full text-[16px] {fav
-						? 'text-honey'
-						: 'text-fog hover:text-honey'}"
-					aria-pressed={fav}
-					aria-label={fav ? 'Remove from favorites' : 'Add to favorites'}>{fav ? '★' : '☆'}</button
-				>
-			</form>
+			/>
 		</div>
 		{#if meta}<div class="mt-0.5 text-[11.5px] text-sage">{meta}</div>{/if}
 		<div class="mt-2 flex flex-wrap gap-1.5">

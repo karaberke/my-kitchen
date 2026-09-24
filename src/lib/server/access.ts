@@ -65,6 +65,12 @@ export function requireHousehold(event: RequestEvent) {
 	return { user, household };
 }
 
+/** The `{ userId, actorName, householdId }` shape every pantry/grocery/plan action passes to its domain function. */
+export function householdActor(event: RequestEvent) {
+	const { user, household } = requireHousehold(event);
+	return { userId: user.id, actorName: user.name, householdId: household.id };
+}
+
 /**
  * Authoritative membership check against the database (not the request cache)
  * for every write and for every read of household data. Returns the role.

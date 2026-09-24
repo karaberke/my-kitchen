@@ -1,10 +1,14 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
-import type { RequestEvent } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { assertMember, loadHouseholdOrThrow, requireHousehold } from '$lib/server/access';
+import {
+	assertMember,
+	householdActor,
+	loadHouseholdOrThrow,
+	requireHousehold
+} from '$lib/server/access';
 import {
 	addManualLine,
 	completeList,
@@ -20,9 +24,8 @@ import {
 	updateLine
 } from '$lib/server/grocery';
 import { undoEvent } from '$lib/server/undo';
-import { ReviewConflict, asAppError } from '$lib/server/errors';
 import { parseAmount } from '$lib/shared/amount-parse';
-import { isOperationId } from '$lib/server/operations';
+import { operationIdFrom } from '$lib/server/operations';
 import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
 import { isUnitId } from '$lib/shared/units';
 
@@ -43,30 +46,20 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	};
 };
 
-function ctxOf(event: RequestEvent) {
-	const { user, household } = requireHousehold(event);
-	return { userId: user.id, actorName: user.name, householdId: household.id };
-}
-function handle(err: unknown) {
-	if (err instanceof ReviewConflict) return fail(409, { message: err.message, review: err.review });
-	const app = asAppError(err);
-	if (app) return fail(app.status, { message: app.message });
-	throw err;
-}
 const num = (v: FormDataEntryValue | null) => Number(v ?? -1);
 
 export const actions: Actions = {
 	refresh: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		try {
 			await refreshDraft(ctx, event.params.listId);
 			return { ok: true, action: 'refresh' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	start: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			await startShopping(ctx, {
@@ -75,11 +68,11 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'start' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	complete: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			await completeList(ctx, {
@@ -88,11 +81,11 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'complete' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	reopen: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			await reopenList(ctx, {
@@ -101,20 +94,20 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'reopen' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	deleteDraft: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		try {
 			await deleteDraftList(ctx, event.params.listId);
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		throw redirect(303, '/grocery');
 	},
 	batch: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		const batchId = String(fd.get('batchId') ?? '');
 		try {
@@ -137,11 +130,11 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'batch' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	addLine: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const amount = parseAmount(String(fd.get('amount') ?? ''));
@@ -160,11 +153,11 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'addLine' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	line: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		const lineId = String(fd.get('lineId') ?? '');
 		try {
@@ -189,16 +182,14 @@ export const actions: Actions = {
 			await updateLine(ctx, input);
 			return { ok: true, action: 'line' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	purchase: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
-		const operationId = String(fd.get('operationId') ?? '');
-		if (!isOperationId(operationId))
-			return fail(400, { message: 'Missing operation id; reload and try again' });
 		try {
+			const operationId = operationIdFrom(fd);
 			let bought: { quantity: import('$lib/shared/decimal').Dec; unit: string } | null = null;
 			if (fd.get('handledOnly') !== '1') {
 				const qty = parseAmount(String(fd.get('quantity') ?? ''));
@@ -231,19 +222,18 @@ export const actions: Actions = {
 				replayed: out.replayed
 			};
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	undo: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
-		const operationId = String(fd.get('operationId') ?? '');
-		if (!isOperationId(operationId)) return fail(400, { message: 'Missing operation id' });
 		try {
+			const operationId = operationIdFrom(fd);
 			await undoEvent(ctx, { operationId, eventId: String(fd.get('eventId') ?? '') });
 			return { ok: true, action: 'undo' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	}
 };

@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent, RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, loadHouseholdOrThrow, requireUser } from '$lib/server/access';
@@ -16,7 +16,6 @@ import {
 	revokeInvite,
 	setMemberRole
 } from '$lib/server/households';
-import { asAppError } from '$lib/server/errors';
 import { serverEnv } from '$lib/server/env';
 import { requestOrigin } from '$lib/server/auth';
 
@@ -57,12 +56,6 @@ function inviteBase(event: RequestEvent): string {
 	return serverEnv().ORIGIN || requestOrigin(event.request) || event.url.origin;
 }
 
-function handle(err: unknown) {
-	const app = asAppError(err);
-	if (app) return fail(app.status, { message: app.message });
-	throw err;
-}
-
 /** Every action re-checks membership itself; the domain helpers assert owner where needed. */
 function actor(event: RequestEvent) {
 	return { user: requireUser(event), householdId: event.params.id };
@@ -75,7 +68,7 @@ export const actions: Actions = {
 		try {
 			await renameHousehold(db, user.id, householdId, String(fd.get('name') ?? ''));
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		return { ok: true, action: 'rename' };
 	},
@@ -90,7 +83,7 @@ export const actions: Actions = {
 				expiresAt: inv.expiresAt
 			};
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	revoke: async (event) => {
@@ -99,7 +92,7 @@ export const actions: Actions = {
 		try {
 			await revokeInvite(db, user.id, householdId, String(fd.get('inviteId') ?? ''));
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		return { ok: true, action: 'revoke' };
 	},
@@ -110,7 +103,7 @@ export const actions: Actions = {
 		try {
 			await setMemberRole(user.id, householdId, String(fd.get('userId') ?? ''), role);
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		return { ok: true, action: 'role' };
 	},
@@ -121,7 +114,7 @@ export const actions: Actions = {
 		try {
 			await removeMember(user.id, householdId, target);
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		// Leaving means losing access to this page.
 		if (target === user.id) throw redirect(303, '/household');
@@ -142,7 +135,7 @@ export const actions: Actions = {
 			const remaining = await listMemberships(db, user.id);
 			if (remaining.length === 0) await ensurePersonalHousehold(db, user.id, user.name);
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		throw redirect(303, '/household');
 	}

@@ -1,9 +1,8 @@
-import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { redirect } from '@sveltejs/kit';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { acceptInvite, peekInvite } from '$lib/server/households';
-import { asAppError } from '$lib/server/errors';
 import { serverEnv } from '$lib/server/env';
 import { INVITE_COOKIE } from '$lib/server/registration';
 
@@ -39,9 +38,7 @@ export const actions: Actions = {
 		try {
 			householdId = await acceptInvite(event.locals.user.id, event.params.token);
 		} catch (err) {
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 		event.cookies.delete(INVITE_COOKIE, { path: '/' });
 		// Land on the household just joined, not the bare list.

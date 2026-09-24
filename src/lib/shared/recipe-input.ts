@@ -1,6 +1,6 @@
 import { Dec } from './decimal';
 import { parseAmount } from './amount-parse';
-import { isUnitId, normalizeUnitInput, type Convention } from './units';
+import { normalizeUnitInput, type Convention } from './units';
 
 export type RecipeIntent = 'draft' | 'save';
 
@@ -207,7 +207,7 @@ export function validateRecipe(input: RecipeFormInput): RecipeValidation {
 		let unit: string | null = null;
 		const unitRaw = row.unit.trim();
 		if (unitRaw) {
-			const norm = isUnitId(unitRaw) ? unitRaw : normalizeUnitInput(unitRaw);
+			const norm = normalizeUnitInput(unitRaw);
 			if (!norm) errors[`ing.${i}.unit`] = 'Unknown unit';
 			else unit = norm;
 		}
@@ -255,18 +255,4 @@ export function validateRecipe(input: RecipeFormInput): RecipeValidation {
 			steps
 		}
 	};
-}
-
-/** Whether a stored recipe has everything needed for grocery generation and cooking. */
-export function recipeIsCookable(recipe: {
-	status: string;
-	baseServings: string | null;
-	ingredientCount: number;
-}): boolean {
-	return (
-		recipe.status === 'active' &&
-		recipe.baseServings !== null &&
-		Dec.from(recipe.baseServings).isPositive() &&
-		recipe.ingredientCount > 0
-	);
 }

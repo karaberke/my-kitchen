@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
@@ -7,10 +7,9 @@ import { requireHousehold } from '$lib/server/access';
 import { finishCooking, previewCooking, type CookItemInput } from '$lib/server/cooking';
 import { getRecipeDetail } from '$lib/server/recipes';
 import { undoEvent } from '$lib/server/undo';
-import { ReviewConflict, asAppError } from '$lib/server/errors';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { Dec } from '$lib/shared/decimal';
-import { isOperationId } from '$lib/server/operations';
+import { operationIdFrom } from '$lib/server/operations';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -37,48 +36,46 @@ export const actions: Actions = {
 	finish: async (event) => {
 		const { user, household } = requireHousehold(event);
 		const fd = await event.request.formData();
-		const operationId = String(fd.get('operationId') ?? '');
-		if (!isOperationId(operationId))
-			return fail(400, { message: 'Missing operation id; reload and try again' });
-		const servingsParsed = parseAmount(String(fd.get('servings') ?? ''));
-		if (!servingsParsed.ok || !servingsParsed.value?.isPositive())
-			return fail(400, { message: 'Servings must be a positive number' });
-		const expectedRecipeRevision = Number(fd.get('expectedRecipeRevision'));
-		const batchId = String(fd.get('batchId') ?? '') || null;
-		const positions = new Set<number>();
-		for (const key of fd.keys()) {
-			const m = /^item\.(\d+)\.mode$/.exec(key);
-			if (m) positions.add(Number(m[1]));
-		}
-		const items: CookItemInput[] = [];
-		for (const pos of [...positions].sort((a, b) => a - b)) {
-			const mode = fd.get(`item.${pos}.mode`) === 'deduct' ? 'deduct' : 'skip';
-			const ingredientId = String(fd.get(`item.${pos}.ingredientId`) ?? '') || null;
-			const allocations: CookItemInput['allocations'] = [];
-			for (let i = 0; i < 50; i++) {
-				const lotId = fd.get(`item.${pos}.alloc.${i}.lotId`);
-				if (!lotId) break;
-				const amtParsed = parseAmount(String(fd.get(`item.${pos}.alloc.${i}.amount`) ?? ''));
-				if (!amtParsed.ok)
-					return fail(400, {
-						message: `Check the amount for ${fd.get(`item.${pos}.name`) ?? 'an ingredient'}: ${amtParsed.error}`
+		try {
+			const operationId = operationIdFrom(fd);
+			const servingsParsed = parseAmount(String(fd.get('servings') ?? ''));
+			if (!servingsParsed.ok || !servingsParsed.value?.isPositive())
+				return fail(400, { message: 'Servings must be a positive number' });
+			const expectedRecipeRevision = Number(fd.get('expectedRecipeRevision'));
+			const batchId = String(fd.get('batchId') ?? '') || null;
+			const positions = new Set<number>();
+			for (const key of fd.keys()) {
+				const m = /^item\.(\d+)\.mode$/.exec(key);
+				if (m) positions.add(Number(m[1]));
+			}
+			const items: CookItemInput[] = [];
+			for (const pos of [...positions].sort((a, b) => a - b)) {
+				const mode = fd.get(`item.${pos}.mode`) === 'deduct' ? 'deduct' : 'skip';
+				const ingredientId = String(fd.get(`item.${pos}.ingredientId`) ?? '') || null;
+				const allocations: CookItemInput['allocations'] = [];
+				for (let i = 0; i < 50; i++) {
+					const lotId = fd.get(`item.${pos}.alloc.${i}.lotId`);
+					if (!lotId) break;
+					const amtParsed = parseAmount(String(fd.get(`item.${pos}.alloc.${i}.amount`) ?? ''));
+					if (!amtParsed.ok)
+						return fail(400, {
+							message: `Check the amount for ${fd.get(`item.${pos}.name`) ?? 'an ingredient'}: ${amtParsed.error}`
+						});
+					if (!amtParsed.value || !amtParsed.value.isPositive()) continue;
+					allocations.push({
+						lotId: String(lotId),
+						amount: amtParsed.value,
+						expectedRevision: Number(fd.get(`item.${pos}.alloc.${i}.revision`) ?? 0)
 					});
-				if (!amtParsed.value || !amtParsed.value.isPositive()) continue;
-				allocations.push({
-					lotId: String(lotId),
-					amount: amtParsed.value,
-					expectedRevision: Number(fd.get(`item.${pos}.alloc.${i}.revision`) ?? 0)
+				}
+				items.push({
+					position: pos,
+					mode: mode === 'deduct' && allocations.length ? 'deduct' : 'skip',
+					ingredientId,
+					allocations,
+					note: String(fd.get(`item.${pos}.note`) ?? '').slice(0, 300)
 				});
 			}
-			items.push({
-				position: pos,
-				mode: mode === 'deduct' && allocations.length ? 'deduct' : 'skip',
-				ingredientId,
-				allocations,
-				note: String(fd.get(`item.${pos}.note`) ?? '').slice(0, 300)
-			});
-		}
-		try {
 			const out = await finishCooking(
 				{ userId: user.id, actorName: user.name, householdId: household.id },
 				{
@@ -99,31 +96,22 @@ export const actions: Actions = {
 				replayed: out.replayed
 			};
 		} catch (err) {
-			if (err instanceof ReviewConflict)
-				return fail(409, { message: err.message, review: err.review });
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 	},
 	undo: async (event) => {
 		const { user, household } = requireHousehold(event);
 		const fd = await event.request.formData();
-		const operationId = String(fd.get('operationId') ?? '');
-		const eventId = String(fd.get('eventId') ?? '');
-		if (!isOperationId(operationId)) return fail(400, { message: 'Missing operation id' });
 		try {
+			const operationId = operationIdFrom(fd);
+			const eventId = String(fd.get('eventId') ?? '');
 			await undoEvent(
 				{ userId: user.id, actorName: user.name, householdId: household.id },
 				{ operationId, eventId }
 			);
 			return { undone: true };
 		} catch (err) {
-			if (err instanceof ReviewConflict)
-				return fail(409, { message: err.message, review: err.review });
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 	}
 };

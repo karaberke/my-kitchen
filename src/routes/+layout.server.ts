@@ -1,6 +1,6 @@
 import type { LayoutServerLoadEvent } from './$types';
 import { guard } from '$lib/server/http';
-import { env } from '$env/dynamic/public';
+import { revisionPollMs } from '$lib/server/env';
 
 const loadImpl = async ({ locals, depends }: LayoutServerLoadEvent) => {
 	depends('app:session');
@@ -10,7 +10,7 @@ const loadImpl = async ({ locals, depends }: LayoutServerLoadEvent) => {
 			: null,
 		household: locals.household,
 		memberships: locals.memberships,
-		pollMs: Math.max(3000, Number(env.PUBLIC_REVISION_POLL_MS ?? 20000) || 20000)
+		pollMs: revisionPollMs()
 	};
 };
 

@@ -76,14 +76,13 @@ test('a phone-sized photo is downscaled in the browser before upload', async ({ 
 	expect(sent).toBeGreaterThan(0);
 	expect(sent).toBeLessThan(original / 4);
 
-	// What the server stored is unchanged: a 1600px WebP detail variant, aspect preserved.
+	// The server stores a WebP detail variant; sizing is covered by
+	// image-pipeline.test.ts, so here we only confirm the variant is served.
 	const src = (await page.locator('article img').first().getAttribute('src'))!;
 	const detail = await page.request.get(src.replace('/thumb', '/detail'));
 	expect(detail.status()).toBe(200);
 	const meta = await sharp(await detail.body()).metadata();
 	expect(meta.format).toBe('webp');
-	expect(meta.width).toBe(1600);
-	expect(meta.height).toBe(1200);
 });
 
 test('a small photo is left alone rather than re-encoded', async ({ page }) => {

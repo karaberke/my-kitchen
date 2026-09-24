@@ -1,13 +1,11 @@
-import { fail } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, requireHousehold } from '$lib/server/access';
 import { getHistory } from '$lib/server/pantry';
 import { undoEvent } from '$lib/server/undo';
-import { ReviewConflict, asAppError } from '$lib/server/errors';
-import { isOperationId } from '$lib/server/operations';
+import { operationIdFrom } from '$lib/server/operations';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -27,20 +25,15 @@ export const actions: Actions = {
 	undo: async (event) => {
 		const { user, household } = requireHousehold(event);
 		const fd = await event.request.formData();
-		const operationId = String(fd.get('operationId') ?? '');
-		if (!isOperationId(operationId)) return fail(400, { message: 'Missing operation id' });
 		try {
+			const operationId = operationIdFrom(fd);
 			await undoEvent(
 				{ userId: user.id, actorName: user.name, householdId: household.id },
 				{ operationId, eventId: String(fd.get('eventId') ?? '') }
 			);
 			return { ok: true };
 		} catch (err) {
-			if (err instanceof ReviewConflict)
-				return fail(409, { message: err.message, review: err.review });
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 	}
 };

@@ -42,7 +42,6 @@ function contentDisposition(filename: string): string {
 
 const GETImpl = async (event: RequestEvent) => {
 	const user = requireUserApi(event);
-	if (!/^[0-9a-f-]{36}$/i.test(event.params.attachmentId)) throw error(404, 'Not found');
 	const att = await loadReadableAttachment(db, user.id, event.params.attachmentId);
 	if (!att) throw error(404, 'Not found');
 

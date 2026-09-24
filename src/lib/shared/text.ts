@@ -8,7 +8,3 @@ export function normalizeName(raw: string): string {
 		.replace(/\s+/g, ' ')
 		.trim();
 }
-
-export function slugKey(raw: string): string {
-	return normalizeName(raw).replace(/\s/g, '-');
-}
