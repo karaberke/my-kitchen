@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { debouncedSearchGoto } from '$lib/client/debounced-search';
+	import { debouncedSubmit } from '$lib/client/debounced-search';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
@@ -64,10 +64,7 @@
 		}
 		return u.pathname + u.search;
 	}
-	const searchGoto = debouncedSearchGoto();
-	function onSearch() {
-		searchGoto(link({ q }));
-	}
+	const submit = debouncedSubmit();
 	const filterChips = $derived([
 		{ id: 'all', label: 'All' },
 		{ id: 'use_soon', label: 'Review · use soon' },
