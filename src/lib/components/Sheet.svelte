@@ -19,13 +19,11 @@
 		onclose?: () => void;
 	} = $props();
 
-	let dialog: HTMLDialogElement | undefined = $state();
-
-	$effect(() => {
-		if (!dialog) return;
-		if (open && !dialog.open) dialog.showModal();
-		if (!open && dialog.open) dialog.close();
-	});
+	/** Keeps the native dialog's open/closed state in sync with the `open` prop. */
+	function syncOpen(node: HTMLDialogElement) {
+		if (open && !node.open) node.showModal();
+		if (!open && node.open) node.close();
+	}
 
 	function close() {
 		open = false;
@@ -34,7 +32,7 @@
 </script>
 
 <dialog
-	bind:this={dialog}
+	{@attach syncOpen}
 	class="anim-fade m-0 h-dvh max-h-none w-full max-w-none bg-transparent p-0 backdrop:bg-ink/35 open:flex open:items-end open:justify-center sm:open:items-center"
 	onclose={close}
 	oncancel={(e) => {
@@ -42,7 +40,7 @@
 		close();
 	}}
 	onclick={(e) => {
-		if (e.target === dialog) close();
+		if (e.target === e.currentTarget) close();
 	}}
 	aria-labelledby="sheet-title"
 >

@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { debouncedSearchGoto } from '$lib/client/debounced-search';
+	import { debouncedSubmit } from '$lib/client/debounced-search';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
@@ -64,10 +64,7 @@
 		}
 		return u.pathname + u.search;
 	}
-	const searchGoto = debouncedSearchGoto();
-	function onSearch() {
-		searchGoto(link({ q }));
-	}
+	const submit = debouncedSubmit();
 	const filterChips = $derived([
 		{ id: 'all', label: 'All' },
 		{ id: 'use_soon', label: 'Review · use soon' },
@@ -186,21 +183,40 @@
 	<div class="mb-3"><Alert kind="error">{f.message}</Alert></div>
 {/if}
 
-<div
-	class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5"
+<form
+	method="get"
+	action="/pantry"
 	role="search"
+	data-sveltekit-keepfocus
+	data-sveltekit-noscroll
+	data-sveltekit-replacestate
+	onsubmit={() => submit.cancel()}
 >
-	<span class="text-sage-soft" aria-hidden="true">⌕</span>
-	<label class="sr-only" for="pantry-search">Search pantry</label>
-	<input
-		id="pantry-search"
-		class="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-sage-soft"
-		placeholder="Search pantry"
-		bind:value={q}
-		oninput={onSearch}
-		autocomplete="off"
-	/>
-</div>
+	<div class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5">
+		<span class="text-sage-soft" aria-hidden="true">⌕</span>
+		<label class="sr-only" for="pantry-search">Search pantry</label>
+		<input
+			id="pantry-search"
+			name="q"
+			class="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-sage-soft"
+			placeholder="Search pantry"
+			bind:value={q}
+			oninput={(e) => submit(e.currentTarget.form!)}
+			autocomplete="off"
+		/>
+		{#if data.filters.filter !== 'all'}<input
+				type="hidden"
+				name="filter"
+				value={data.filters.filter}
+			/>{/if}
+		{#if data.filters.location}<input
+				type="hidden"
+				name="location"
+				value={data.filters.location}
+			/>{/if}
+		<noscript><button class="btn-secondary btn-sm">Search</button></noscript>
+	</div>
+</form>
 <div
 	class="-mx-4 mt-3 flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0"
 	role="group"

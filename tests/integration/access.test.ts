@@ -57,7 +57,12 @@ describe('identity, ownership and isolation', () => {
 				null
 			)
 		).rejects.toMatchObject({ status: 404 });
-		const listed = await listRecipes(db, bob.id, parseListParams(new URL('http://x/recipes')));
+		const listed = await listRecipes(
+			db,
+			bob.id,
+			parseListParams(new URL('http://x/recipes')),
+			null
+		);
 		expect(listed.items.map((r) => r.id)).toContain(recipeId);
 
 		await setRecipeShare(alice.id, recipeId, alice.householdId, false);

@@ -8,6 +8,7 @@ import {
 	recipeShares,
 	recipeSteps,
 	recipeAttachments,
+	recipeCategoryItems,
 	recipes,
 	stockLots,
 	user
@@ -21,6 +22,8 @@ import { UNITS, convertAmount, unitsCompatible, type Convention } from '$lib/sha
 import { ingredientLine } from '$lib/shared/ingredient-line';
 import type { ValidRecipe } from '$lib/shared/recipe-input';
 import { withTransaction } from '$lib/server/operations';
+import { CATEGORIES_PER_HOUSEHOLD_MAX } from '$lib/server/recipe-categories';
+import { match as isUuid } from '../../params/uuid';
 
 export const RECIPES_PER_PAGE = 24;
 export const RECIPES_PER_PAGE_MAX = 100;
@@ -31,8 +34,23 @@ export interface RecipeListParams {
 	q: string;
 	tag: string | null;
 	favorites: boolean;
-	scope: 'all' | 'mine' | 'shared';
-	status: 'active' | 'draft' | 'archived' | 'all';
+	/** empty or both = every readable recipe */
+	scope: RecipeScope[];
+	/** empty = active and draft; `'all'` = no status filter */
+	status: RecipeStatusFilter[] | 'all';
+	/** household category ids, OR-ed; ignored without a household */
+	categoryIds: string[];
+}
+
+const RECIPE_SCOPES = ['mine', 'shared'] as const;
+const RECIPE_STATUS_FILTERS = ['draft', 'archived'] as const;
+type RecipeScope = (typeof RECIPE_SCOPES)[number];
+type RecipeStatusFilter = (typeof RECIPE_STATUS_FILTERS)[number];
+
+/** The distinct values of a repeated query parameter that are in `allowed`, in order. */
+function pickAll<T extends string>(url: URL, name: string, allowed: readonly T[]): T[] {
+	const wanted = new Set(url.searchParams.getAll(name));
+	return allowed.filter((v) => wanted.has(v));
 }
 
 export interface RecipeCard {
@@ -62,23 +80,29 @@ export function parseListParams(url: URL): RecipeListParams {
 		RECIPES_PER_PAGE_MAX,
 		Math.max(1, Number(url.searchParams.get('perPage') ?? RECIPES_PER_PAGE) || RECIPES_PER_PAGE)
 	);
-	const scopeRaw = url.searchParams.get('scope');
-	const statusRaw = url.searchParams.get('status');
+	const categoryIds = [...new Set(url.searchParams.getAll('cat').map((c) => c.toLowerCase()))]
+		.filter((c) => isUuid(c))
+		.slice(0, CATEGORIES_PER_HOUSEHOLD_MAX);
 	return {
 		page,
 		perPage,
 		q: (url.searchParams.get('q') ?? '').trim().slice(0, 100),
 		tag: (url.searchParams.get('tag') ?? '').trim().slice(0, 40) || null,
 		favorites: url.searchParams.get('favorites') === '1',
-		scope: scopeRaw === 'mine' || scopeRaw === 'shared' ? scopeRaw : 'all',
-		status:
-			statusRaw === 'draft' || statusRaw === 'archived' || statusRaw === 'all'
-				? statusRaw
-				: 'active'
+		scope: pickAll(url, 'scope', RECIPE_SCOPES),
+		status: url.searchParams.getAll('status').includes('all')
+			? 'all'
+			: pickAll(url, 'status', RECIPE_STATUS_FILTERS),
+		categoryIds
 	};
 }
 
-export async function listRecipes(dbx: DbOrTx, userId: string, params: RecipeListParams) {
+export async function listRecipes(
+	dbx: DbOrTx,
+	userId: string,
+	params: RecipeListParams,
+	householdId: string | null
+) {
 	const conds = [recipeReadableBy(userId)];
 	if (params.q) conds.push(sql`${recipes.title} ilike ${'%' + escapeLike(params.q) + '%'}`);
 	if (params.tag) conds.push(sql`${recipes.tags} @> array[${params.tag}]::text[]`);
@@ -88,10 +112,28 @@ export async function listRecipes(dbx: DbOrTx, userId: string, params: RecipeLis
 				sql`(select 1 from ${recipeFavorites} f where f.recipe_id = ${recipes.id} and f.user_id = ${userId})`
 			)
 		);
-	if (params.scope === 'mine') conds.push(eq(recipes.ownerUserId, userId));
-	if (params.scope === 'shared') conds.push(ne(recipes.ownerUserId, userId));
-	if (params.status === 'active') conds.push(inArray(recipes.status, ['active', 'draft']));
-	else if (params.status !== 'all') conds.push(eq(recipes.status, params.status));
+	// mine ∪ shared is exactly recipeReadableBy, which is always applied
+	if (params.scope.length === 1)
+		conds.push(
+			params.scope[0] === 'mine' ? eq(recipes.ownerUserId, userId) : ne(recipes.ownerUserId, userId)
+		);
+	if (params.status !== 'all')
+		conds.push(inArray(recipes.status, params.status.length ? params.status : ['active', 'draft']));
+	if (householdId && params.categoryIds.length)
+		conds.push(
+			exists(
+				dbx
+					.select({ one: sql`1` })
+					.from(recipeCategoryItems)
+					.where(
+						and(
+							eq(recipeCategoryItems.recipeId, recipes.id),
+							eq(recipeCategoryItems.householdId, householdId),
+							inArray(recipeCategoryItems.categoryId, params.categoryIds)
+						)
+					)
+			)
+		);
 	const where = and(...conds);
 	const offset = (params.page - 1) * params.perPage;
 

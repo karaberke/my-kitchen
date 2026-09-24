@@ -3,6 +3,7 @@ import {
 	boolean,
 	check,
 	date,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -285,6 +286,53 @@ export const recipeShares = pgTable(
 	(t) => [
 		primaryKey({ columns: [t.recipeId, t.householdId] }),
 		index('recipe_share_household_idx').on(t.householdId)
+	]
+);
+
+/** A household's named group of recipes; any member manages them. */
+export const recipeCategories = pgTable(
+	'recipe_category',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		householdId: uuid('household_id')
+			.notNull()
+			.references(() => households.id, { onDelete: 'cascade' }),
+		name: text('name').notNull(),
+		createdAt: timestamptz('created_at').notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex('recipe_category_name_uq').on(t.householdId, sql`lower(${t.name})`),
+		unique('recipe_category_id_household_uq').on(t.id, t.householdId),
+		check('recipe_category_name_trim_chk', sql`${t.name} = btrim(${t.name})`),
+		check('recipe_category_name_length_chk', sql`char_length(${t.name}) between 1 and 40`)
+	]
+);
+
+/**
+ * A recipe in a category. The composite keys keep the category and the share in
+ * the same household, so an item exists only while the recipe is shared there.
+ */
+export const recipeCategoryItems = pgTable(
+	'recipe_category_item',
+	{
+		categoryId: uuid('category_id').notNull(),
+		recipeId: uuid('recipe_id').notNull(),
+		householdId: uuid('household_id').notNull(),
+		createdAt: timestamptz('created_at').notNull().defaultNow()
+	},
+	(t) => [
+		primaryKey({ columns: [t.categoryId, t.recipeId] }),
+		index('recipe_category_item_household_recipe_idx').on(t.householdId, t.recipeId),
+		foreignKey({
+			name: 'recipe_category_item_category_fk',
+			columns: [t.categoryId, t.householdId],
+			foreignColumns: [recipeCategories.id, recipeCategories.householdId]
+		}).onDelete('cascade'),
+		foreignKey({
+			name: 'recipe_category_item_share_fk',
+			columns: [t.recipeId, t.householdId],
+			foreignColumns: [recipeShares.recipeId, recipeShares.householdId]
+		}).onDelete('cascade')
 	]
 );
 
