@@ -19,7 +19,9 @@ test('cache headers: immutable assets, no-store pages/data, private media with a
 	const rev = await poll;
 	expect(rev.status()).toBe(200);
 	expect(rev.headers()['cache-control']).toBe('private, no-store');
-	expect((await rev.text()).length).toBeLessThan(200);
+	// Four counters plus SvelteKit's envelope, which repeats the query key (about
+	// 300 bytes); still no list data.
+	expect((await rev.text()).length).toBeLessThan(512);
 
 	// SvelteKit can load JavaScript through inline imports, so use its stylesheet.
 	const assetUrl = await page
