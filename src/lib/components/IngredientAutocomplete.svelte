@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { fetchFresh } from '$lib/client/remote';
+	import { ingredientMatch, ingredientSuggestions } from '$lib/remote/ingredients.remote';
+
 	/**
 	 * Combobox for ingredient identity. The typed name is always kept as the
 	 * recipe's display name; a match must be confirmed explicitly (never guessed).
@@ -41,32 +44,25 @@
 	let active = $state(-1);
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	let controller: AbortController | undefined;
 
 	function search(q: string) {
 		clearTimeout(timer);
-		controller?.abort();
+		// Every keystroke retires the answer still on its way.
+		const mine = ++seq;
 		if (q.trim().length < 2) {
 			suggestions = [];
 			open = false;
 			return;
 		}
 		timer = setTimeout(async () => {
-			const mine = ++seq;
-			controller = new AbortController();
 			try {
-				const res = await fetch(`/api/ingredients?q=${encodeURIComponent(q)}`, {
-					signal: controller.signal,
-					headers: { accept: 'application/json' }
-				});
-				if (!res.ok) return;
-				const data = (await res.json()) as { items: Suggestion[] };
+				const items = await fetchFresh(ingredientSuggestions({ q }));
 				if (mine !== seq) return; // stale response, discard
-				suggestions = data.items;
+				suggestions = items;
 				open = true;
 				active = -1;
 			} catch (err) {
-				if ((err as Error).name !== 'AbortError') console.warn(err);
+				console.warn(err);
 			}
 		}, 250);
 	}
@@ -99,11 +95,7 @@
 		const q = name.trim();
 		if (!propose || ingredientId || createIdentity || q.length < 2) return;
 		try {
-			const res = await fetch(`/api/ingredients/match?name=${encodeURIComponent(q)}`, {
-				headers: { accept: 'application/json' }
-			});
-			if (!res.ok) return;
-			const data = (await res.json()) as { match: { ingredientId: string; name: string } | null };
+			const data = await fetchFresh(ingredientMatch({ name: q }));
 			// The field may have changed while the answer was on its way.
 			if (!data.match || ingredientId || createIdentity || name.trim() !== q) return;
 			ingredientId = data.match.ingredientId;
@@ -112,13 +104,6 @@
 		} catch {
 			// A proposal is a convenience; a failed one changes nothing.
 		}
-	}
-	function onInput(e: Event) {
-		name = (e.target as HTMLInputElement).value;
-		if (identityLabel && identityLabel.toLowerCase() !== name.trim().toLowerCase()) {
-			// keep the confirmed identity; the display name may differ from it
-		}
-		search(name);
 	}
 	function onKey(e: KeyboardEvent) {
 		const total = suggestions.length + (name.trim().length >= 2 ? 1 : 0);
@@ -158,8 +143,8 @@
 		aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
 		autocomplete="off"
 		{placeholder}
-		value={name}
-		oninput={onInput}
+		bind:value={name}
+		oninput={(e) => search(e.currentTarget.value)}
 		onkeydown={onKey}
 		onfocus={() => {
 			if (suggestions.length) open = true;

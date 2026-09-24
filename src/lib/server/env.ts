@@ -159,7 +159,7 @@ export function serverEnv(): ServerEnv {
 }
 
 /**
- * How often the client polls `/api/revisions`, floored so a low or missing
+ * How often the client polls the `householdRevisions` query, floored so a low or missing
  * override can't hammer it. Shared by the session layout (every page) and the
  * settings page, which both send `pollMs` to the client.
  */

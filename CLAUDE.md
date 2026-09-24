@@ -87,7 +87,7 @@ wraps driver errors.
 
 **Freshness.** `household.pantry_revision`, `grocery_revision` and
 `plan_revision` change in the same transaction as the data, and the client
-polls `/api/revisions`. Bump the correct counter, or screens stop refreshing.
+polls the `householdRevisions` remote query. Bump the correct counter, or screens stop refreshing.
 
 **Quantities.** All arithmetic uses `Dec` (BigInt, six decimals) to mirror the
 `numeric(14,6)` columns, and crosses JSON as a string. `null` means unknown and

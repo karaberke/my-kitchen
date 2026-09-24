@@ -12,6 +12,7 @@
  * disposable.
  */
 
+import type { RequestEvent } from '@sveltejs/kit';
 import { and, eq, gt, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
@@ -21,13 +22,22 @@ import {
 	barcodeProducts,
 	ingredients
 } from '$lib/server/db/schema';
-import { consume, PROVIDER_LIMITS } from '$lib/server/ratelimit';
+import { assertMember, requireHousehold } from '$lib/server/access';
+import { AppError } from '$lib/server/errors';
+import { BARCODE_LIMITS, consume, PROVIDER_LIMITS } from '$lib/server/ratelimit';
 import { serverEnv } from '$lib/server/env';
 import { withTransaction } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
-import type { BarcodeIdentity } from '$lib/shared/gtin';
+import {
+	identifyAs,
+	identifyManual,
+	SYMBOLOGIES,
+	type BarcodeIdentity,
+	type Symbology
+} from '$lib/shared/gtin';
 import { usdaAdapter } from './usda';
 import { offAdapter } from './off';
+import { suggestionFor } from './suggest';
 import type {
 	BarcodeSource,
 	ProviderAdapter,
@@ -339,6 +349,40 @@ async function householdLink(householdId: string, gtin: string): Promise<LinkVie
 		...row,
 		defaultQuantity: row.defaultQuantity === null ? null : Dec.from(row.defaultQuantity).toString()
 	};
+}
+
+/**
+ * What one scanned or typed barcode means for the caller's household; the
+ * remote `barcodeLookup` query. The number is validated here, on the server,
+ * whatever the phone believed it had decoded. An unreadable number is an
+ * answer (`ok: false`), not an error.
+ */
+export async function scanBarcode(
+	event: RequestEvent,
+	arg: { code: string; symbology: string | null },
+	/** Test seam, passed through to `lookupBarcode`. */
+	providers?: ProviderAdapter[]
+) {
+	const { user, household } = requireHousehold(event);
+	await assertMember(db, household.id, user.id);
+
+	const limit = consume(`barcode:${user.id}`, BARCODE_LIMITS.lookup);
+	if (!limit.allowed)
+		throw new AppError(429, `Too many scans. Try again in ${limit.retryAfterSeconds} seconds.`);
+
+	const code = arg.code.slice(0, 40);
+	const symbology = SYMBOLOGIES.includes(arg.symbology as Symbology)
+		? (arg.symbology as Symbology)
+		: null;
+
+	// A decoder reports the format it read, so the code is held to it. A typed
+	// number has no format, and eight digits then need an explicit answer.
+	const identified = symbology ? identifyAs(code, symbology) : identifyManual(code);
+	if (!identified.ok)
+		return { ok: false as const, reason: identified.reason, message: identified.message };
+
+	const lookup = await lookupBarcode(identified.identity, household.id, providers);
+	return { ok: true as const, lookup, suggestion: suggestionFor(lookup) };
 }
 
 export async function lookupBarcode(

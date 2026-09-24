@@ -1,5 +1,7 @@
 import { and, asc, eq, isNull, or, sql, inArray } from 'drizzle-orm';
-import type { DbOrTx } from '$lib/server/db';
+import type { RequestEvent } from '@sveltejs/kit';
+import { db as appDb, type DbOrTx } from '$lib/server/db';
+import { requireUserApi } from '$lib/server/access';
 import { ingredientAliases, ingredients } from '$lib/server/db/schema';
 import { normalizeName } from '$lib/shared/text';
 import { AppError } from '$lib/server/errors';
@@ -23,6 +25,13 @@ export interface IngredientSuggestion {
 	category: string;
 	scope: 'catalog' | 'mine';
 	matchedAlias: string | null;
+}
+
+/** Autocomplete for the signed-in caller; the remote `ingredientSuggestions` query. */
+export async function suggestIngredients(event: RequestEvent, arg: { q: string; limit?: number }) {
+	const user = requireUserApi(event);
+	const limit = Math.min(12, Math.max(1, Number(arg.limit ?? 8) || 8));
+	return searchIngredients(appDb, user.id, arg.q.slice(0, 60), limit);
 }
 
 /**

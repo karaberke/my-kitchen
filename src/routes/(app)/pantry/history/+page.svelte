@@ -12,8 +12,7 @@
 	type LooseForm =
 		{ ok?: boolean; message?: string; review?: { reason?: string } } | null | undefined;
 	const f = $derived(form as LooseForm);
-	// svelte-ignore state_referenced_locally
-	let opId = $state<string>(data.operationId);
+	let opId: string = $derived(data.operationId);
 	const dot: Record<string, string> = {
 		purchase: 'bg-leaf',
 		add_stock: 'bg-leaf',

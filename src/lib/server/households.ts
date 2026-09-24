@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
-import type { DbOrTx } from '$lib/server/db';
+import type { RequestEvent } from '@sveltejs/kit';
+import { db as appDb, type DbOrTx } from '$lib/server/db';
 import {
 	householdInvites,
 	householdMembers,
@@ -11,9 +12,33 @@ import {
 	type HouseholdRole
 } from '$lib/server/db/schema';
 import { AppError, forbidden } from '$lib/server/errors';
-import { assertMember, assertOwner } from '$lib/server/access';
+import {
+	assertMember,
+	assertOwner,
+	loadHouseholdOrThrow,
+	requireUserApi
+} from '$lib/server/access';
 import { withTransaction } from '$lib/server/operations';
 import { dbTimestampMs } from '$lib/shared/time';
+
+/**
+ * The `{ pantry, grocery, plan }` revision counters of one household the caller
+ * belongs to (the active one by default); the remote `householdRevisions`
+ * query that `PollRevisions` asks on a timer.
+ */
+export async function revisionsFor(event: RequestEvent, arg: { household?: string }) {
+	const user = requireUserApi(event);
+	const householdId = arg.household ?? event.locals.household?.id;
+	if (!householdId) throw new AppError(400, 'No household');
+	await assertMember(appDb, householdId, user.id);
+	const h = await loadHouseholdOrThrow(appDb, householdId);
+	return {
+		household: h.id,
+		pantry: h.pantryRevision,
+		grocery: h.groceryRevision,
+		plan: h.planRevision
+	};
+}
 
 /** Create the personal household for a new user, idempotently. */
 export async function ensurePersonalHousehold(db: DbOrTx, userId: string, displayName: string) {

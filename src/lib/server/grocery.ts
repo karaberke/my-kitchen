@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import type { RequestEvent } from '@sveltejs/kit';
 import { type DbOrTx, type Tx } from '$lib/server/db';
 import {
 	groceryBatchRequirements,
@@ -14,7 +15,7 @@ import {
 	stockLots,
 	type ListStatus
 } from '$lib/server/db/schema';
-import { assertMember, assertRecipeReadable } from '$lib/server/access';
+import { assertMember, assertRecipeReadable, householdActor } from '$lib/server/access';
 import { AppError, ReviewConflict, notFound } from '$lib/server/errors';
 import {
 	assertIngredientsVisible,
@@ -32,6 +33,7 @@ import {
 } from '$lib/shared/grocery-math';
 import { convertAmount, isUnitId, unitsCompatible, type Convention } from '$lib/shared/units';
 import type { ActorContext } from '$lib/server/pantry';
+import { match as isUuid } from '../../params/uuid';
 
 /* ------------------------------ reads ------------------------------ */
 
@@ -1101,6 +1103,15 @@ export async function completeList(
 		const revision = await bumpList(tx, input.listId);
 		return { revision };
 	});
+}
+
+/** `reopenList` for the caller's active household; the remote `reopenList` command. */
+export async function reopenListFor(
+	event: RequestEvent,
+	arg: { listId: string; expectedRevision: number }
+) {
+	if (!isUuid(arg.listId)) throw notFound();
+	return reopenList(householdActor(event), arg);
 }
 
 /**

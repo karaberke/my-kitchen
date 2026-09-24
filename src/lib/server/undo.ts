@@ -7,13 +7,22 @@ import {
 	inventoryMovements,
 	purchaseAllocations
 } from '$lib/server/db/schema';
-import { assertMember } from '$lib/server/access';
+import type { RequestEvent } from '@sveltejs/kit';
+import { assertMember, householdActor } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { applyMovement, insertEvent, lockHousehold, lockLots } from '$lib/server/inventory';
-import { runOperation } from '$lib/server/operations';
+import { requireOperationId, runOperation } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
 import { remainingTarget } from '$lib/shared/grocery-math';
 import type { ActorContext } from '$lib/server/pantry';
+
+/** `undoEvent` for the caller's active household; the remote `undo` command. */
+export async function undoFor(event: RequestEvent, arg: { operationId: string; eventId: string }) {
+	return undoEvent(householdActor(event), {
+		operationId: requireOperationId(arg.operationId),
+		eventId: arg.eventId
+	});
+}
 
 /**
  * Undo = one linked compensating event. It reverses the original deltas
