@@ -16,7 +16,6 @@ export const GROCERY_CATEGORIES = [
 	'Household',
 	'Other'
 ] as const;
-export type GroceryCategory = (typeof GROCERY_CATEGORIES)[number];
 
 export interface IngredientSuggestion {
 	id: string;
@@ -175,19 +174,4 @@ export async function getIngredientMeta(db: DbOrTx, ids: string[]) {
 	return new Map(
 		rows.map((r) => [r.id, { name: r.name, category: r.category, gramsPerMl: r.gramsPerMl }])
 	);
-}
-
-/** Update the density (g/ml) of an ingredient the user owns. */
-export async function setIngredientDensity(
-	db: DbOrTx,
-	userId: string,
-	ingredientId: string,
-	gramsPerMl: string | null
-) {
-	const result = await db
-		.update(ingredients)
-		.set({ gramsPerMl })
-		.where(and(eq(ingredients.id, ingredientId), eq(ingredients.ownerUserId, userId)))
-		.returning({ id: ingredients.id });
-	if (!result.length) throw new AppError(404, 'Only your own custom ingredients can be edited');
 }

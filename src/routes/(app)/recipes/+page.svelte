@@ -5,6 +5,7 @@
 	import RecipeCard from '$lib/components/RecipeCard.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { debouncedSearchGoto } from '$lib/client/debounced-search';
 
 	let { data } = $props();
 	let q = $derived(data.params.q);
@@ -50,13 +51,9 @@
 			on: data.params.status === 'archived'
 		}
 	]);
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+	const searchGoto = debouncedSearchGoto();
 	function onSearchInput() {
-		clearTimeout(searchTimer);
-		searchTimer = setTimeout(
-			() => goto(link({ q }), { keepFocus: true, replaceState: true, noScroll: true }),
-			300
-		);
+		searchGoto(link({ q }));
 	}
 </script>
 
@@ -80,7 +77,7 @@
 	class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5"
 	onsubmit={(e) => {
 		e.preventDefault();
-		clearTimeout(searchTimer);
+		searchGoto.cancel();
 		goto(link({ q }));
 	}}
 >

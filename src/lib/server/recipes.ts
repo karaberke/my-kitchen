@@ -168,7 +168,8 @@ export async function listRecipeOptions(dbx: DbOrTx, userId: string) {
 			title: recipes.title,
 			prepMinutes: recipes.prepMinutes,
 			cookMinutes: recipes.cookMinutes,
-			baseServings: recipes.baseServings
+			baseServings: recipes.baseServings,
+			yieldNote: recipes.yieldNote
 		})
 		.from(recipes)
 		.where(and(recipeReadableBy(userId), inArray(recipes.status, ['active', 'draft'])))

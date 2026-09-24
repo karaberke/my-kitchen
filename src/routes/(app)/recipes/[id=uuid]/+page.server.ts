@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireHousehold, requireUser } from '$lib/server/access';
@@ -12,7 +12,6 @@ import {
 	setRecipeShare
 } from '$lib/server/recipes';
 import { addBatch, createList, getCurrentListId, getListDetail } from '$lib/server/grocery';
-import { asAppError } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { randomUUID } from 'node:crypto';
@@ -34,12 +33,6 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	};
 };
 
-function handle(err: unknown) {
-	const app = asAppError(err);
-	if (app) return fail(app.status, { message: app.message });
-	throw err;
-}
-
 export const actions: Actions = {
 	favorite: async (event) => {
 		const user = requireUser(event);
@@ -47,7 +40,7 @@ export const actions: Actions = {
 		try {
 			await setFavorite(user.id, event.params.id, fd.get('favorite') === '1');
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		return { ok: true };
 	},
@@ -58,7 +51,7 @@ export const actions: Actions = {
 		try {
 			await setRecipeShare(user.id, event.params.id, householdId, fd.get('shared') === '1');
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		return { ok: true, shared: fd.get('shared') === '1' };
 	},
@@ -68,7 +61,7 @@ export const actions: Actions = {
 		try {
 			id = await duplicateRecipe(user.id, event.params.id);
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		throw redirect(303, `/recipes/${id}/edit`);
 	},
@@ -78,7 +71,7 @@ export const actions: Actions = {
 		try {
 			await setRecipeArchived(user.id, event.params.id, fd.get('archived') === '1');
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		return { ok: true };
 	},
@@ -87,7 +80,7 @@ export const actions: Actions = {
 		try {
 			await deleteRecipe(user.id, event.params.id);
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 		throw redirect(303, '/recipes');
 	},
@@ -126,7 +119,7 @@ export const actions: Actions = {
 				servings: Dec.from(parsed.value).toString()
 			};
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	}
 };

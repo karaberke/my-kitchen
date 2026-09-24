@@ -5,7 +5,7 @@
 	import Alert from '$lib/components/Alert.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import PollRevisions from '$lib/components/PollRevisions.svelte';
-	import { fmtMinutes } from '$lib/client/format';
+	import { recipeMetaLine } from '$lib/client/format';
 
 	let { data, form } = $props();
 
@@ -23,19 +23,6 @@
 		new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long' });
 	const dayDate = (iso: string) =>
 		new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-
-	/** "40 min prep · 1 h cook · 4 servings" — blank parts are dropped. */
-	function recipeSub(e: {
-		prepMinutes: number | null;
-		cookMinutes: number | null;
-		baseServings: string | null;
-	}) {
-		const parts = [];
-		if (e.prepMinutes) parts.push(`${fmtMinutes(e.prepMinutes)} prep`);
-		if (e.cookMinutes) parts.push(`${fmtMinutes(e.cookMinutes)} cook`);
-		if (e.baseServings) parts.push(`${Number(e.baseServings)} servings`);
-		return parts.join(' · ');
-	}
 
 	const planned = $derived(data.days.reduce((n, d) => n + d.entries.length, 0));
 	const daysUsed = $derived(data.days.filter((d) => d.entries.length).length);
@@ -106,7 +93,9 @@
 						{#if e.recipeId}
 							<a href="/recipes/{e.recipeId}" class="min-w-0 flex-1 text-ink hover:text-ink">
 								<div class="text-[13px] leading-tight">{e.title}</div>
-								{#if recipeSub(e)}<div class="mt-1 text-[11px] text-sage">{recipeSub(e)}</div>{/if}
+								{#if recipeMetaLine(e)}<div class="mt-1 text-[11px] text-sage">
+										{recipeMetaLine(e)}
+									</div>{/if}
 							</a>
 						{:else}
 							<div class="min-w-0 flex-1">
@@ -143,7 +132,7 @@
 >
 	<div class="flex flex-col gap-3.5">
 		{#if data.recipes.length}
-			<ul class="sc flex max-h-64 flex-col gap-1.5 overflow-y-auto">
+			<ul class="flex max-h-64 flex-col gap-1.5 overflow-y-auto">
 				{#each data.recipes as r (r.id)}
 					<li>
 						<form
@@ -162,7 +151,9 @@
 								class="w-full rounded-[12px] border border-sand-dark bg-card px-3 py-2.5 text-left hover:bg-parchment"
 							>
 								<div class="text-[13px] leading-tight">{r.title}</div>
-								{#if recipeSub(r)}<div class="mt-1 text-[11px] text-sage">{recipeSub(r)}</div>{/if}
+								{#if recipeMetaLine(r)}<div class="mt-1 text-[11px] text-sage">
+										{recipeMetaLine(r)}
+									</div>{/if}
 							</button>
 						</form>
 					</li>

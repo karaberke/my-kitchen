@@ -1,10 +1,9 @@
-import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { redirect } from '@sveltejs/kit';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, requireHousehold } from '$lib/server/access';
 import { createList, getCurrentListId, listGroceryLists } from '$lib/server/grocery';
-import { asAppError } from '$lib/server/errors';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -26,9 +25,7 @@ export const actions: Actions = {
 			);
 			throw redirect(303, `/grocery/${id}`);
 		} catch (err) {
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 	}
 };

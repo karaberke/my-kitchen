@@ -1,6 +1,6 @@
 import type { RecipeFormInput, RecipeIngredientInput, RecipeStepInput } from './recipe-input';
 import { parseAmount } from './amount-parse';
-import { isUnitId, normalizeUnitInput } from './units';
+import { normalizeUnitInput } from './units';
 
 /**
  * Read a recipe out of a saved HTML page.
@@ -155,7 +155,7 @@ const QUANTITY = new RegExp(
 /** Map a free-text unit token to a canonical unit id, or null. */
 function normalizeUnit(raw: string): string | null {
 	if (!raw) return null;
-	return isUnitId(raw.toLowerCase()) ? raw.toLowerCase() : normalizeUnitInput(raw);
+	return normalizeUnitInput(raw);
 }
 
 export interface SplitIngredient {

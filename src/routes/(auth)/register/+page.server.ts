@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { guard, safeNext } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
@@ -9,8 +9,7 @@ import { AUTH_LIMITS, clientKey, consume } from '$lib/server/ratelimit';
 
 const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, '/recipes');
-	const raw = url.searchParams.get('next');
-	const next = raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/recipes';
+	const next = safeNext(url.searchParams.get('next'));
 	return {
 		title: 'Create account',
 		registrationOpen: await registrationAllowed(db, next),
@@ -24,8 +23,7 @@ const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 export const actions: Actions = {
 	social: async (event) => {
 		const fd = await event.request.formData();
-		const nextRaw = String(fd.get('next') ?? '');
-		const next = nextRaw.startsWith('/') && !nextRaw.startsWith('//') ? nextRaw : '/recipes';
+		const next = safeNext(String(fd.get('next') ?? ''));
 		const provider = String(fd.get('provider') ?? '');
 		if (!enabledSocialProviders().includes(provider) || !(await registrationAllowed(db, next)))
 			return fail(400, { message: 'That sign-in method is not available here.' });
@@ -52,8 +50,7 @@ export const actions: Actions = {
 			.trim()
 			.slice(0, 200);
 		const password = String(fd.get('password') ?? '').slice(0, 200);
-		const nextRaw = String(fd.get('next') ?? '');
-		const next = nextRaw.startsWith('/') && !nextRaw.startsWith('//') ? nextRaw : '/recipes';
+		const next = safeNext(String(fd.get('next') ?? ''));
 		if (!(await registrationAllowed(db, next)))
 			return fail(403, {
 				message: 'Registration is closed on this installation.',

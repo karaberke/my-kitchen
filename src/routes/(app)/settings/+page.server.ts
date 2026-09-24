@@ -5,7 +5,7 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
-import { serverEnv } from '$lib/server/env';
+import { revisionPollMs, serverEnv } from '$lib/server/env';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 import { consistencyCheck } from '$lib/server/pantry';
 import { eq } from 'drizzle-orm';
@@ -43,7 +43,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		linked,
 		registrationOpen: env.REGISTRATION_OPEN,
 		storageBackend: env.STORAGE_BACKEND,
-		pollMs: Number(process.env.PUBLIC_REVISION_POLL_MS ?? 20000)
+		pollMs: revisionPollMs()
 	};
 };
 

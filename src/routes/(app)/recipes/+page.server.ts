@@ -1,10 +1,8 @@
-import { fail } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { listRecipes, listUserTags, parseListParams, setFavorite } from '$lib/server/recipes';
-import { asAppError } from '$lib/server/errors';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
@@ -26,9 +24,7 @@ export const actions: Actions = {
 		try {
 			await setFavorite(user.id, recipeId, favorite);
 		} catch (err) {
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 		return { ok: true };
 	}
