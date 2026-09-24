@@ -58,6 +58,25 @@ describe('parsePackageSizeText', () => {
 		expect(parsePackageSizeText(' Net Wt 9.5 oz ').labelText).toBe('Net Wt 9.5 oz');
 		expect(parsePackageSizeText(' family size ').labelText).toBe('family size');
 	});
+
+	it('reads a US gallon statement', () => {
+		expect(shown(parsePackageSizeText('1 GAL'))).toBe('1 gal_us');
+	});
+
+	it('reinterprets oz as fluid ounces when a printed volume agrees', () => {
+		expect(shown(parsePackageSizeText('128 OZ (3.78 L)'))).toBe('128 fl_oz');
+	});
+
+	it('flags a bare oz as ambiguous against a per-100ml nutrition basis', () => {
+		const r = parsePackageSizeText('128 OZ', 'per_100ml');
+		expect(r.size).toBeNull();
+		expect(r.reason).toBe('ambiguous_oz');
+	});
+
+	it('keeps a bare oz as mass when the nutrition basis is per-100g, or absent', () => {
+		expect(shown(parsePackageSizeText('16 oz', 'per_100g'))).toBe('16 oz');
+		expect(shown(parsePackageSizeText('16 oz'))).toBe('16 oz');
+	});
 });
 
 describe('packageSizeSuggestion', () => {

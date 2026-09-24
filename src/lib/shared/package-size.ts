@@ -33,6 +33,9 @@ export const PACKAGE_SIZE_UNITS: readonly string[] = [
 	'ml',
 	'l',
 	'fl_oz',
+	'gal_us',
+	'qt_us',
+	'pt_us',
 	'piece'
 ];
 
@@ -55,7 +58,19 @@ export interface PackageSize {
 	unit: string;
 }
 
-export type PackageSizeReason = 'absent' | 'unparsed' | 'unsupported_unit' | 'conflicting_amounts';
+export type PackageSizeReason =
+	| 'absent'
+	| 'unparsed'
+	| 'unsupported_unit'
+	| 'conflicting_amounts'
+	/** A bare "oz" on a product whose nutrition is per 100 ml: weight or fluid ounces. */
+	| 'ambiguous_oz';
+
+/**
+ * The provider's nutrition basis. Spelled here because shared code cannot
+ * import the server schema; it matches `NutritionBasis` there.
+ */
+export type ServingBasis = 'serving' | 'per_100g' | 'per_100ml';
 
 export interface PackageSizeSuggestion {
 	/** null means unknown. Unknown is never zero. */
@@ -107,19 +122,39 @@ function agree(a: PackageSize, b: PackageSize): boolean {
 	return difference.mulRatio(100, 1).lte(a.amount.mulRatio(TOLERANCE_PERCENT, 1));
 }
 
-function parseSingle(text: string, labelText: string): PackageSizeSuggestion {
-	const found = amountsIn(text);
+/**
+ * "OZ" on a US label is a weight unless the label says otherwise. It is read
+ * as US fluid ounces only when a volume printed beside it agrees
+ * ("128 OZ (3.78 L)"). The nutrition basis alone never changes the unit.
+ * Only US units are understood; Imperial fluid ounces are not supported.
+ */
+function asFluidOunces(found: PackageSize[]): PackageSize[] | null {
+	if (!found.some((f) => f.unit === 'oz')) return null;
+	if (!found.some((f) => unitInfo(f.unit)?.dimension === 'volume')) return null;
+	const read = found.map((f) => (f.unit === 'oz' ? { ...f, unit: 'fl_oz' } : f));
+	return read.slice(1).every((other) => agree(read[0], other)) ? read : null;
+}
+
+function parseSingle(
+	text: string,
+	labelText: string,
+	basis: ServingBasis | null
+): PackageSizeSuggestion {
+	let found = amountsIn(text);
 	if (found.length === 0) {
 		// Distinguish "no unit we support" from "nothing that looks like an amount".
 		const hadNumber = /\d/.test(text);
 		return unknown(labelText, hadNumber ? 'unsupported_unit' : 'unparsed');
 	}
+	found = asFluidOunces(found) ?? found;
 	const first = found[0];
 	// "9.5 oz (269 g)" states one quantity twice. "1 lb 8 oz" states two, and
 	// adding them would be a guess, so it stays unknown.
 	for (const other of found.slice(1)) {
 		if (!agree(first, other)) return unknown(labelText, 'conflicting_amounts');
 	}
+	if (basis === 'per_100ml' && found.every((f) => f.unit === 'oz'))
+		return unknown(labelText, 'ambiguous_oz');
 	return { size: first, packagesInLabel: 1, source: 'label_text', labelText };
 }
 
@@ -127,7 +162,10 @@ function parseSingle(text: string, labelText: string): PackageSizeSuggestion {
  * Read a net-contents statement such as "397 g", "1.5 L", "16 fl oz" or
  * "12 x 330 ml" into an editable suggestion.
  */
-export function parsePackageSizeText(raw: string): PackageSizeSuggestion {
+export function parsePackageSizeText(
+	raw: string,
+	basis: ServingBasis | null = null
+): PackageSizeSuggestion {
 	const labelText = raw.trim();
 	if (!labelText) return unknown(labelText, 'absent');
 	const text = labelText.replace(/\s+/g, ' ');
@@ -142,12 +180,12 @@ export function parsePackageSizeText(raw: string): PackageSizeSuggestion {
 			? { count: Number(trailing[2]), rest: trailing[1] }
 			: null;
 	if (multipack && multipack.count >= 1 && multipack.count <= MAX_PACKAGE_COUNT) {
-		const inner = parseSingle(multipack.rest, labelText);
+		const inner = parseSingle(multipack.rest, labelText, basis);
 		if (!inner.size) return unknown(labelText, inner.reason ?? 'unparsed');
 		return { ...inner, packagesInLabel: multipack.count };
 	}
 
-	return parseSingle(text, labelText);
+	return parseSingle(text, labelText, basis);
 }
 
 /**
@@ -156,10 +194,16 @@ export function parsePackageSizeText(raw: string): PackageSizeSuggestion {
  */
 export function packageSizeSuggestion(
 	structured: { amount: Dec | null; unit: string | null } | null,
-	labelText: string
+	labelText: string,
+	basis: ServingBasis | null = null
 ): PackageSizeSuggestion {
 	const unit = structured?.unit ? normalizeUnitInput(structured.unit) : null;
 	if (structured?.amount && structured.amount.isPositive() && isSupported(unit)) {
+		// A structured "oz" on a per-100 ml product needs the label to say which ounce.
+		if (unit === 'oz' && basis === 'per_100ml') {
+			const fromLabel = parsePackageSizeText(labelText, basis);
+			return fromLabel.size ? fromLabel : unknown(labelText.trim(), 'ambiguous_oz');
+		}
 		return {
 			size: { amount: structured.amount, unit },
 			packagesInLabel: 1,
@@ -167,7 +211,7 @@ export function packageSizeSuggestion(
 			labelText: labelText.trim()
 		};
 	}
-	return parsePackageSizeText(labelText);
+	return parsePackageSizeText(labelText, basis);
 }
 
 export type PantryAmount = { ok: true; quantity: Dec; unit: string } | { ok: false; error: string };

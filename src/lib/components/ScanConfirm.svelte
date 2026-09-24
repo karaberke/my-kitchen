@@ -27,12 +27,15 @@
 		scan,
 		categories,
 		operationId,
+		form = null,
 		onclose,
 		onresult
 	}: {
 		scan: Scan | null;
 		categories: readonly string[];
 		operationId: string;
+		/** The last action result for this sheet, so a server rejection shows in place. */
+		form?: { message?: string } | null;
 		onclose: () => void;
 		onresult: (result: { type: string; data?: Record<string, unknown> }) => void;
 	} = $props();
@@ -41,8 +44,9 @@
 	let ingredientId = $state<string | null>(null);
 	let identityLabel = $state<string | null>(null);
 	let createIdentity = $state(false);
+	let proposed = $state(false);
 	let quantity = $state('');
-	let unit = $state('g');
+	let unit = $state('');
 	let packageCount = $state('1');
 	let busy = $state(false);
 	let seen = $state('');
@@ -52,13 +56,36 @@
 		if (!scan || seen === scan.lookup.gtin + scan.suggestion.from) return;
 		seen = scan.lookup.gtin + scan.suggestion.from;
 		name = scan.suggestion.name;
-		ingredientId = scan.suggestion.ingredientId;
-		identityLabel = scan.suggestion.ingredientId ? scan.suggestion.name : null;
-		createIdentity = !scan.suggestion.ingredientId && !!scan.suggestion.name;
+		if (scan.suggestion.ingredientId) {
+			// The household already links this barcode to an ingredient.
+			ingredientId = scan.suggestion.ingredientId;
+			identityLabel = scan.suggestion.name;
+			proposed = false;
+		} else if (scan.suggestion.proposal) {
+			// The title names an ingredient with only harmless words around it;
+			// one ✕ on the combobox removes the proposal.
+			ingredientId = scan.suggestion.proposal.ingredientId;
+			identityLabel = scan.suggestion.proposal.name;
+			proposed = true;
+		} else {
+			ingredientId = null;
+			identityLabel = null;
+			proposed = false;
+		}
+		createIdentity = false;
 		quantity = scan.suggestion.packageQuantity ?? '';
-		unit = scan.suggestion.packageUnit ?? 'g';
+		unit = scan.suggestion.packageUnit ?? '';
 		packageCount = String(scan.suggestion.packageCount);
 	});
+
+	/** Choosing a listed candidate matches `choose()` in IngredientAutocomplete: the
+	 *  typed name is left as it is, only the identity link changes. */
+	function chooseCandidate(c: { id: string; name: string }) {
+		ingredientId = c.id;
+		identityLabel = c.name;
+		createIdentity = false;
+		proposed = false;
+	}
 
 	const SOURCE_LABEL: Record<string, string> = {
 		usda: 'USDA FoodData Central',
@@ -94,6 +121,16 @@
 	const missingSize = $derived(
 		!!scan && scan.suggestion.packageQuantity === null && scan.suggestion.from !== 'household'
 	);
+
+	/**
+	 * Neither an ingredient nor a name the user gave for a new one — the server
+	 * rejects this. The untouched product title alone never makes an identity;
+	 * a typed name or the "new ingredient" choice does.
+	 */
+	const noIngredient = $derived(
+		!ingredientId &&
+			!(name.trim() && (createIdentity || name.trim() !== (scan?.suggestion.name.trim() ?? '')))
+	);
 </script>
 
 <Sheet
@@ -103,6 +140,9 @@
 	description="Nothing is stored until you press Add to pantry."
 >
 	{#if scan}
+		{#if form?.message}
+			<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>
+		{/if}
 		<form
 			method="post"
 			action="?/scanAdd"
@@ -120,6 +160,7 @@
 			<input type="hidden" name="code" value={scan.code} />
 			{#if scan.symbology}<input type="hidden" name="symbology" value={scan.symbology} />{/if}
 			<input type="hidden" name="displayName" value={scan.suggestion.name || name} />
+			<input type="hidden" name="providerTitle" value={scan.suggestion.name} />
 			<input type="hidden" name="brand" value={scan.suggestion.brand} />
 			<input type="hidden" name="labelText" value={scan.suggestion.packageLabelText} />
 			<input
@@ -172,6 +213,19 @@
 				>
 			{/if}
 
+			{#if !ingredientId && !createIdentity && scan.suggestion.candidates.length}
+				<fieldset>
+					<legend class="label">Which ingredient is this?</legend>
+					<div class="flex flex-wrap gap-2">
+						{#each scan.suggestion.candidates as c (c.id)}
+							<button type="button" class="btn-secondary btn-sm" onclick={() => chooseCandidate(c)}>
+								{c.name}
+							</button>
+						{/each}
+					</div>
+				</fieldset>
+			{/if}
+
 			<div>
 				<label class="label" for="scan-name">Ingredient</label>
 				<IngredientAutocomplete
@@ -181,6 +235,8 @@
 					bind:ingredientId
 					bind:identityLabel
 					bind:createIdentity
+					bind:proposed
+					propose
 				/>
 				<p class="hint">
 					{#if ingredientId}
@@ -201,6 +257,28 @@
 				</div>
 			{/if}
 
+			{#if scan.suggestion.sizeReason === 'ambiguous_oz'}
+				<fieldset>
+					<legend class="label">The label says OZ. Is that weight or fluid ounces?</legend>
+					<div class="flex gap-2">
+						<button
+							type="button"
+							class="btn-secondary btn-sm {unit === 'oz' ? 'border-leaf bg-leaf-soft' : ''}"
+							onclick={() => (unit = 'oz')}
+						>
+							Weight (oz)
+						</button>
+						<button
+							type="button"
+							class="btn-secondary btn-sm {unit === 'fl_oz' ? 'border-leaf bg-leaf-soft' : ''}"
+							onclick={() => (unit = 'fl_oz')}
+						>
+							Fluid ounces (fl oz)
+						</button>
+					</div>
+				</fieldset>
+			{/if}
+
 			<div class="grid grid-cols-2 gap-3">
 				<div>
 					<label class="label" for="scan-qty">One package holds</label>
@@ -216,11 +294,12 @@
 				</div>
 				<div>
 					<label class="label" for="scan-unit">Unit</label>
-					<select class="field" id="scan-unit" name="unit" bind:value={unit}
-						>{#each UNITS as u (u.id)}<option value={u.id}
+					<select class="field" id="scan-unit" name="unit" required bind:value={unit}>
+						<option value="" disabled>Select a unit</option>
+						{#each UNITS as u (u.id)}<option value={u.id}
 								>{u.singular}{u.plural !== u.singular ? ` / ${u.plural}` : ''}</option
-							>{/each}</select
-					>
+							>{/each}
+					</select>
 				</div>
 				<div>
 					<label class="label" for="scan-count">Packages bought</label>
@@ -263,7 +342,7 @@
 				<input class="field" id="scan-note" name="note" placeholder="Optional" />
 			</div>
 
-			<button class="btn btn-primary" type="submit" disabled={busy || !total}>
+			<button class="btn btn-primary" type="submit" disabled={busy || !total || noIngredient}>
 				{busy ? 'Adding…' : 'Add to pantry'}
 			</button>
 		</form>

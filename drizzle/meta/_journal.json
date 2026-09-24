@@ -43,6 +43,20 @@
       "when": 1790223288775,
       "tag": "0005_recipe_categories",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790238999422,
+      "tag": "0006_pg_trgm",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790239008366,
+      "tag": "0007_neat_jasper_sitwell",
+      "breakpoints": true
     }
   ]
 }

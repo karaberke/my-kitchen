@@ -1,0 +1,2 @@
+CREATE INDEX "ingredient_alias_trgm_idx" ON "ingredient_alias" USING gin ("alias_normalized" gin_trgm_ops);--> statement-breakpoint
+CREATE INDEX "ingredient_name_trgm_idx" ON "ingredient" USING gin ("name_normalized" gin_trgm_ops);
