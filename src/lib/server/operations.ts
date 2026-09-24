@@ -68,6 +68,13 @@ export function isOperationId(value: unknown): value is string {
 	return typeof value === 'string' && UUID_RE.test(value);
 }
 
+/** The `operationId` field every mutating form posts, or a 400 the caller's try/catch maps to `fail(400, ...)`. */
+export function operationIdFrom(fd: FormData): string {
+	const id = String(fd.get('operationId') ?? '');
+	if (!isOperationId(id)) throw new AppError(400, 'Missing operation id; reload and try again');
+	return id;
+}
+
 /**
  * Exactly-once mutation wrapper.
  *

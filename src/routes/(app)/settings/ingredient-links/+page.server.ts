@@ -1,11 +1,10 @@
 import { fail } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { linkIngredientNames, listUnlinkedIngredients } from '$lib/server/ingredient-links';
 import { createCustomIngredient } from '$lib/server/ingredients';
-import { asAppError } from '$lib/server/errors';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
@@ -49,9 +48,7 @@ export const actions: Actions = {
 			const result = await linkIngredientNames(user.id, requests);
 			return { ok: true, ...result };
 		} catch (err) {
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 	}
 };

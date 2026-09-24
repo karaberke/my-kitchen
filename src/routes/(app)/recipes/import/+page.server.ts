@@ -1,9 +1,8 @@
 import { fail, isRedirect, type RequestEvent } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
-import { asAppError } from '$lib/server/errors';
 import { handleRecipeSubmit } from '$lib/server/recipe-form';
 import { importRecipeHtml } from '$lib/shared/recipe-html';
 import { parseRecipeText } from '$lib/shared/recipe-text';
@@ -18,6 +17,7 @@ import { matchIngredientNames } from '$lib/server/ingredient-match';
 import type { RecipeIngredientInput } from '$lib/shared/recipe-input';
 import { fetchRecipePage } from '$lib/server/import-fetch';
 import { IMPORT_LIMITS, consume } from '$lib/server/ratelimit';
+import { match as isUuid } from '../../../../params/uuid';
 
 /** Generous for a saved page, small enough to keep parsing cheap. */
 const MAX_HTML_BYTES = 2_000_000;
@@ -182,9 +182,7 @@ export const actions: Actions = {
 			return 'input' in result ? await withProposals(event, result) : result;
 		} catch (err) {
 			// An unreadable file is the user's problem to fix, not a crash.
-			const app = asAppError(err);
-			if (app) return fail(app.status, { message: app.message });
-			throw err;
+			return actionError(err);
 		}
 	},
 	save: async (event) => {
@@ -195,9 +193,9 @@ export const actions: Actions = {
 			return await handleRecipeSubmit(event, null);
 		} catch (err) {
 			// A successful save redirects to the new recipe; link the source on the way past.
-			if (isRedirect(err) && /^[0-9a-f-]{36}$/i.test(attachmentId)) {
-				const id = err.location.match(/\/recipes\/([0-9a-f-]{36})/i)?.[1];
-				if (id) await attachToRecipe(db, user.id, id, attachmentId);
+			if (isRedirect(err) && isUuid(attachmentId)) {
+				const id = err.location.match(/\/recipes\/([^/?#]+)/)?.[1];
+				if (id && isUuid(id)) await attachToRecipe(db, user.id, id, attachmentId);
 			}
 			throw err;
 		}

@@ -1,10 +1,14 @@
 import { fail } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
-import type { RequestEvent } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { assertMember, loadHouseholdOrThrow, requireHousehold } from '$lib/server/access';
+import {
+	assertMember,
+	householdActor,
+	loadHouseholdOrThrow,
+	requireHousehold
+} from '$lib/server/access';
 import {
 	addStock,
 	correctLot,
@@ -13,12 +17,11 @@ import {
 	wasteLot
 } from '$lib/server/pantry';
 import { undoEvent } from '$lib/server/undo';
-import { AppError, ReviewConflict, asAppError } from '$lib/server/errors';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { identifyAs, identifyManual, SYMBOLOGIES, type Symbology } from '$lib/shared/gtin';
 import { pantryAmount } from '$lib/shared/package-size';
 import type { LinkOrigin } from '$lib/server/db/schema';
-import { isOperationId } from '$lib/server/operations';
+import { operationIdFrom } from '$lib/server/operations';
 import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
@@ -47,25 +50,9 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	};
 };
 
-function ctxOf(event: RequestEvent) {
-	const { user, household } = requireHousehold(event);
-	return { userId: user.id, actorName: user.name, householdId: household.id };
-}
-function handle(err: unknown) {
-	if (err instanceof ReviewConflict) return fail(409, { message: err.message, review: err.review });
-	const app = asAppError(err);
-	if (app) return fail(app.status, { message: app.message });
-	throw err;
-}
-function opIdOf(fd: FormData) {
-	const id = String(fd.get('operationId') ?? '');
-	if (!isOperationId(id)) throw new AppError(400, 'Missing operation id; reload and try again');
-	return id;
-}
-
 export const actions: Actions = {
 	add: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const qty = parseAmount(String(fd.get('quantity') ?? ''));
@@ -75,7 +62,7 @@ export const actions: Actions = {
 			const newName = String(fd.get('name') ?? '').trim();
 			const create = fd.get('createIdentity') === '1' || (!ingredientId && !!newName);
 			const out = await addStock(ctx, {
-				operationId: opIdOf(fd),
+				operationId: operationIdFrom(fd),
 				ingredientId,
 				newIngredientName: !ingredientId && create ? newName : null,
 				category: String(fd.get('category') ?? 'Other'),
@@ -87,7 +74,7 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'add', eventId: out.result.eventId, replayed: out.replayed };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	/**
@@ -99,7 +86,7 @@ export const actions: Actions = {
 	 * The barcode is validated again on this side, whatever the phone decoded.
 	 */
 	scanAdd: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const code = String(fd.get('code') ?? '').slice(0, 40);
@@ -129,7 +116,7 @@ export const actions: Actions = {
 				: 'manual';
 
 			const out = await addStock(ctx, {
-				operationId: opIdOf(fd),
+				operationId: operationIdFrom(fd),
 				ingredientId,
 				newIngredientName: ingredientId ? null : newName,
 				category: String(fd.get('category') ?? 'Other'),
@@ -157,11 +144,11 @@ export const actions: Actions = {
 				gtin: identified.identity.gtin
 			};
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	correct: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const qty = parseAmount(String(fd.get('checkedQuantity') ?? ''));
@@ -171,7 +158,7 @@ export const actions: Actions = {
 					form: 'correct'
 				});
 			const out = await correctLot(ctx, {
-				operationId: opIdOf(fd),
+				operationId: operationIdFrom(fd),
 				lotId: String(fd.get('lotId') ?? ''),
 				checkedQuantity: qty.value,
 				expectedRevision: Number(fd.get('expectedRevision') ?? -1),
@@ -184,29 +171,29 @@ export const actions: Actions = {
 				noChange: out.result.noChange
 			};
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	waste: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const qty = parseAmount(String(fd.get('quantity') ?? ''));
 			if (!qty.ok || !qty.value)
 				return fail(400, { message: qty.ok ? 'Enter the amount' : qty.error, form: 'waste' });
 			const out = await wasteLot(ctx, {
-				operationId: opIdOf(fd),
+				operationId: operationIdFrom(fd),
 				lotId: String(fd.get('lotId') ?? ''),
 				quantity: qty.value,
 				reason: String(fd.get('reason') ?? '')
 			});
 			return { ok: true, action: 'waste', eventId: out.result.eventId };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	metadata: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			await updateLotMetadata(ctx, {
@@ -218,17 +205,20 @@ export const actions: Actions = {
 			});
 			return { ok: true, action: 'metadata' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	},
 	undo: async (event) => {
-		const ctx = ctxOf(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			await undoEvent(ctx, { operationId: opIdOf(fd), eventId: String(fd.get('eventId') ?? '') });
+			await undoEvent(ctx, {
+				operationId: operationIdFrom(fd),
+				eventId: String(fd.get('eventId') ?? '')
+			});
 			return { ok: true, action: 'undo' };
 		} catch (err) {
-			return handle(err);
+			return actionError(err);
 		}
 	}
 };

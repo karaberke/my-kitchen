@@ -5,6 +5,7 @@ import { lotsForIngredient } from '$lib/server/cooking';
 import { noStoreJson, guard } from '$lib/server/http';
 import { AppError } from '$lib/server/errors';
 import { isUnitId } from '$lib/shared/units';
+import { match as isUuid } from '../../../params/uuid';
 
 /** Lots of one ingredient in the active household, for cooking substitutions and manual lot choice. */
 const GETImpl = async (event: RequestEvent) => {
@@ -13,7 +14,7 @@ const GETImpl = async (event: RequestEvent) => {
 	if (!householdId) throw new AppError(400, 'No household');
 	await assertMember(db, householdId, user.id);
 	const ingredientId = event.url.searchParams.get('ingredient') ?? '';
-	if (!/^[0-9a-f-]{36}$/i.test(ingredientId)) throw new AppError(400, 'ingredient required');
+	if (!isUuid(ingredientId)) throw new AppError(400, 'ingredient required');
 	const unit = event.url.searchParams.get('unit');
 	const convention = event.url.searchParams.get('convention') === 'us' ? 'us' : 'metric';
 	const data = await lotsForIngredient(

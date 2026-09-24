@@ -1,5 +1,5 @@
-import { error, type RequestEvent } from '@sveltejs/kit';
-import { asAppError } from '$lib/server/errors';
+import { error, fail, type RequestEvent } from '@sveltejs/kit';
+import { asAppError, ReviewConflict } from '$lib/server/errors';
 
 /**
  * Explicit caching policy per response type.
@@ -90,4 +90,38 @@ export function guard<F extends (event: any) => any>(fn: F): F {
 			throw err;
 		}
 	}) as F;
+}
+
+/**
+ * Map application errors thrown inside a form action to `fail()`, the action
+ * twin of `guard`. A `ReviewConflict` keeps its review payload; call sites
+ * with an extra field on the failure (beyond `message`) keep their own
+ * inlined mapping instead of this helper.
+ */
+export function actionError(err: unknown) {
+	if (err instanceof ReviewConflict) return fail(409, { message: err.message, review: err.review });
+	const app = asAppError(err);
+	if (app) return fail(app.status, { message: app.message });
+	throw err;
+}
+
+/** Throwaway origin `safeNext` resolves against; any other origin means `raw` escaped the site. */
+const NEXT_BASE = 'http://next.invalid';
+
+/**
+ * A same-origin path safe to redirect to after sign-in, or `fallback`.
+ *
+ * `raw.startsWith('/')` alone still passes a browser-relative URL like
+ * `/\evil.com` or `/\t/evil.com`, which browsers normalise to `//evil.com`
+ * (protocol-relative) before they navigate — so resolving against a fixed
+ * base and checking the parsed origin is the only safe test.
+ */
+export function safeNext(raw: string | null | undefined, fallback = '/recipes'): string {
+	if (!raw || !raw.startsWith('/')) return fallback;
+	try {
+		const url = new URL(raw, NEXT_BASE);
+		return url.origin === NEXT_BASE ? url.pathname + url.search + url.hash : fallback;
+	} catch {
+		return fallback;
+	}
 }
