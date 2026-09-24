@@ -105,13 +105,6 @@
 			// A proposal is a convenience; a failed one changes nothing.
 		}
 	}
-	function onInput(e: Event) {
-		name = (e.target as HTMLInputElement).value;
-		if (identityLabel && identityLabel.toLowerCase() !== name.trim().toLowerCase()) {
-			// keep the confirmed identity; the display name may differ from it
-		}
-		search(name);
-	}
 	function onKey(e: KeyboardEvent) {
 		const total = suggestions.length + (name.trim().length >= 2 ? 1 : 0);
 		if (e.key === 'ArrowDown' && total) {
@@ -150,8 +143,8 @@
 		aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
 		autocomplete="off"
 		{placeholder}
-		value={name}
-		oninput={onInput}
+		bind:value={name}
+		oninput={(e) => search(e.currentTarget.value)}
 		onkeydown={onKey}
 		onfocus={() => {
 			if (suggestions.length) open = true;

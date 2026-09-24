@@ -74,6 +74,12 @@ test.describe('recipe filters', () => {
 		await expect(details).toHaveAttribute('open');
 		await page.keyboard.press('Escape');
 		await expect(details).not.toHaveAttribute('open');
+
+		// a click anywhere outside the menu closes it too
+		await details.locator('summary').click();
+		await expect(details).toHaveAttribute('open');
+		await page.mouse.click(5, 5);
+		await expect(details).not.toHaveAttribute('open');
 	});
 
 	test('a filter with no matches shows the empty state, and Clear resets it', async ({ page }) => {
