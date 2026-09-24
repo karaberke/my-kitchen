@@ -36,7 +36,11 @@ test.afterAll(async () => {
 	await new Promise<void>((resolve) => stub.close(() => resolve()));
 });
 
-const usdaFood = (gtinUpc: string, description: string) => ({
+const usdaFood = (
+	gtinUpc: string,
+	description: string,
+	opts: { brandName?: string; servingSizeUnit?: string; packageWeight?: string } = {}
+) => ({
 	totalHits: 1,
 	foods: [
 		{
@@ -44,11 +48,11 @@ const usdaFood = (gtinUpc: string, description: string) => ({
 			description,
 			dataType: 'Branded',
 			gtinUpc,
-			brandName: 'Acme',
+			brandName: opts.brandName ?? 'Acme',
 			publicationDate: '2023-06-15',
 			servingSize: 32,
-			servingSizeUnit: 'g',
-			packageWeight: '16 oz (454 g)',
+			servingSizeUnit: opts.servingSizeUnit ?? 'g',
+			packageWeight: opts.packageWeight ?? '16 oz (454 g)',
 			foodNutrients: [
 				{
 					nutrientId: 1003,
@@ -249,4 +253,61 @@ test('the camera is released when the scanner closes and when the page is hidden
 		.toBeGreaterThan(before);
 	// Coming back is deliberate, not automatic.
 	await expect(page.getByRole('button', { name: 'Scan again' })).toBeVisible();
+});
+
+test('a title with no safe proposal lists candidates, and nothing is preselected', async ({
+	page
+}) => {
+	await register(page, 'Sauce');
+	const code = freshUpc();
+	// "Sauce" is not a harmless attribute of tomato, so no ingredient is proposed —
+	// but the catalog's "tomato" is still offered as a candidate to choose from.
+	usdaAnswers(usdaFood(code, 'Tomato Sauce', { brandName: '' }));
+	await openScanner(page);
+
+	await page.getByLabel('Or type the number under the barcode').fill(code);
+	await page.getByRole('button', { name: 'Look up' }).click();
+
+	const sheet = page.getByRole('dialog').filter({ hasText: 'Confirm this product' });
+	await expect(sheet).toBeVisible();
+	await expect(sheet.getByText('Which ingredient is this?')).toBeVisible();
+	await expect(sheet.locator('#scan-name')).toHaveValue('Tomato Sauce');
+	// Nothing is preselected: no proposal badge is shown yet.
+	await expect(sheet.getByText('Proposed:')).toHaveCount(0);
+	await expect(sheet.getByText('Tracked as')).toHaveCount(0);
+
+	// The prefilled title alone is not a choice, so nothing can be saved yet.
+	await page.locator('#scan-qty').fill('425');
+	await page.locator('#scan-unit').selectOption('g');
+	const add = page.getByRole('button', { name: 'Add to pantry' });
+	await expect(add).toBeDisabled();
+
+	await sheet.getByRole('button', { name: 'tomato', exact: true }).click();
+	await expect(sheet.getByText('Tracked as')).toBeVisible();
+	await expect(sheet.getByText('Which ingredient is this?')).toHaveCount(0);
+	await expect(add).toBeEnabled();
+});
+
+test('a bare OZ on a per-100ml product asks whether it is weight or fluid ounces', async ({
+	page
+}) => {
+	await register(page, 'Ambiguous');
+	const code = freshUpc();
+	usdaAnswers(usdaFood(code, 'Plant Milk', { servingSizeUnit: 'ML', packageWeight: '16 OZ' }));
+	await openScanner(page);
+
+	await page.getByLabel('Or type the number under the barcode').fill(code);
+	await page.getByRole('button', { name: 'Look up' }).click();
+
+	const sheet = page.getByRole('dialog').filter({ hasText: 'Confirm this product' });
+	await expect(sheet).toBeVisible();
+	await expect(sheet.getByText('The label says OZ. Is that weight or fluid ounces?')).toBeVisible();
+	// No unit is guessed; the select starts empty and the total is unknown.
+	await expect(page.locator('#scan-unit')).toHaveValue('');
+	await expect(page.getByTestId('scan-total')).toHaveText('—');
+
+	await sheet.getByRole('button', { name: 'Fluid ounces (fl oz)' }).click();
+	await expect(page.locator('#scan-unit')).toHaveValue('fl_oz');
+	await page.locator('#scan-qty').fill('16');
+	await expect(page.getByTestId('scan-total')).toHaveText(/16 fl oz/);
 });

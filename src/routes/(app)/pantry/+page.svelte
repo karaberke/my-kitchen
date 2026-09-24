@@ -45,6 +45,7 @@
 	let addIngredientId = $state<string | null>(null);
 	let addLabel = $state<string | null>(null);
 	let addCreate = $state(false);
+	let addProposed = $state(false);
 	let addUnit = $state('g');
 	let sheetBusy = $state(false);
 	const dirtyInput = () => !!sheet;
@@ -54,6 +55,7 @@
 		addIngredientId = group?.ingredientId ?? null;
 		addLabel = group?.name ?? null;
 		addCreate = false;
+		addProposed = false;
 		addUnit = group?.lots[0]?.unit ?? 'g';
 		sheet = { mode: 'add', group };
 	}
@@ -170,7 +172,7 @@
 	<button class="btn-primary btn-sm rounded-full" onclick={() => openAdd()}>+ Add stock</button>
 </PageHeader>
 
-{#if f?.message && !sheet}
+{#if f?.message && !sheet && !scan}
 	<div class="mb-3"><Alert kind="error">{f.message}</Alert></div>
 {/if}
 
@@ -361,6 +363,8 @@
 						bind:ingredientId={addIngredientId}
 						bind:identityLabel={addLabel}
 						bind:createIdentity={addCreate}
+						bind:proposed={addProposed}
+						propose
 					/>
 					{#if !addIngredientId}<p class="hint">
 							Pick a match so stock can be used by recipes, or create it as your own ingredient.
@@ -547,6 +551,7 @@
 	{scan}
 	categories={data.categories}
 	operationId={scanOpId}
+	form={f}
 	onclose={() => (scan = null)}
 	onresult={afterScanSave}
 />

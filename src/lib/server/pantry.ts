@@ -12,6 +12,7 @@ import {
 import { assertMember } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { assertIngredientsVisible, createCustomIngredient } from '$lib/server/ingredients';
+import { resolveIngredientName } from '$lib/server/ingredient-match';
 import {
 	applyMovement,
 	createLot,
@@ -295,9 +296,13 @@ export async function addStock(ctx: ActorContext, input: AddStockInput) {
 			if (!ingredientId) {
 				if (!input.newIngredientName)
 					throw new AppError(400, 'Choose an ingredient or name a new one');
-				ingredientId = (
-					await createCustomIngredient(tx, ctx.userId, input.newIngredientName, input.category)
-				).id;
+				// A typed name that is exactly a catalog name or curated alias ("scallions")
+				// joins that identity instead of starting a private duplicate.
+				const known = await resolveIngredientName(tx, ctx.userId, input.newIngredientName);
+				ingredientId =
+					known?.ingredientId ??
+					(await createCustomIngredient(tx, ctx.userId, input.newIngredientName, input.category))
+						.id;
 			} else {
 				await assertIngredientsVisible(tx, ctx.userId, [ingredientId]);
 			}

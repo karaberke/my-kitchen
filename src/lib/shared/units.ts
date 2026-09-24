@@ -116,6 +116,34 @@ export const UNITS: readonly UnitDef[] = [
 		aliases: ['fl oz', 'floz', 'fluid ounce', 'fluid ounces', 'fl. oz'],
 		toBase: { metric: '30', us: '29.5735' }
 	},
+	// US package units, for net-contents statements such as "1 GAL". A US
+	// gallon has one fixed size, so both conventions hold the same factor: 128,
+	// 32 and 16 US fluid ounces. Imperial gallons, quarts and pints are not
+	// supported.
+	{
+		id: 'gal_us',
+		dimension: 'volume',
+		singular: 'gal',
+		plural: 'gal',
+		aliases: ['gallon', 'gallons'],
+		toBase: { metric: '3785.408', us: '3785.408' }
+	},
+	{
+		id: 'qt_us',
+		dimension: 'volume',
+		singular: 'qt',
+		plural: 'qt',
+		aliases: ['quart', 'quarts'],
+		toBase: { metric: '946.352', us: '946.352' }
+	},
+	{
+		id: 'pt_us',
+		dimension: 'volume',
+		singular: 'pt',
+		plural: 'pt',
+		aliases: ['pint', 'pints'],
+		toBase: { metric: '473.176', us: '473.176' }
+	},
 	{
 		id: 'piece',
 		dimension: 'count',
