@@ -9,7 +9,9 @@ import { isHttpError, type RemoteQuery } from '@sveltejs/kit';
  */
 export async function fetchFresh<T>(query: RemoteQuery<T>): Promise<T> {
 	await query.refresh();
-	return query.current as T;
+	// A refresh overtaken by a later one that failed resolves with no answer.
+	if (!query.ready) throw query.error ?? new Error('No answer from the server');
+	return query.current;
 }
 
 /** The message a failed remote call carries from the server, or `fallback` (network errors, 500s). */

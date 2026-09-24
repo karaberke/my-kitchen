@@ -129,7 +129,7 @@ compares them with the movement log.
 
 `household.pantry_revision` and `household.grocery_revision` change in the same
 transaction as the data. Pantry and list screens poll the `householdRevisions` remote query (about
-100 bytes, no-store) every 20 s while visible and online, with backoff on
+300 bytes, no-store) every 20 s while visible and online, with backoff on
 failures, and only re-run their loads when a watched counter changed. If the
 page has unsaved input, a notice is shown instead of replacing the form.
 
