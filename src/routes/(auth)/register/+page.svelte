@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import SocialSignIn from '$lib/components/SocialSignIn.svelte';
+	import Alert from '$lib/components/Alert.svelte';
 	let { data, form } = $props();
 	let busy = $state(false);
 </script>
@@ -11,11 +12,11 @@
 		You get a personal household right away. Invite others later.
 	</p>
 	{#if !data.registrationOpen}
-		<div
-			class="mt-4 rounded-[14px] border border-honey-line bg-honey-soft px-3.5 py-3 text-[13px] text-honey-dark"
-		>
-			Registration is closed on this installation. Ask a household owner for an invitation link; it
-			lets you create an account.
+		<div class="mt-4">
+			<Alert kind="warn">
+				Registration is closed on this installation. Ask a household owner for an invitation link;
+				it lets you create an account.
+			</Alert>
 		</div>
 	{:else}
 		<form
@@ -32,12 +33,7 @@
 		>
 			<input type="hidden" name="next" value={data.next} />
 			{#if form?.message}
-				<div
-					class="rounded-[14px] border border-brick-line bg-brick-soft px-3.5 py-3 text-[13px] text-brick-dark"
-					role="alert"
-				>
-					{form.message}
-				</div>
+				<Alert kind="error">{form.message}</Alert>
 			{/if}
 			<div>
 				<label class="label" for="name">Your name</label>

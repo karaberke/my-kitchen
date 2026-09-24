@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { goto, invalidate } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
+	import { debouncedSearchGoto } from '$lib/client/debounced-search';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
@@ -12,6 +13,7 @@
 	import ScanConfirm, { type Scan } from '$lib/components/ScanConfirm.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
+	import { postAction } from '$lib/client/actions';
 	import { fmtDate, fmtQty } from '$lib/client/format';
 	import { UNITS } from '$lib/shared/units';
 	import type { PantryGroup, PantryLotView } from '$lib/server/pantry';
@@ -62,13 +64,9 @@
 		}
 		return u.pathname + u.search;
 	}
-	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+	const searchGoto = debouncedSearchGoto();
 	function onSearch() {
-		clearTimeout(searchTimer);
-		searchTimer = setTimeout(
-			() => goto(link({ q }), { keepFocus: true, replaceState: true, noScroll: true }),
-			300
-		);
+		searchGoto(link({ q }));
 	}
 	const filterChips = $derived([
 		{ id: 'all', label: 'All' },
@@ -154,21 +152,19 @@
 	}
 
 	async function undoEventNow(eventId: string) {
-		const fd = new FormData();
-		fd.set('operationId', undoOp);
-		fd.set('eventId', eventId);
-		const res = await fetch('/pantry?/undo', {
-			method: 'POST',
-			body: fd,
-			headers: { 'x-sveltekit-action': 'true' }
-		});
-		const json = await res.json().catch(() => null);
+		const result = await postAction<Record<string, unknown>, { message?: string }>(
+			'/pantry?/undo',
+			{ operationId: undoOp, eventId }
+		);
 		undoOp = newOperationId();
-		if (json?.type === 'success') pushToast('Undone.', { kind: 'success' });
+		if (result.type === 'success') pushToast('Undone.', { kind: 'success' });
 		else
-			pushToast(json?.data ? (JSON.parse(json.data)?.[1] ?? 'Could not undo') : 'Could not undo', {
-				kind: 'error'
-			});
+			pushToast(
+				result.type === 'failure' ? (result.data?.message ?? 'Could not undo') : 'Could not undo',
+				{
+					kind: 'error'
+				}
+			);
 		await invalidate('app:pantry');
 	}
 </script>
