@@ -256,17 +256,3 @@ export function validateRecipe(input: RecipeFormInput): RecipeValidation {
 		}
 	};
 }
-
-/** Whether a stored recipe has everything needed for grocery generation and cooking. */
-export function recipeIsCookable(recipe: {
-	status: string;
-	baseServings: string | null;
-	ingredientCount: number;
-}): boolean {
-	return (
-		recipe.status === 'active' &&
-		recipe.baseServings !== null &&
-		Dec.from(recipe.baseServings).isPositive() &&
-		recipe.ingredientCount > 0
-	);
-}

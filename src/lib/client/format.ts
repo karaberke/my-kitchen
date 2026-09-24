@@ -26,20 +26,6 @@ export function fmtDate(value: string | null | undefined): string {
 	return d.toLocaleDateString(undefined, { dateStyle: 'medium' });
 }
 
-export function fmtRelative(value: string | null | undefined): string {
-	if (!value) return '';
-	const then = parseDbTimestamp(value).getTime();
-	const diff = Date.now() - then;
-	const min = Math.round(diff / 60000);
-	if (min < 1) return 'just now';
-	if (min < 60) return `${min} min ago`;
-	const h = Math.round(min / 60);
-	if (h < 24) return `${h} h ago`;
-	const days = Math.round(h / 24);
-	if (days < 7) return `${days} d ago`;
-	return fmtDate(value);
-}
-
 export function fmtMinutes(min: number | null | undefined): string {
 	if (!min) return '';
 	if (min < 60) return `${min} min`;

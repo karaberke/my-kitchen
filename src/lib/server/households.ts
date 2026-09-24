@@ -81,15 +81,6 @@ export async function getActiveHouseholdId(db: DbOrTx, userId: string): Promise<
 	return rows[0]?.householdId ?? null;
 }
 
-export async function getMembership(db: DbOrTx, householdId: string, userId: string) {
-	const rows = await db
-		.select({ role: householdMembers.role })
-		.from(householdMembers)
-		.where(and(eq(householdMembers.householdId, householdId), eq(householdMembers.userId, userId)))
-		.limit(1);
-	return rows[0] ?? null;
-}
-
 /* ------------------------- management (owners) ------------------------- */
 
 export const INVITE_TTL_HOURS = 72;

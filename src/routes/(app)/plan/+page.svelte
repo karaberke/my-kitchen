@@ -143,7 +143,7 @@
 >
 	<div class="flex flex-col gap-3.5">
 		{#if data.recipes.length}
-			<ul class="sc flex max-h-64 flex-col gap-1.5 overflow-y-auto">
+			<ul class="flex max-h-64 flex-col gap-1.5 overflow-y-auto">
 				{#each data.recipes as r (r.id)}
 					<li>
 						<form

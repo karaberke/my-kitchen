@@ -57,12 +57,6 @@ export function isInvalidTextRepresentation(err: unknown): boolean {
 	return pgErrorCode(err) === '22P02';
 }
 
-/** Normalise a malformed-id query failure into a 404; rethrow anything else. */
-export function rethrowAsNotFound(err: unknown, what = 'Not found'): never {
-	if (isInvalidTextRepresentation(err)) throw notFound(what);
-	throw err;
-}
-
 /**
  * The AppError a caller should surface for this failure, or null to rethrow.
  *

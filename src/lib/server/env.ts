@@ -156,7 +156,3 @@ export function serverEnv(): ServerEnv {
 	cached = parsed.data;
 	return cached;
 }
-
-export function isProduction(): boolean {
-	return serverEnv().NODE_ENV === 'production';
-}
