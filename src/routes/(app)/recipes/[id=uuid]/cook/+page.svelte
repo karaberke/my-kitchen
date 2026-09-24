@@ -8,6 +8,8 @@
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { fmtNum, fmtQty, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
+	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
+	import { pantryLots } from '$lib/remote/pantry.remote';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import {
@@ -100,21 +102,9 @@
 		item.loading = true;
 		try {
 			const it = preview!.items[i];
-			const res = await fetch(
-				`/api/pantry-lots?ingredient=${encodeURIComponent(id)}&unit=${encodeURIComponent(it.unit ?? '')}&convention=${preview!.convention}`
+			const json = await fetchFresh(
+				pantryLots({ ingredient: id, unit: it.unit ?? null, convention: preview!.convention })
 			);
-			if (!res.ok) throw new Error('Could not load lots');
-			const json = (await res.json()) as {
-				lots: {
-					lotId: string;
-					quantity: string;
-					unit: string;
-					location: string;
-					expiresOn: string | null;
-					revision: number;
-					inRequestedUnit: string | null;
-				}[];
-			};
 			if (items[i].substituteId !== id) return; // stale
 			let remaining = it.scaledAmount ? Dec.from(it.scaledAmount) : null;
 			items[i].allocations = json.lots.map((l) => {
@@ -134,7 +124,7 @@
 			items[i].ingredientId = id;
 			items[i].mode = json.lots.length ? 'deduct' : 'skip';
 		} catch (err) {
-			pushToast((err as Error).message, { kind: 'error' });
+			pushToast(remoteErrorMessage(err, 'Could not load lots'), { kind: 'error' });
 		} finally {
 			items[i].loading = false;
 		}

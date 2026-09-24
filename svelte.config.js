@@ -10,6 +10,9 @@ const config = {
 	},
 	kit: {
 		adapter: adapter({ precompress: true }),
+		// Typed server calls from components (src/lib/remote/*.remote.ts) in place of
+		// hand-written JSON endpoints. Stable in SvelteKit 3.
+		experimental: { remoteFunctions: true },
 		csrf: { trustedOrigins: [] },
 		/**
 		 * Containment layer, not the primary defence — the app renders no
@@ -18,7 +21,8 @@ const config = {
 		 *   style-src      Google Fonts serves the stylesheet linked in app.html
 		 *   style-src-attr the two static `style=` attributes (app.html, recipe page)
 		 *   font-src       where that stylesheet fetches the font files from
-		 *   connect-src    the /api/revisions poll and the /api/barcode lookup
+		 *   connect-src    the remote functions under /_app/remote/ (revision poll,
+		 *                  barcode lookup, autocomplete)
 		 *   script-src     'wasm-unsafe-eval' lets the barcode reader compile its
 		 *                  WebAssembly. Chrome refuses a WebAssembly.compile under a
 		 *                  strict script-src without it; Safari does not check, which

@@ -13,7 +13,8 @@
 	import ScanConfirm, { type Scan } from '$lib/components/ScanConfirm.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
-	import { postAction } from '$lib/client/actions';
+	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
+	import { barcodeLookup, undo } from '$lib/remote/pantry.remote';
 	import { fmtDate, fmtQty } from '$lib/client/format';
 	import { UNITS } from '$lib/shared/units';
 	import type { PantryGroup, PantryLotView } from '$lib/server/pantry';
@@ -107,15 +108,9 @@
 	async function lookUp(code: { raw: string; symbology: string | null }) {
 		looking = true;
 		try {
-			// Built in one go: nothing here is reactive, and a mutable
-			// URLSearchParams in a component is what the lint rule is guarding.
-			const query = new URLSearchParams(
-				code.symbology ? { code: code.raw, symbology: code.symbology } : { code: code.raw }
-			).toString();
-			const res = await fetch(`/api/barcode?${query}`);
-			const body = await res.json().catch(() => null);
-			if (!res.ok || !body?.ok) {
-				pushToast(body?.message ?? 'That barcode could not be read.', { kind: 'error' });
+			const body = await fetchFresh(barcodeLookup({ code: code.raw, symbology: code.symbology }));
+			if (!body.ok) {
+				pushToast(body.message, { kind: 'error' });
 				scanner?.resume();
 				return;
 			}
@@ -126,8 +121,10 @@
 				lookup: body.lookup,
 				suggestion: body.suggestion
 			};
-		} catch {
-			pushToast('Could not reach the server. Check your connection.', { kind: 'error' });
+		} catch (err) {
+			pushToast(remoteErrorMessage(err, 'Could not reach the server. Check your connection.'), {
+				kind: 'error'
+			});
 			scanner?.resume();
 		} finally {
 			looking = false;
@@ -149,19 +146,13 @@
 	}
 
 	async function undoEventNow(eventId: string) {
-		const result = await postAction<Record<string, unknown>, { message?: string }>(
-			'/pantry?/undo',
-			{ operationId: undoOp, eventId }
-		);
+		try {
+			await undo({ operationId: undoOp, eventId });
+			pushToast('Undone.', { kind: 'success' });
+		} catch (err) {
+			pushToast(remoteErrorMessage(err, 'Could not undo'), { kind: 'error' });
+		}
 		undoOp = newOperationId();
-		if (result.type === 'success') pushToast('Undone.', { kind: 'success' });
-		else
-			pushToast(
-				result.type === 'failure' ? (result.data?.message ?? 'Could not undo') : 'Could not undo',
-				{
-					kind: 'error'
-				}
-			);
 		await invalidate('app:pantry');
 	}
 </script>

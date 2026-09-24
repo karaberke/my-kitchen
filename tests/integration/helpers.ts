@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { RequestEvent } from '@sveltejs/kit';
 import { sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { auth } from '$lib/server/auth';
@@ -40,6 +41,19 @@ export async function createUser(name: string): Promise<TestUser> {
 	const memberships = await listMemberships(db, userId);
 	const householdId = memberships[0].householdId;
 	return { id: userId, name, email, householdId, ctx: { userId, actorName: name, householdId } };
+}
+
+/**
+ * The request event a remote-function handler sees for `user` (null: signed
+ * out), with `householdId` as the active household (default: their own). Only
+ * the fields `hooks.server.ts` resolves are set.
+ */
+export function requestAs(user: TestUser | null, householdId = user?.householdId): RequestEvent {
+	const locals: Partial<App.Locals> = {
+		user: user ? ({ id: user.id, name: user.name, email: user.email } as App.Locals['user']) : null,
+		household: user && householdId ? { id: householdId, name: user.name, role: 'owner' } : null
+	};
+	return { locals, url: new URL('http://localhost/') } as unknown as RequestEvent;
 }
 
 export function opId(): string {

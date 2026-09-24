@@ -1,5 +1,7 @@
 import { eq, isNull, or } from 'drizzle-orm';
-import type { DbOrTx } from '$lib/server/db';
+import type { RequestEvent } from '@sveltejs/kit';
+import { db, type DbOrTx } from '$lib/server/db';
+import { requireUserApi } from '$lib/server/access';
 import { ingredientAliases, ingredients } from '$lib/server/db/schema';
 import { matchCandidates } from '$lib/shared/ingredient-name';
 
@@ -33,6 +35,15 @@ function add(index: Map<string, Entry>, key: string, entry: Entry) {
 	if (!key) return;
 	const held = index.get(key);
 	index.set(key, held ? better(held, entry) : entry);
+}
+
+/** The catalog match proposed for one written name, or null; the remote `ingredientMatch` query. */
+export async function matchIngredient(event: RequestEvent, arg: { name: string }) {
+	const user = requireUserApi(event);
+	const name = arg.name.slice(0, 80);
+	if (!name.trim()) return { match: null };
+	const matches = await matchIngredientNames(db, user.id, [name]);
+	return { match: matches.get(name) ?? null };
 }
 
 /**

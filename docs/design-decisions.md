@@ -128,8 +128,8 @@ compares them with the movement log.
 ## Freshness without extra infrastructure
 
 `household.pantry_revision` and `household.grocery_revision` change in the same
-transaction as the data. Pantry and list screens poll `/api/revisions` (about
-100 bytes, no-store) every 20 s while visible and online, with backoff on
+transaction as the data. Pantry and list screens poll the `householdRevisions` remote query (about
+300 bytes, no-store) every 20 s while visible and online, with backoff on
 failures, and only re-run their loads when a watched counter changed. If the
 page has unsaved input, a notice is shown instead of replacing the form.
 
@@ -238,7 +238,7 @@ personal, has no TTL, and is never overwritten by a refresh. The confirmation
 screen shows the provider's values beside the household's own, so a correction
 is visible rather than silently replaced.
 
-**Lookup is a read.** `/api/barcode` re-validates the number server-side,
+**Lookup is a read.** `barcodeLookup` re-validates the number server-side,
 whatever the phone decoded, and answers for the caller's household only. It may
 write provider metadata; it never touches inventory. The save reuses
 `addStock`, so the existing operation-id idempotency and `assertMember` guard it

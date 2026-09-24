@@ -30,23 +30,20 @@
 		groups.reduce((n, g) => n + g.options.filter((o) => o.checked).length, 0)
 	);
 
-	function closeOnOutside(node: HTMLElement) {
-		function onPointerDown(e: PointerEvent) {
-			if (open && !node.contains(e.target as Node)) open = false;
-		}
-		document.addEventListener('pointerdown', onPointerDown);
-		return () => document.removeEventListener('pointerdown', onPointerDown);
-	}
+	let menu: HTMLElement;
 </script>
 
 <svelte:window
 	onkeydown={(e) => {
 		if (e.key === 'Escape' && open) open = false;
 	}}
+	onpointerdown={(e) => {
+		if (open && !menu.contains(e.target as Node)) open = false;
+	}}
 />
 
 <div class="flex flex-wrap items-center gap-2">
-	<div class="relative" {@attach closeOnOutside}>
+	<div class="relative" bind:this={menu}>
 		<details bind:open>
 			<summary class="chip cursor-pointer list-none [&::-webkit-details-marker]:hidden">
 				Filter{#if activeCount}<span> · {activeCount}</span>{/if}

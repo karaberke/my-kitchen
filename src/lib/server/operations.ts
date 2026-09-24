@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db, type Tx } from '$lib/server/db';
 import { operations } from '$lib/server/db/schema';
 import { AppError, pgError } from '$lib/server/errors';
+import { isRfcUuid } from '$lib/shared/text';
 
 /** Stable JSON (sorted keys) so equal payloads produce equal fingerprints. */
 export function stableStringify(value: unknown): string {
@@ -62,17 +63,19 @@ export interface OperationContext {
 	payload: unknown;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 export function isOperationId(value: unknown): value is string {
-	return typeof value === 'string' && UUID_RE.test(value);
+	return isRfcUuid(value);
 }
 
-/** The `operationId` field every mutating form posts, or a 400 the caller's try/catch maps to `fail(400, ...)`. */
+/** A client-supplied operation id, or a 400 the caller maps to `fail(400, ...)` or an HTTP error. */
+export function requireOperationId(value: unknown): string {
+	if (!isOperationId(value)) throw new AppError(400, 'Missing operation id; reload and try again');
+	return value;
+}
+
+/** The `operationId` field every mutating form posts; see `requireOperationId`. */
 export function operationIdFrom(fd: FormData): string {
-	const id = String(fd.get('operationId') ?? '');
-	if (!isOperationId(id)) throw new AppError(400, 'Missing operation id; reload and try again');
-	return id;
+	return requireOperationId(String(fd.get('operationId') ?? ''));
 }
 
 /**

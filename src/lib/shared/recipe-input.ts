@@ -1,6 +1,7 @@
 import { Dec } from './decimal';
 import { parseAmount } from './amount-parse';
 import { normalizeUnitInput, type Convention } from './units';
+import { isRfcUuid } from './text';
 
 export type RecipeIntent = 'draft' | 'save';
 
@@ -81,8 +82,6 @@ export type FieldErrors = Record<string, string>;
 
 export type RecipeValidation =
 	{ ok: true; value: ValidRecipe; errors: FieldErrors } | { ok: false; errors: FieldErrors };
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function str(fd: FormData, key: string, max = 4000): string {
 	const v = fd.get(key);
@@ -211,12 +210,12 @@ export function validateRecipe(input: RecipeFormInput): RecipeValidation {
 			if (!norm) errors[`ing.${i}.unit`] = 'Unknown unit';
 			else unit = norm;
 		}
-		if (row.ingredientId && !UUID_RE.test(row.ingredientId))
+		if (row.ingredientId && !isRfcUuid(row.ingredientId))
 			errors[`ing.${i}.ingredientId`] = 'Invalid ingredient reference';
 		ingredients.push({
 			position: ingredients.length,
 			name,
-			ingredientId: row.ingredientId && UUID_RE.test(row.ingredientId) ? row.ingredientId : null,
+			ingredientId: row.ingredientId && isRfcUuid(row.ingredientId) ? row.ingredientId : null,
 			createIdentity: !row.ingredientId && row.createIdentity,
 			amount,
 			unit,

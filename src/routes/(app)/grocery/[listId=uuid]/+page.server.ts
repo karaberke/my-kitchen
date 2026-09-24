@@ -23,7 +23,6 @@ import {
 	updateBatch,
 	updateLine
 } from '$lib/server/grocery';
-import { undoEvent } from '$lib/server/undo';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { operationIdFrom } from '$lib/server/operations';
 import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
@@ -221,17 +220,6 @@ export const actions: Actions = {
 				lineStatus: out.result.lineStatus,
 				replayed: out.replayed
 			};
-		} catch (err) {
-			return actionError(err);
-		}
-	},
-	undo: async (event) => {
-		const ctx = householdActor(event);
-		const fd = await event.request.formData();
-		try {
-			const operationId = operationIdFrom(fd);
-			await undoEvent(ctx, { operationId, eventId: String(fd.get('eventId') ?? '') });
-			return { ok: true, action: 'undo' };
 		} catch (err) {
 			return actionError(err);
 		}

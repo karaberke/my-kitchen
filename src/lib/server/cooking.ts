@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import { type DbOrTx } from '$lib/server/db';
+import type { RequestEvent } from '@sveltejs/kit';
+import { db, type DbOrTx } from '$lib/server/db';
 import {
 	groceryBatches,
 	groceryLists,
@@ -7,7 +8,7 @@ import {
 	recipeIngredients,
 	recipes
 } from '$lib/server/db/schema';
-import { assertMember, assertRecipeReadable } from '$lib/server/access';
+import { assertMember, assertRecipeReadable, requireUserApi } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { getIngredientMeta } from '$lib/server/ingredients';
 import {
@@ -23,6 +24,7 @@ import { Dec } from '$lib/shared/decimal';
 import { scaleAmount } from '$lib/shared/scaling';
 import { convertAmount, isUnitId, unitsCompatible, type Convention } from '$lib/shared/units';
 import type { ActorContext } from '$lib/server/pantry';
+import { match as isUuid } from '../../params/uuid';
 
 export interface CookPreviewItem {
 	position: number;
@@ -448,6 +450,25 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 				unplannedServings: unplanned?.toString() ?? null
 			};
 		}
+	);
+}
+
+/** `lotsForIngredient` for the caller's active household; the remote `pantryLots` query. */
+export async function pantryLotsFor(
+	event: RequestEvent,
+	arg: { ingredient: string; unit: string | null; convention: string }
+) {
+	const user = requireUserApi(event);
+	const householdId = event.locals.household?.id;
+	if (!householdId) throw new AppError(400, 'No household');
+	await assertMember(db, householdId, user.id);
+	if (!isUuid(arg.ingredient)) throw new AppError(400, 'ingredient required');
+	return lotsForIngredient(
+		db,
+		householdId,
+		arg.ingredient,
+		arg.unit && isUnitId(arg.unit) ? arg.unit : null,
+		arg.convention === 'us' ? 'us' : 'metric'
 	);
 }
 
