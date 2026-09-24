@@ -1,18 +1,29 @@
 import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { requireUser } from '$lib/server/access';
+import { assertMember, householdActor, requireUser } from '$lib/server/access';
 import { listRecipes, listUserTags, parseListParams, setFavorite } from '$lib/server/recipes';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:recipes');
 	const params = parseListParams(event.url);
-	const [list, tags] = await Promise.all([
-		listRecipes(db, user.id, params),
-		listUserTags(db, user.id)
+	// locals.household is a cache; confirm membership before reading its categories
+	const householdId = event.locals.household?.id ?? null;
+	if (householdId) await assertMember(db, householdId, user.id);
+	const [list, tags, categories] = await Promise.all([
+		listRecipes(db, user.id, params, householdId),
+		listUserTags(db, user.id),
+		householdId ? listCategories(db, householdId) : []
 	]);
-	return { title: 'Recipes', list, tags, params };
+	return {
+		title: 'Recipes',
+		list,
+		tags,
+		params,
+		categories,
+		categoryNameMax: CATEGORY_NAME_MAX
+	};
 };
 
 export const actions: Actions = {

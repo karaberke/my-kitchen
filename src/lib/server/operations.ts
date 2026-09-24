@@ -30,7 +30,7 @@ function isRetryable(err: unknown): boolean {
 	return !!pg && RETRYABLE.has(pg.code);
 }
 
-function isUniqueViolation(err: unknown, constraint?: string): boolean {
+export function isUniqueViolation(err: unknown, constraint?: string): boolean {
 	const pg = pgError(err);
 	return (
 		!!pg && pg.code === '23505' && (constraint === undefined || pg.constraint_name === constraint)

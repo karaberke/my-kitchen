@@ -118,6 +118,14 @@
 	let shareOpen = $state(false);
 	let planOpen = $state(false);
 	let deleteOpen = $state(false);
+	let categoriesOpen = $state(false);
+	let newCategoryName = $state('');
+	const categoryNames = $derived(
+		data.categoryIds
+			.map((id) => data.categories.find((c) => c.id === id)?.name)
+			.filter((n): n is string => !!n)
+	);
+	const canShare = $derived(data.sharedWithActive || r.isOwner);
 	// svelte-ignore state_referenced_locally
 	let planServings = $state(data.recipe.baseServings ?? '4');
 	let fav = $derived(data.recipe.isFavorite);
@@ -200,12 +208,20 @@
 					href="/recipes?tag={encodeURIComponent(tag)}"
 					class="rounded-lg bg-parchment px-2.5 py-1.5 text-sage">#{tag}</a
 				>{/each}
+			{#each categoryNames as name (name)}<span
+					class="rounded-lg bg-leaf-soft px-2.5 py-1.5 text-leaf-dark">{name}</span
+				>{/each}
 		</div>
 
 		<div class="no-print mt-4 flex flex-wrap gap-2">
 			<FavoriteButton isFavorite={fav} action="?/favorite" variant="text" />
 			{#if r.isOwner && r.shares.length}
 				<button class="btn-secondary btn-sm" onclick={() => (shareOpen = true)}>Share…</button>
+			{/if}
+			{#if data.household}
+				<button class="btn-secondary btn-sm" onclick={() => (categoriesOpen = true)}
+					>Categories…</button
+				>
 			{/if}
 			<form method="post" action="?/duplicate" use:enhance>
 				<button class="btn-secondary btn-sm">Duplicate</button>
@@ -492,6 +508,83 @@
 			</fieldset>
 		{/if}
 		<button class="btn-primary w-full">Add to list</button>
+	</form>
+</Sheet>
+
+<Sheet
+	bind:open={categoriesOpen}
+	title="Categories"
+	description={canShare
+		? data.sharedWithActive
+			? `Shared with everyone in ${data.household?.name ?? 'the household'}.`
+			: `Adding it to a category shares it with ${data.household?.name ?? 'the household'}.`
+		: `Adding it to a category shares it with ${data.household?.name ?? 'the household'} — only the owner can do that.`}
+>
+	<ul class="card overflow-hidden">
+		{#each data.categories as c (c.id)}
+			<li class="divider-row px-3.5 py-3">
+				<form
+					method="post"
+					action="?/category"
+					use:enhance={() =>
+						async ({ result, update }) => {
+							await update({ reset: false });
+							if (result.type === 'success') {
+								const d = result.data as { sharedNow?: boolean } | undefined;
+								if (d?.sharedNow)
+									pushToast(`Shared with ${data.household?.name ?? 'the household'}`, {
+										kind: 'success'
+									});
+							}
+						}}
+				>
+					<input type="hidden" name="categoryId" value={c.id} />
+					<input type="hidden" name="on" value={data.categoryIds.includes(c.id) ? '0' : '1'} />
+					<label class="flex items-center gap-2.5 text-[13.5px]">
+						<input
+							type="checkbox"
+							class="h-5 w-5 accent-leaf"
+							checked={data.categoryIds.includes(c.id)}
+							disabled={!canShare}
+							onchange={(e) => e.currentTarget.form?.requestSubmit()}
+						/>
+						{c.name}
+					</label>
+				</form>
+			</li>
+		{:else}
+			<li class="px-3.5 py-3 text-[13px] text-sage">No categories yet.</li>
+		{/each}
+	</ul>
+	<form
+		method="post"
+		action="?/createCategory"
+		class="mt-3 flex items-center gap-2"
+		use:enhance={() =>
+			async ({ result, update }) => {
+				await update();
+				if (result.type === 'success') {
+					newCategoryName = '';
+					const d = result.data as { sharedNow?: boolean } | undefined;
+					if (d?.sharedNow)
+						pushToast(`Shared with ${data.household?.name ?? 'the household'}`, {
+							kind: 'success'
+						});
+				}
+			}}
+	>
+		<label class="sr-only" for="new-cat-name">New category name</label>
+		<input
+			id="new-cat-name"
+			class="field h-9 flex-1 py-1"
+			name="name"
+			placeholder="New category"
+			bind:value={newCategoryName}
+			maxlength={data.categoryNameMax}
+			disabled={!canShare}
+			required
+		/>
+		<button class="btn-primary btn-sm" disabled={!canShare}>Add</button>
 	</form>
 </Sheet>
 

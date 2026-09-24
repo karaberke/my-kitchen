@@ -271,11 +271,6 @@
 		}
 	});
 
-	$effect(() => {
-		document.addEventListener('visibilitychange', onVisibility);
-		return () => document.removeEventListener('visibilitychange', onVisibility);
-	});
-
 	onDestroy(stop);
 
 	export function resume() {
@@ -283,6 +278,8 @@
 		if (phase !== 'scanning') void start();
 	}
 </script>
+
+<svelte:document onvisibilitychange={onVisibility} />
 
 {#if open}
 	<div
