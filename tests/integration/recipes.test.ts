@@ -203,32 +203,41 @@ describe('recipes', () => {
 			);
 		await setRecipeShare(alice.id, ids[0], alice.householdId, true);
 		await setFavorite(alice.id, ids[3], true);
-		const page1 = await listRecipes(db, alice.id, parseListParams(new URL('http://x/recipes')));
+		const page1 = await listRecipes(
+			db,
+			alice.id,
+			parseListParams(new URL('http://x/recipes')),
+			null
+		);
 		expect(page1.items).toHaveLength(24);
 		expect(page1.total).toBe(30);
 		expect(page1.pageCount).toBe(2);
 		const quick = await listRecipes(
 			db,
 			alice.id,
-			parseListParams(new URL('http://x/recipes?tag=quick'))
+			parseListParams(new URL('http://x/recipes?tag=quick')),
+			null
 		);
 		expect(quick.total).toBe(15);
 		const fav = await listRecipes(
 			db,
 			alice.id,
-			parseListParams(new URL('http://x/recipes?favorites=1'))
+			parseListParams(new URL('http://x/recipes?favorites=1')),
+			null
 		);
 		expect(fav.items.map((r) => r.id)).toEqual([ids[3]]);
 		const bobFav = await listRecipes(
 			db,
 			bob.id,
-			parseListParams(new URL('http://x/recipes?favorites=1'))
+			parseListParams(new URL('http://x/recipes?favorites=1')),
+			null
 		);
 		expect(bobFav.total).toBe(0);
 		const search = await listRecipes(
 			db,
 			alice.id,
-			parseListParams(new URL('http://x/recipes?q=recipe%202'))
+			parseListParams(new URL('http://x/recipes?q=recipe%202')),
+			null
 		);
 		expect(search.total).toBe(11);
 		const capped = parseListParams(new URL('http://x/recipes?perPage=5000'));
@@ -262,7 +271,8 @@ describe('recipes', () => {
 			const cards = await listRecipes(
 				db,
 				viewer.id,
-				parseListParams(new URL('http://x/recipes?perPage=100'))
+				parseListParams(new URL('http://x/recipes?perPage=100')),
+				null
 			);
 			const options = await listRecipeOptions(db, viewer.id);
 			expect(options).toEqual(

@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { requireHousehold, requireUser } from '$lib/server/access';
+import { assertMember, householdActor, requireHousehold, requireUser } from '$lib/server/access';
 import {
 	deleteRecipe,
 	duplicateRecipe,
@@ -11,6 +11,15 @@ import {
 	setRecipeArchived,
 	setRecipeShare
 } from '$lib/server/recipes';
+import {
+	CATEGORY_NAME_MAX,
+	createCategoryForRecipe,
+	listCategories,
+	recipeCategoryIds,
+	recipeSharedWith,
+	setRecipeCategory,
+	type CategoryView
+} from '$lib/server/recipe-categories';
 import { addBatch, createList, getCurrentListId, getListDetail } from '$lib/server/grocery';
 import { Dec } from '$lib/shared/decimal';
 import { parseAmount } from '$lib/shared/amount-parse';
@@ -23,13 +32,27 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	const recipe = await getRecipeDetail(db, user.id, event.params.id, householdId);
 	const currentListId = householdId ? await getCurrentListId(db, householdId) : null;
 	const currentList = currentListId ? await getListDetail(db, householdId!, currentListId) : null;
+	// locals.household is a cache; confirm membership before reading its categories
+	if (householdId) await assertMember(db, householdId, user.id);
+	const [categories, categoryIds, sharedWithActive]: [CategoryView[], string[], boolean] =
+		householdId
+			? await Promise.all([
+					listCategories(db, householdId),
+					recipeCategoryIds(db, householdId, recipe.id),
+					recipeSharedWith(db, recipe.id, householdId)
+				])
+			: [[], [], false];
 	return {
 		title: recipe.title,
 		recipe,
 		currentList: currentList
 			? { id: currentList.id, name: currentList.name, status: currentList.status }
 			: null,
-		clientKey: randomUUID()
+		clientKey: randomUUID(),
+		categories,
+		categoryIds,
+		sharedWithActive,
+		categoryNameMax: CATEGORY_NAME_MAX
 	};
 };
 
@@ -54,6 +77,33 @@ export const actions: Actions = {
 			return actionError(err);
 		}
 		return { ok: true, shared: fd.get('shared') === '1' };
+	},
+	category: async (event) => {
+		const actor = householdActor(event);
+		const fd = await event.request.formData();
+		const on = fd.get('on');
+		if (on !== '1' && on !== '0') return fail(400, { message: 'Choose to add or remove' });
+		try {
+			const { sharedNow } = await setRecipeCategory(
+				actor,
+				event.params.id,
+				String(fd.get('categoryId') ?? ''),
+				on === '1'
+			);
+			return { ok: true, sharedNow };
+		} catch (err) {
+			return actionError(err);
+		}
+	},
+	createCategory: async (event) => {
+		const actor = householdActor(event);
+		const fd = await event.request.formData();
+		try {
+			const { sharedNow } = await createCategoryForRecipe(actor, event.params.id, fd.get('name'));
+			return { ok: true, sharedNow };
+		} catch (err) {
+			return actionError(err);
+		}
 	},
 	duplicate: async (event) => {
 		const user = requireUser(event);

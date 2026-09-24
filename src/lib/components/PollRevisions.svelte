@@ -87,15 +87,9 @@
 	}
 	onMount(() => {
 		schedule();
-		document.addEventListener('visibilitychange', onVisible);
-		window.addEventListener('online', onVisible);
-		window.addEventListener('focus', onVisible);
 		return () => {
 			clearTimeout(timer);
 			controller?.abort();
-			document.removeEventListener('visibilitychange', onVisible);
-			window.removeEventListener('online', onVisible);
-			window.removeEventListener('focus', onVisible);
 		};
 	});
 	export function manualRefresh() {
@@ -106,6 +100,9 @@
 		});
 	}
 </script>
+
+<svelte:document onvisibilitychange={onVisible} />
+<svelte:window ononline={onVisible} onfocus={onVisible} />
 
 <div class="no-print flex items-center gap-2 text-[11.5px] text-sage" aria-live="polite">
 	{#if changedNotice}
