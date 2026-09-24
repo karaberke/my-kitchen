@@ -5,11 +5,7 @@
 	import RecipeCard from '$lib/components/RecipeCard.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
-	import FilterMenu from '$lib/components/FilterMenu.svelte';
-	import Sheet from '$lib/components/Sheet.svelte';
-	import Alert from '$lib/components/Alert.svelte';
-	import { pushToast } from '$lib/client/toast.svelte';
-	import { debouncedSubmit } from '$lib/client/debounced-search';
+	import { debouncedSearchGoto } from '$lib/client/debounced-search';
 
 	let { data, form } = $props();
 	let q = $derived(data.params.q);
@@ -23,12 +19,41 @@
 		u.searchParams.delete('page');
 		return u.pathname + u.search;
 	}
-	function tagHref(tag: string | null) {
-		const u = new URL(page.url);
-		if (tag) u.searchParams.set('tag', tag);
-		else u.searchParams.delete('tag');
-		u.searchParams.delete('page');
-		return u.pathname + u.search;
+	const chips = $derived([
+		{
+			label: 'All',
+			href: link({ favorites: null, scope: null, status: null }),
+			on: !data.params.favorites && data.params.scope === 'all' && data.params.status === 'active'
+		},
+		{
+			label: 'Favorites',
+			href: link({ favorites: '1', scope: null, status: null }),
+			on: data.params.favorites
+		},
+		{
+			label: 'Mine',
+			href: link({ favorites: null, scope: 'mine', status: null }),
+			on: data.params.scope === 'mine' && data.params.status === 'active'
+		},
+		{
+			label: 'Shared with me',
+			href: link({ favorites: null, scope: 'shared', status: null }),
+			on: data.params.scope === 'shared'
+		},
+		{
+			label: 'Drafts',
+			href: link({ favorites: null, scope: null, status: 'draft' }),
+			on: data.params.status === 'draft'
+		},
+		{
+			label: 'Archived',
+			href: link({ favorites: null, scope: null, status: 'archived' }),
+			on: data.params.status === 'archived'
+		}
+	]);
+	const searchGoto = debouncedSearchGoto();
+	function onSearchInput() {
+		searchGoto(link({ q }));
 	}
 
 	const groups = $derived.by(() => {
@@ -140,10 +165,12 @@
 	method="get"
 	action="/recipes"
 	role="search"
-	data-sveltekit-keepfocus
-	data-sveltekit-noscroll
-	data-sveltekit-replacestate
-	onsubmit={() => submit.cancel()}
+	class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5"
+	onsubmit={(e) => {
+		e.preventDefault();
+		searchGoto.cancel();
+		goto(link({ q }));
+	}}
 >
 	<div class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5">
 		<span class="text-sage-soft" aria-hidden="true">⌕</span>
