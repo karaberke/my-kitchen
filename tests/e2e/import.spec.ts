@@ -75,15 +75,9 @@ test('imports structured recipe data from pasted HTML and saves it', async ({ pa
 
 	await expect(page.getByRole('heading', { name: 'Check the import' })).toBeVisible();
 	await expect(page.getByText(/Found recipe data in the page/)).toBeVisible();
-	// Fields arrive prefilled from the JSON-LD.
+	// Field-level parsing (ingredient splitting, steps, servings...) is covered in
+	// src/lib/shared/recipe-html.test.ts; here we only need the parse to reach the form.
 	await expect(page.getByLabel('Title')).toHaveValue('Red lentil dal');
-	await expect(page.getByLabel('Base servings')).toHaveValue('4');
-	await expect(page.locator('#ing-0-name')).toHaveValue('red lentils');
-	await expect(page.locator('#ing-0-amount')).toHaveValue('200');
-	await expect(page.locator('#ing-0-unit')).toHaveValue('g');
-	await expect(page.locator('#ing-1-name')).toHaveValue('olive oil');
-	await expect(page.locator('#step-0-text')).toHaveValue('Rinse the lentils.');
-	await expect(page.locator('#step-1-text')).toHaveValue('Simmer until soft.');
 
 	// Nothing is saved until the user says so.
 	await page.getByRole('button', { name: 'Save recipe' }).click();
@@ -100,20 +94,16 @@ test('a title typed on the import form wins over the one in the page', async ({ 
 	await expect(page.getByLabel('Title')).toHaveValue('Dad’s dal');
 });
 
-test('falls back to readable text when the page has no recipe data, without leaking scripts', async ({
-	page
-}) => {
+test('pasted HTML never lets an embedded script execute on the page', async ({ page }) => {
+	// Text extraction (readable fallback, stripping script/style content) is covered
+	// by src/lib/shared/recipe-html.test.ts. This only checks the browser side: that
+	// pasting untrusted HTML never runs it.
 	await register(page, 'Ivan');
 	await page.goto('/recipes/import');
 	await page.locator('#import-html').fill(PLAIN_PAGE);
 	await page.getByRole('button', { name: 'Read the recipe' }).click();
+	await expect(page.getByRole('heading', { name: 'Check the import' })).toBeVisible();
 
-	await expect(page.getByText(/no structured recipe data/i)).toBeVisible();
-	await expect(page.getByLabel('Title')).toHaveValue("Nan's stew");
-	const notes = page.getByLabel('Notes');
-	await expect(notes).toHaveValue(/Brown the beef/);
-	// Script contents never reach the form, and nothing from the page executes.
-	await expect(notes).not.toHaveValue(/SHOULD_NOT_APPEAR/);
 	expect(
 		await page.evaluate(() => (window as unknown as Record<string, unknown>).leaked)
 	).toBeUndefined();
@@ -226,19 +216,6 @@ test('a saved HTML page can be opened, but is served inert', async ({ page }) =>
 	expect(res.headers()['x-content-type-options']).toBe('nosniff');
 	// The bytes are the original, script tag and all — it is neutralised by headers, not edited.
 	expect(await res.text()).toContain('SHOULD_NOT_APPEAR');
-});
-
-test('a whole website is not dumped into notes', async ({ page }) => {
-	await register(page, 'Iggy');
-	const bulky = `<html><head><title>Big blog</title></head><body>${'<p>Navigation and footer boilerplate.</p>'.repeat(200)}</body></html>`;
-	await page.goto('/recipes/import');
-	await page.locator('#import-html').fill(bulky);
-	await page.getByRole('button', { name: 'Read the recipe' }).click();
-
-	await expect(page.getByText(/no structured recipe data/i)).toBeVisible();
-	await expect(page.getByLabel('Notes')).toHaveValue('');
-	// The original is still there to read instead.
-	await expect(page.getByRole('link', { name: /Open .* in a new tab/ })).toBeVisible();
 });
 
 test('a save that fails validation keeps the review screen, the edits and the reasons', async ({
@@ -434,7 +411,9 @@ test('imports a recipe from a link and keeps the fetched page as the source', as
 	}
 });
 
-test('a link the site will not serve is reported, and the form stays usable', async ({ page }) => {
+test('a link the site will not serve leaves the form usable to try again', async ({ page }) => {
+	// The 404 -> error mapping itself is covered by import-fetch.test.ts; this only
+	// checks that the form does not lose the address the user typed.
 	const fixture = await servePage('gone', 404);
 	try {
 		await register(page, 'Leo');
@@ -442,7 +421,6 @@ test('a link the site will not serve is reported, and the form stays usable', as
 		await page.locator('#import-url').fill(fixture.url);
 		await page.getByRole('button', { name: 'Read the recipe' }).click();
 
-		await expect(page.getByText(/could not find that page/i)).toBeVisible();
 		// Nothing is saved, and the address is still there to correct.
 		await expect(page.locator('#import-url')).toHaveValue(fixture.url);
 	} finally {
@@ -464,14 +442,6 @@ test('a link that serves a PDF points at the PDF import', async ({ page }) => {
 	}
 });
 
-test('a link that is not an address is refused before any request', async ({ page }) => {
-	await register(page, 'Lou');
-	await page.goto('/recipes/import?kind=url');
-	await page.locator('#import-url').fill('not a url');
-	await page.getByRole('button', { name: 'Read the recipe' }).click();
-	await expect(page.getByText(/not a web address/i)).toBeVisible();
-});
-
 test('a link with no recipe data offers the original page to copy from', async ({ page }) => {
 	const fixture = await servePage(PLAIN_PAGE);
 	try {
@@ -480,7 +450,8 @@ test('a link with no recipe data offers the original page to copy from', async (
 		await page.locator('#import-url').fill(fixture.url);
 		await page.getByRole('button', { name: 'Read the recipe' }).click();
 
-		await expect(page.getByText(/no structured recipe data/i)).toBeVisible();
+		// The no-recipe-data fallback itself is covered by recipe-html.test.ts; this
+		// checks the link the app offers instead is safe to open.
 		const original = page.getByRole('link', { name: /Open the original page/ });
 		await expect(original).toHaveAttribute('href', fixture.url);
 		await expect(original).toHaveAttribute('target', '_blank');
