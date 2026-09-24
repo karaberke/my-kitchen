@@ -1,5 +1,5 @@
 import { AppError } from '$lib/server/errors';
-import { toHttpUrl } from '$lib/server/remote-url';
+import { fetchWithRedirects, readCapped, type FetchImpl } from '$lib/server/fetch-capped';
 
 /**
  * Read a recipe page over the network.
@@ -17,12 +17,11 @@ const USER_AGENT = 'my-kitchen (recipe import)';
 const ACCEPT = 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1';
 const DEFAULT_TIMEOUT_MS = 6000;
 const DEFAULT_MAX_REDIRECTS = 3;
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /** Save the page yourself: the answer to every refusal by a site. */
 const FALLBACK = 'Save the page in your browser, then use Import an HTML page.';
 
-export type FetchImpl = (url: string, init: RequestInit) => Promise<Response>;
+export type { FetchImpl };
 
 export interface FetchPageOptions {
 	/** Largest page to read. The caller owns this number. */
@@ -41,9 +40,9 @@ export interface FetchedPage {
 	filename: string;
 }
 
-function tooLarge(maxBytes: number): AppError {
+function tooLarge(maxBytes: number): never {
 	const mb = Math.round(maxBytes / 1_000_000);
-	return new AppError(413, `That page is larger than ${mb} MB.`);
+	throw new AppError(413, `That page is larger than ${mb} MB.`);
 }
 
 /** "example.com-recipes-dal.html" — readable in the attachment list. */
@@ -72,73 +71,27 @@ function statusError(status: number): AppError {
 	return new AppError(502, `The site answered with ${status}. ${FALLBACK}`);
 }
 
-/**
- * Read the body, and stop at the cap.
- *
- * Content-length is checked first because it is cheap, and again while reading
- * because a header can understate the body.
- */
-async function readCapped(res: Response, maxBytes: number): Promise<string> {
-	const declared = Number(res.headers.get('content-length'));
-	if (Number.isFinite(declared) && declared > maxBytes) throw tooLarge(maxBytes);
-	if (!res.body) return '';
-	const reader = res.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	try {
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			total += value.byteLength;
-			if (total > maxBytes) throw tooLarge(maxBytes);
-			chunks.push(value);
-		}
-	} finally {
-		await reader.cancel().catch(() => {});
-	}
-	return Buffer.concat(chunks).toString('utf8');
-}
-
 export async function fetchRecipePage(
 	raw: string,
 	options: FetchPageOptions
 ): Promise<FetchedPage> {
 	const { maxBytes } = options;
-	const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
-	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-	const doFetch: FetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+	const { response, url } = await fetchWithRedirects(raw, {
+		accept: ACCEPT,
+		userAgent: USER_AGENT,
+		timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+		maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
+		timeoutMessage: 'That site took too long to answer. Try again, or: ' + FALLBACK,
+		noLocationMessage: `That link redirects to nothing. ${FALLBACK}`,
+		fetchImpl: options.fetchImpl
+	});
 
-	let url = toHttpUrl(raw);
-	for (let hop = 0; ; hop++) {
-		let res: Response;
-		try {
-			res = await doFetch(url.toString(), {
-				method: 'GET',
-				redirect: 'manual',
-				signal: AbortSignal.timeout(timeoutMs),
-				headers: { accept: ACCEPT, 'user-agent': USER_AGENT }
-			});
-		} catch (err) {
-			const name = (err as { name?: string } | null)?.name;
-			if (name === 'TimeoutError' || name === 'AbortError')
-				throw new AppError(504, 'That site took too long to answer. Try again, or: ' + FALLBACK);
-			throw new AppError(502, 'Could not reach that site. Check the link and your network.');
-		}
-
-		if (REDIRECT_STATUSES.has(res.status)) {
-			const location = res.headers.get('location');
-			if (!location) throw new AppError(502, `That link redirects to nothing. ${FALLBACK}`);
-			if (hop >= maxRedirects) throw new AppError(502, `That link has too many redirects.`);
-			url = toHttpUrl(location, url.toString());
-			continue;
-		}
-
-		if (!res.ok) throw statusError(res.status);
-		checkType(res);
-		return {
-			html: await readCapped(res, maxBytes),
-			finalUrl: url.toString(),
-			filename: filenameFor(url)
-		};
-	}
+	if (!response.ok) throw statusError(response.status);
+	checkType(response);
+	const bytes = await readCapped(response, maxBytes, tooLarge);
+	return {
+		html: bytes.toString('utf8'),
+		finalUrl: url.toString(),
+		filename: filenameFor(url)
+	};
 }
