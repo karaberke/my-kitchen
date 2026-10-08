@@ -109,9 +109,10 @@ function client(): { openai: OpenAI; model: string } {
  * Check that the assistant is on and that this user still has calls left.
  * Throws 503 or 429; call it before the slow work starts.
  */
-export function claimLlmCall(userId: string): void {
+export function claimLlmCall(userId: string, rule: keyof typeof LLM_LIMITS = 'user'): void {
 	if (!llmEnabled()) throw new AppError(503, 'The assistant is not set up on this installation.');
-	const limit = consume(`llm:${userId}`, LLM_LIMITS.user);
+	// One bucket per rule, so a long chat does not use up the imports.
+	const limit = consume(`llm:${rule}:${userId}`, LLM_LIMITS[rule]);
 	if (!limit.allowed)
 		throw new AppError(
 			429,
@@ -179,9 +180,15 @@ function stoppedError(why: 'idle' | 'total'): AppError {
 		: new AppError(504, 'The assistant took too long to answer.');
 }
 
+/** One turn of a conversation after the system prompt. */
+export interface LlmMessage {
+	role: 'user' | 'assistant';
+	content: string;
+}
+
 async function chat(
 	system: string,
-	userText: string,
+	messages: LlmMessage[],
 	params: {
 		maxTokens: number;
 		temperature: number;
@@ -203,10 +210,7 @@ async function chat(
 		const stream = await openai.chat.completions.create(
 			{
 				model,
-				messages: [
-					{ role: 'system', content: system },
-					{ role: 'user', content: userText }
-				],
+				messages: [{ role: 'system', content: system }, ...messages],
 				max_tokens: params.maxTokens,
 				temperature: params.temperature,
 				stream: true,
@@ -267,7 +271,7 @@ export async function completeJson<T>(
 	};
 	return enqueue(async () => {
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const reply = await chat(system, userText, {
+			const reply = await chat(system, [{ role: 'user', content: userText }], {
 				maxTokens: options.maxTokens,
 				temperature: LLM_JSON_TEMPERATURE,
 				responseFormat,
@@ -294,8 +298,22 @@ export async function completeText(
 	userText: string,
 	options: { maxTokens: number } & LlmCallOptions
 ): Promise<string> {
+	return completeChat(system, [{ role: 'user', content: userText }], options);
+}
+
+/**
+ * Ask for plain text in a conversation: `messages` are the earlier turns in
+ * order and end with the new user message. Keep the earlier turns byte-identical
+ * from call to call, so the server reuses its cached prefix.
+ */
+export async function completeChat(
+	system: string,
+	messages: LlmMessage[],
+	options: { maxTokens: number } & LlmCallOptions
+): Promise<string> {
+	if (messages.at(-1)?.role !== 'user') throw new Error('completeChat needs a user message last');
 	return enqueue(async () => {
-		const reply = await chat(system, userText, {
+		const reply = await chat(system, messages, {
 			maxTokens: options.maxTokens,
 			temperature: LLM_TEXT_TEMPERATURE,
 			timeoutMs: timeoutFor(options)

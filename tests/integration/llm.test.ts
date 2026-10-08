@@ -3,7 +3,9 @@ import { asc, eq } from 'drizzle-orm';
 import {
 	catalogIngredientId,
 	createUser,
+	d,
 	makeChickenRecipe,
+	recipeInput,
 	requestAs,
 	resetDb,
 	type TestUser
@@ -23,10 +25,11 @@ import {
 	waitForJob,
 	type AssistantJobView
 } from '$lib/server/llm/jobs';
+import { createRecipe } from '$lib/server/recipes';
 import { cleanupUnreferencedAttachments } from '$lib/server/media/attachments';
 import { LLM_LIMITS, resetRateLimits } from '$lib/server/ratelimit';
 import { emptyRecipeFormInput } from '$lib/shared/recipe-html';
-import { LLM_QUESTION_MAX_CHARS } from '$lib/shared/recipe-input';
+import { LLM_CHAT_MAX_TURNS, LLM_QUESTION_MAX_CHARS } from '$lib/shared/recipe-input';
 import { actions } from '../../src/routes/(app)/recipes/import/+page.server';
 import { STUB_LLM_CONFIG, completionResponse, jsonResponse, stubLlm, unstubLlm } from '../llm-stub';
 import { claimLlmCall, setLlmForTests } from '$lib/server/llm/client';
@@ -85,9 +88,9 @@ describe('askAboutRecipe', () => {
 		expect(requests).toHaveLength(0);
 		// Denied asks left every call in Bob's allowance.
 		const mine = await makeChickenRecipe(bob, 'Bob soup', '100');
-		for (let i = 0; i < LLM_LIMITS.user.max; i++)
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++)
 			await askAboutRecipe(requestAs(bob), { recipeId: mine, question: 'ok?' });
-		expect(requests).toHaveLength(LLM_LIMITS.user.max);
+		expect(requests).toHaveLength(LLM_LIMITS.chat.max);
 	});
 
 	it('is a 401 for a signed-out caller, with no model call', async () => {
@@ -125,11 +128,172 @@ describe('askAboutRecipe', () => {
 	it('is a 429 after the allowed calls in the window', async () => {
 		const recipeId = await makeChickenRecipe(alice, 'Busy chicken', '300');
 		stubLlm([ANSWER]);
-		for (let i = 0; i < LLM_LIMITS.user.max; i++)
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++)
 			await askAboutRecipe(requestAs(alice), { recipeId, question: 'Hi?' });
 		await expect(
 			askAboutRecipe(requestAs(alice), { recipeId, question: 'Hi?' })
 		).rejects.toMatchObject({ status: 429 });
+	});
+
+	it('sends earlier turns as alternating messages, with the recipe once and the new question last', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Lemon chicken bake', '500');
+		const { requests } = stubLlm([ANSWER]);
+		await askAboutRecipe(requestAs(alice), {
+			recipeId,
+			question: 'And how long does it bake?',
+			history: [
+				{ question: 'Can I use thighs?', answer: 'Yes, thighs work.' },
+				{ question: 'Should I dice them?', answer: 'Dice them evenly.' }
+			]
+		});
+		const sent = requests[0].messages;
+		expect(sent.map((m) => m.role)).toEqual([
+			'system',
+			'user',
+			'assistant',
+			'user',
+			'assistant',
+			'user'
+		]);
+		expect(sent[1].content).toContain('LEMON CHICKEN BAKE');
+		expect(sent[1].content.endsWith('Question: Can I use thighs?')).toBe(true);
+		expect(sent[2].content).toBe('Yes, thighs work.');
+		expect(sent[3].content).toBe('Question: Should I dice them?');
+		expect(sent[4].content).toBe('Dice them evenly.');
+		expect(sent[5].content).toBe('Question: And how long does it bake?');
+		expect(sent.filter((m) => m.content.includes('LEMON CHICKEN BAKE'))).toHaveLength(1);
+	});
+
+	it('sends the same leading messages on the next turn of a chat', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Lemon chicken bake', '500');
+		const { requests } = stubLlm(['First answer.', 'Second answer.']);
+		const first = await askAboutRecipe(requestAs(alice), { recipeId, question: 'One?' });
+		await askAboutRecipe(requestAs(alice), {
+			recipeId,
+			question: 'Two?',
+			history: [{ question: 'One?', answer: first.answer }]
+		});
+		const [a, b] = requests;
+		expect(b.messages[1]).toEqual(a.messages[1]);
+		expect(b.messages[2]).toEqual({ role: 'assistant', content: 'First answer.' });
+	});
+
+	it('answers a chat with no history exactly as the old single message', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Plain chicken', '500');
+		const { requests } = stubLlm([ANSWER]);
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'Is it spicy?' });
+		const sent = requests[0].messages;
+		expect(sent).toHaveLength(2);
+		expect(sent[1].content.startsWith('Recipe:\nPLAIN CHICKEN')).toBe(true);
+		expect(sent[1].content.endsWith('\n\nQuestion: Is it spicy?')).toBe(true);
+		expect(sent[1].content).not.toContain('On step');
+	});
+
+	it('cuts a long history to the newest turns', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Long chat', '500');
+		const { requests } = stubLlm([ANSWER]);
+		const history = Array.from({ length: LLM_CHAT_MAX_TURNS + 4 }, (_, i) => ({
+			question: `old question ${i + 1}`,
+			answer: `old answer ${i + 1}`
+		}));
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'Now?', history });
+		const sent = requests[0].messages;
+		expect(sent).toHaveLength(1 + 2 * LLM_CHAT_MAX_TURNS + 1);
+		expect(sent[1].content.endsWith('Question: old question 5')).toBe(true);
+		expect(sent.some((m) => m.content.includes('old question 4'))).toBe(false);
+	});
+
+	it('scales the amounts in the recipe text to the servings asked for', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Scaled chicken', '500', 4);
+		const { requests } = stubLlm([ANSWER]);
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'How much?' });
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'How much?', servings: '8' });
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'How much?', servings: '2' });
+		const [stored, doubled, halved] = requests.map((r) => r.messages[1].content);
+		expect(stored).toContain('Serves 4');
+		expect(stored).toContain('500 g chicken breast');
+		expect(doubled).toContain('Serves 8');
+		expect(doubled).toContain('1000 g chicken breast');
+		expect(doubled).not.toContain('500 g');
+		expect(halved).toContain('Serves 2');
+		expect(halved).toContain('250 g chicken breast');
+	});
+
+	it('puts the step note only in the last message, and none for a step out of range', async () => {
+		const chicken = await catalogIngredientId('chicken breast');
+		const recipeId = await createRecipe(
+			alice.id,
+			recipeInput({
+				title: 'Three step chicken',
+				ingredients: [
+					{
+						position: 0,
+						name: 'chicken breast',
+						ingredientId: chicken,
+						amount: d('500'),
+						unit: 'g',
+						preparation: '',
+						groupName: '',
+						optional: false,
+						createIdentity: false
+					}
+				],
+				steps: [
+					{ position: 0, sectionTitle: '', text: 'Dice.' },
+					{ position: 1, sectionTitle: '', text: 'Fry.' },
+					{ position: 2, sectionTitle: '', text: 'Serve.' }
+				]
+			})
+		);
+		const { requests } = stubLlm([ANSWER]);
+		await askAboutRecipe(requestAs(alice), {
+			recipeId,
+			question: 'How hot?',
+			step: 2,
+			history: [{ question: 'Why dice?', answer: 'It cooks evenly.' }]
+		});
+		const sent = requests[0].messages;
+		expect(sent.at(-1)!.content).toBe('(On step 2 of 3.) Question: How hot?');
+		for (const m of sent.slice(0, -1)) expect(m.content).not.toContain('On step');
+
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'How hot?', step: 4 });
+		await askAboutRecipe(requestAs(alice), { recipeId, question: 'How hot?', step: 0 });
+		for (const r of requests.slice(1)) expect(r.messages.at(-1)!.content).not.toContain('On step');
+	});
+
+	it('is a 400 for servings that are not a positive number, with no model call or quota spent', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Bad servings', '300');
+		const { requests } = stubLlm([ANSWER]);
+		for (const servings of ['abc', '0', '-2', '', '1/0'])
+			await expect(
+				askAboutRecipe(requestAs(alice), { recipeId, question: 'How much?', servings })
+			).rejects.toMatchObject({ status: 400 });
+		expect(requests).toHaveLength(0);
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++)
+			await askAboutRecipe(requestAs(alice), { recipeId, question: 'ok?' });
+		expect(requests).toHaveLength(LLM_LIMITS.chat.max);
+	});
+
+	it('keeps the chat quota apart from the import quota', async () => {
+		const recipeId = await makeChickenRecipe(alice, 'Two quotas', '300');
+		const { requests } = stubLlm([ANSWER]);
+		// Using up the imports leaves the chat open ...
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(alice.id);
+		expect(() => claimLlmCall(alice.id)).toThrow(expect.objectContaining({ status: 429 }));
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++)
+			await askAboutRecipe(requestAs(alice), { recipeId, question: 'ok?' });
+		expect(requests).toHaveLength(LLM_LIMITS.chat.max);
+		// ... and using up the chat stops the chat only.
+		await expect(
+			askAboutRecipe(requestAs(alice), { recipeId, question: 'ok?' })
+		).rejects.toMatchObject({ status: 429 });
+
+		// The other way round: a full chat leaves an import open.
+		resetRateLimits();
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++) claimLlmCall(alice.id, 'chat');
+		const out = await parse(alice, { html: PLAIN_PAGE });
+		expect(out.assistantError).toBeNull();
+		expect(out.assistantJob).not.toBeNull();
 	});
 
 	it('is a 502 when the model gives an empty answer', async () => {

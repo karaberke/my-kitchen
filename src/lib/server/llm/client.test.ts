@@ -18,10 +18,12 @@ import {
 	LLM_MAX_WAITING,
 	LLM_TIMEOUT_MS,
 	claimLlmCall,
+	completeChat,
 	completeJson,
 	completeText,
 	llmEnabled,
-	setLlmForTests
+	setLlmForTests,
+	type LlmMessage
 } from './client';
 
 const schema = z.object({ ok: z.boolean(), name: z.string() });
@@ -258,6 +260,49 @@ describe('failure mapping', () => {
 	});
 });
 
+describe('completeChat', () => {
+	const turns: LlmMessage[] = [
+		{ role: 'user', content: 'Recipe: dal. Question: how long?' },
+		{ role: 'assistant', content: 'About 30 minutes.' },
+		{ role: 'user', content: 'Question: and the onion?' }
+	];
+
+	it('sends the system prompt first, then the messages in order with the user last', async () => {
+		const { requests } = stubLlm(['Fry it first.']);
+		await expect(completeChat(SYSTEM, turns, { maxTokens: 77 })).resolves.toBe('Fry it first.');
+		expect(requests).toHaveLength(1);
+		expect(requests[0].messages).toEqual([{ role: 'system', content: SYSTEM }, ...turns]);
+		expect(requests[0].messages.at(-1)?.role).toBe('user');
+		expect(requests[0].max_tokens).toBe(77);
+		expect(requests[0].response_format).toBeUndefined();
+	});
+
+	it('sends the same leading messages, byte for byte, on the next turn of a chat', async () => {
+		const { requests } = stubLlm(['About 30 minutes.', 'Fry it first.']);
+		const first = turns.slice(0, 1);
+		await completeChat(SYSTEM, first, { maxTokens: 50 });
+		await completeChat(SYSTEM, turns, { maxTokens: 50 });
+		const [a, b] = requests;
+		expect(a.messages).toHaveLength(2);
+		expect(b.messages).toHaveLength(4);
+		expect(JSON.stringify(b.messages.slice(0, a.messages.length))).toBe(JSON.stringify(a.messages));
+	});
+
+	it('rejects a list that ends with an assistant message, with no request', async () => {
+		const { requests } = stubLlm(['x']);
+		await expect(completeChat(SYSTEM, turns.slice(0, 2), { maxTokens: 50 })).rejects.toThrow();
+		await expect(completeChat(SYSTEM, [], { maxTokens: 50 })).rejects.toThrow();
+		expect(requests).toHaveLength(0);
+	});
+
+	it('is a 502 when the answer is empty', async () => {
+		stubLlm(['  ']);
+		await expect(completeChat(SYSTEM, turns, { maxTokens: 50 })).rejects.toMatchObject({
+			status: 502
+		});
+	});
+});
+
 describe('claimLlmCall', () => {
 	it('is a 503 when the assistant is off, and llmEnabled is false', () => {
 		setLlmForTests({ config: null });
@@ -291,6 +336,38 @@ describe('claimLlmCall', () => {
 		}
 		expect(status).toBe(429);
 		expect(() => claimLlmCall('u2')).not.toThrow();
+	});
+
+	it('keeps a separate bucket for chat: exhausting one rule leaves the other open', () => {
+		stubLlm([good]);
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall('u1');
+		expect(() => claimLlmCall('u1')).toThrow(AppError);
+		// The imports are used up, the chat is not.
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++) claimLlmCall('u1', 'chat');
+		expect(() => claimLlmCall('u1', 'chat')).toThrow(AppError);
+
+		resetRateLimits();
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++) claimLlmCall('u2', 'chat');
+		expect(() => claimLlmCall('u2')).not.toThrow();
+	});
+
+	it('allows LLM_LIMITS.chat.max chat calls, then answers 429', () => {
+		stubLlm([good]);
+		expect(LLM_LIMITS.chat.max).toBeGreaterThan(LLM_LIMITS.user.max);
+		for (let i = 0; i < LLM_LIMITS.chat.max; i++) claimLlmCall('u1', 'chat');
+		let status = 0;
+		try {
+			claimLlmCall('u1', 'chat');
+		} catch (err) {
+			status = (err as AppError).status;
+		}
+		expect(status).toBe(429);
+		expect(() => claimLlmCall('u2', 'chat')).not.toThrow();
+	});
+
+	it('is a 503 for chat when the assistant is off', () => {
+		setLlmForTests({ config: null });
+		expect(() => claimLlmCall('u1', 'chat')).toThrow(expect.objectContaining({ status: 503 }));
 	});
 });
 
