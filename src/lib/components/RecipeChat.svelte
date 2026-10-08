@@ -1,3 +1,8 @@
+<script lang="ts" module>
+	/** What the chat is doing, for the page's Ask button and its wake listener. */
+	export type ChatStatus = 'idle' | 'thinking' | 'speaking' | 'listening';
+</script>
+
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
 	import Alert from '$lib/components/Alert.svelte';
@@ -5,6 +10,7 @@
 	import {
 		listen,
 		primeSpeech,
+		type Dictation,
 		speak,
 		speechInputAvailable,
 		speechLang,
@@ -26,8 +32,11 @@
 	 * only that page may use the microphone.
 	 *
 	 * `ask` is a question heard by the page's wake phrase: it is sent at once and
-	 * its answer is read aloud, then `onasked` lets the page clear it. `onbusy`
-	 * reports when the chat needs the microphone or the speaker to itself.
+	 * its answer (or why there is none) is read aloud, even with the sheet
+	 * closed, then `onasked` lets the page clear it. `onstatus` reports what the
+	 * chat is doing; anything but `idle` needs the microphone left alone.
+	 * `dictate`, when given, is used by the Speak button instead of starting a
+	 * second recognition next to the page's wake listener.
 	 */
 	let {
 		recipeId,
@@ -37,7 +46,8 @@
 		voice = false,
 		ask = null,
 		onasked,
-		onbusy
+		onstatus,
+		dictate
 	}: {
 		recipeId: string;
 		step?: number;
@@ -46,7 +56,8 @@
 		voice?: boolean;
 		ask?: string | null;
 		onasked?: () => void;
-		onbusy?: (busy: boolean) => void;
+		onstatus?: (status: ChatStatus) => void;
+		dictate?: () => Dictation;
 	} = $props();
 
 	const READ_ALOUD_KEY = 'my-kitchen:chat-read-aloud';
@@ -65,10 +76,12 @@
 	let listEl = $state<HTMLElement>();
 	/** Bumped by "Clear chat" so an answer that arrives afterwards is dropped. */
 	let epoch = 0;
-	let recognition: { stop(): void } | null = null;
+	let recognition: Dictation | null = null;
 
-	const busy = $derived(pending || listening || speaking);
-	$effect(() => onbusy?.(busy));
+	const status: ChatStatus = $derived(
+		pending ? 'thinking' : speaking ? 'speaking' : listening && !dictate ? 'listening' : 'idle'
+	);
+	$effect(() => onstatus?.(status));
 
 	$effect(() => {
 		const question = ask?.trim();
@@ -181,6 +194,10 @@
 			if (mine !== epoch) return;
 			// The question stays in the box so the cook can send it again.
 			error = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
+			if (voice && canSpeak && speakAnswer) {
+				speaking = true;
+				speak(`Sorry, I could not answer. ${error}`, speechLang(), () => (speaking = false));
+			}
 		} finally {
 			if (mine === epoch) {
 				pending = false;
@@ -213,9 +230,9 @@
 		}
 		micError = '';
 		quiet(); // the microphone must not hear the answer
-		// Tell the page first: its wake listener must let go of the microphone.
-		onbusy?.(true);
-		const session = listen({ lang: speechLang() });
+		// Without `dictate`, tell the page first: its wake listener must let go of the microphone.
+		if (!dictate) onstatus?.('listening');
+		const session = dictate ? dictate() : listen({ lang: speechLang() });
 		recognition = session;
 		listening = true;
 		try {

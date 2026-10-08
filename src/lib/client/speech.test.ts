@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	LISTEN_STOP_GRACE_MS,
 	WAKE_ANSWER_WINDOW_MS,
 	bestVoice,
+	listen as listenOnce,
 	listenForWakePhrase,
 	primeSpeech,
 	wakeCommand
@@ -85,8 +87,51 @@ class FakeRecognition {
 			results: texts.map((transcript) => ({ isFinal: true, 0: { transcript } }))
 		});
 	}
+	/** A result that is never final, as iOS often gives. */
+	hearInterim(transcript: string) {
+		this.onresult?.({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript } }] });
+	}
 }
 const latest = () => FakeRecognition.instances.at(-1)!;
+
+describe('listen', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		FakeRecognition.instances = [];
+		vi.stubGlobal('window', { SpeechRecognition: FakeRecognition });
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it('keeps an interim result, which is all iOS may give', async () => {
+		const session = listenOnce({ lang: 'en-US' });
+		expect(latest().interimResults).toBe(true);
+		latest().hearInterim('how much flour');
+		latest().onend?.();
+		await expect(session.result).resolves.toBe('how much flour');
+	});
+
+	it('settles after stop() even when the browser never ends the session', async () => {
+		const session = listenOnce({ lang: 'en-US' });
+		const r = latest();
+		r.stop = () => {}; // iOS: no end event
+		r.abort = () => {};
+		r.hearInterim('can I use oil');
+		session.stop();
+		vi.advanceTimersByTime(LISTEN_STOP_GRACE_MS);
+		await expect(session.result).resolves.toBe('can I use oil');
+	});
+
+	it('says no speech was heard when stopped in silence', async () => {
+		const session = listenOnce({ lang: 'en-US' });
+		latest().stop = () => {};
+		session.stop();
+		vi.advanceTimersByTime(LISTEN_STOP_GRACE_MS);
+		await expect(session.result).rejects.toThrow('No speech heard');
+	});
+});
 
 describe('listenForWakePhrase', () => {
 	let commands: string[];
@@ -196,6 +241,37 @@ describe('listenForWakePhrase', () => {
 		expect(errors).toHaveLength(1);
 		expect(states.at(-1)).toBe('off');
 		expect(FakeRecognition.instances.length).toBeLessThanOrEqual(5);
+	});
+
+	it('dictates the next thing heard through the running recognition', async () => {
+		const wake = listen();
+		const session = wake.dictate();
+		latest().hear('hey chef can I use oil');
+		await expect(session.result).resolves.toBe('can I use oil');
+		expect(commands).toEqual([]);
+		expect(FakeRecognition.instances).toHaveLength(1);
+		// After the dictation the phrase works again.
+		latest().hear('hey chef how long');
+		expect(commands).toEqual(['how long']);
+	});
+
+	it('ends a dictation on stop() and after the window', async () => {
+		const wake = listen();
+		const stopped = wake.dictate();
+		stopped.stop();
+		await expect(stopped.result).rejects.toThrow('No speech heard');
+		const silent = wake.dictate();
+		vi.advanceTimersByTime(WAKE_ANSWER_WINDOW_MS + 1);
+		await expect(silent.result).rejects.toThrow('No speech heard');
+	});
+
+	it('takes the microphone back for a dictation while paused', async () => {
+		const wake = listen();
+		wake.pause();
+		const session = wake.dictate();
+		expect(states.at(-1)).toBe('listening');
+		latest().hear('more salt');
+		await expect(session.result).resolves.toBe('more salt');
 	});
 
 	it('stops for good', () => {
