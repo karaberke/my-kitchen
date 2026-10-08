@@ -41,7 +41,9 @@
 		mode,
 		expectedRevision = null,
 		image = null,
-		action = ''
+		action = '',
+		assistant = false,
+		proposed = false
 	}: {
 		initial: RecipeFormInput;
 		identityLabels?: Record<string, string>;
@@ -52,7 +54,13 @@
 		expectedRevision?: number | null;
 		image?: { id: string; version: number } | null;
 		action?: string;
+		/** Offer "Tidy with assistant" (edit page only; needs an `aiFix` action). */
+		assistant?: boolean;
+		/** `initial` is an unsaved proposal (an assistant tidy), so it counts as a change. */
+		proposed?: boolean;
 	} = $props();
+
+	const AI_FIX_ACTION = '?/aiFix';
 
 	let seq = 0;
 	const rowFrom = (
@@ -117,6 +125,7 @@
 	let imageUrl = $state(initial.imageUrl);
 	let imagePreview = $state<string | null>(null);
 	let submitting = $state(false);
+	let tidying = $state(false);
 	let amountErrors = $state<Record<number, string>>({});
 
 	const snapshot = () =>
@@ -137,7 +146,7 @@
 			imageUrl
 		});
 	const initialSnapshot = snapshot();
-	const dirty = $derived(snapshot() !== initialSnapshot);
+	const dirty = $derived(proposed || snapshot() !== initialSnapshot);
 
 	beforeNavigate((nav) => {
 		if (
@@ -232,7 +241,20 @@
 	{action}
 	enctype="multipart/form-data"
 	class="flex flex-col gap-6"
-	use:enhance={async ({ formData, cancel }) => {
+	use:enhance={async ({ formData, action: target, cancel }) => {
+		// The tidy proposal is allowed to fix what validation would refuse, and it
+		// saves nothing, so it skips the checks and the photo resize below.
+		if (target.search === AI_FIX_ACTION) {
+			clientErrors = {};
+			clientMessage = '';
+			submitting = true;
+			tidying = true;
+			return async ({ update }) => {
+				submitting = false;
+				tidying = false;
+				await update({ reset: false });
+			};
+		}
 		// The very rules the server applies, run here first: a missing title or
 		// servings needs no round trip. The server still validates on arrival, so
 		// the two cannot drift — this is the same function, not a copy of it.
@@ -718,13 +740,33 @@
 	<div
 		class="sticky bottom-[calc(72px+env(safe-area-inset-bottom))] z-20 -mx-4 flex flex-wrap items-center gap-2.5 border-t border-sand bg-cream/95 px-4 py-3 backdrop-blur md:bottom-0 md:mx-0 md:rounded-[16px] md:border"
 	>
-		<span class="text-[12px] text-sage">{dirty ? 'Unsaved changes' : 'No changes'}</span>
+		<span class="text-[12px] text-sage" aria-live="polite"
+			>{tidying
+				? 'Reading the recipe with the assistant… this can take a minute.'
+				: dirty
+					? 'Unsaved changes'
+					: 'No changes'}</span
+		>
 		<span class="flex-1"></span>
 		<button class="btn-secondary" name="intent" value="draft" disabled={submitting}
 			>Save draft</button
 		>
 		<button class="btn-primary" name="intent" value="save" disabled={submitting}
-			>{submitting ? 'Saving…' : mode === 'new' ? 'Save recipe' : 'Save changes'}</button
+			>{submitting && !tidying
+				? 'Saving…'
+				: mode === 'new'
+					? 'Save recipe'
+					: 'Save changes'}</button
 		>
+		<!-- After the save buttons in DOM order, so Enter in a field never starts it. -->
+		{#if assistant}
+			<button
+				class="btn-secondary"
+				formaction={AI_FIX_ACTION}
+				formnovalidate
+				disabled={submitting}
+				aria-busy={tidying}>{tidying ? 'Tidying…' : 'Tidy with assistant'}</button
+			>
+		{/if}
 	</div>
 </form>

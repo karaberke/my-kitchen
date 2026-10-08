@@ -31,6 +31,10 @@ pnpm dev               # http://localhost:5173
 | Apply migrations       | `pnpm db:migrate` (dev), `pnpm db:migrate:test` (test database)     |
 | Data consistency check | `pnpm db:check`                                                     |
 | Auth tables            | `pnpm auth:schema` after a Better Auth configuration change         |
+| Stop dev database      | `pnpm db:dev:down`                                                  |
+| Browse the database    | `pnpm db:studio` (Drizzle Studio)                                   |
+| Delete an account      | `pnpm delete-user <email> [--dry-run] [--yes]`                      |
+| Performance data       | `pnpm seed:perf`, then `pnpm measure` (see `docs/measurements.md`)  |
 
 Make the test database once, then migrate it:
 
@@ -56,6 +60,13 @@ operations). `src/lib/shared/` is pure logic that runs on both sides (units,
 `Dec` arithmetic, ingredient text, GTIN). `src/lib/client/` is browser-only.
 Routes hold no domain logic: a `+page.server.ts` parses the form, calls a
 function in `src/lib/server/`, and maps the error.
+
+**Remote functions.** There are no REST endpoints. Client reads and writes
+outside form actions go through `src/lib/remote/<subject>.remote.ts`: each
+export is a `query` or `command` from `$app/server` with a zod schema, and it
+wraps a `src/lib/server/` function `(event, arg)` in `remote()` from
+`src/lib/server/http.ts`, which supplies the request event and maps
+`AppError` to an HTTP error. Keep these files thin, like the routes.
 
 **Request lifecycle.** `src/hooks.server.ts` resolves the session one time per
 request into `event.locals` (`user`, `session`, `memberships`, `household`,
@@ -96,8 +107,12 @@ never rewrites stored amounts.
 
 **Media and barcode.** `src/lib/server/media/` stores images and attachments
 (local disk or S3) and `/media/...` checks access before it answers, including
-before a 304. `src/lib/server/barcode/` asks USDA first and Open Food Facts
-second; `src/lib/shared/gtin.ts` holds the canonical 14-digit identity.
+before a 304. `src/lib/server/barcode/lookup.ts` resolves a scan in this
+order: the household's own confirmed products (never expire, never
+overwritten), cached provider data and confirmed misses inside
+`PRODUCT_TTL_DAYS`, then the providers USDA and Open Food Facts. A lookup never
+changes inventory. `src/lib/shared/gtin.ts` holds the canonical 14-digit
+identity.
 
 **Configuration.** `src/lib/server/env.ts` validates every environment variable
 with zod; add new ones there. The Content-Security-Policy lives in
@@ -122,18 +137,19 @@ Before you add a helper, search for one: `grep -rn "<name or keyword>" src`.
 
 Where a shared helper belongs:
 
-| Subject                                        | File                           |
-| ---------------------------------------------- | ------------------------------ |
-| Pure logic for both sides (units, `Dec`, text) | `src/lib/shared/<subject>.ts`  |
-| Small string helpers                           | `src/lib/shared/text.ts`       |
-| Display formatting in the browser              | `src/lib/client/format.ts`     |
-| HTTP wrappers (`guard`, `fail` mapping)        | `src/lib/server/http.ts`       |
-| Error types and `pgError()`                    | `src/lib/server/errors.ts`     |
-| Session and membership checks                  | `src/lib/server/access.ts`     |
-| Transactions, idempotency, locks               | `src/lib/server/operations.ts` |
-| Markup used more than one time                 | `src/lib/components/*.svelte`  |
-| Browser test helpers                           | `tests/e2e/helpers.ts`         |
-| Integration test helpers and fixtures          | `tests/integration/helpers.ts` |
+| Subject                                        | File                                 |
+| ---------------------------------------------- | ------------------------------------ |
+| Pure logic for both sides (units, `Dec`, text) | `src/lib/shared/<subject>.ts`        |
+| Small string helpers                           | `src/lib/shared/text.ts`             |
+| Display formatting in the browser              | `src/lib/client/format.ts`           |
+| HTTP wrappers (`guard`, `remote`, `fail`)      | `src/lib/server/http.ts`             |
+| Remote `query` / `command` exports             | `src/lib/remote/<subject>.remote.ts` |
+| Error types and `pgError()`                    | `src/lib/server/errors.ts`           |
+| Session and membership checks                  | `src/lib/server/access.ts`           |
+| Transactions, idempotency, locks               | `src/lib/server/operations.ts`       |
+| Markup used more than one time                 | `src/lib/components/*.svelte`        |
+| Browser test helpers                           | `tests/e2e/helpers.ts`               |
+| Integration test helpers and fixtures          | `tests/integration/helpers.ts`       |
 
 Rules:
 

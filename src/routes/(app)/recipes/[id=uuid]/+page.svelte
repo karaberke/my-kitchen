@@ -6,6 +6,9 @@
 	import Alert from '$lib/components/Alert.svelte';
 	import FavoriteButton from '$lib/components/FavoriteButton.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
+	import { remoteErrorMessage } from '$lib/client/remote';
+	import { askRecipe } from '$lib/remote/recipes.remote';
+	import { LLM_QUESTION_MAX_CHARS } from '$lib/shared/recipe-input';
 	import { fmtMinutes, fmtNum, ownerShareLabel, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
 	import { displayQuantity } from '$lib/shared/display-units';
@@ -115,6 +118,24 @@
 	};
 
 	let checked = $state<Record<string, boolean>>({});
+	let question = $state('');
+	let answer = $state('');
+	let askError = $state('');
+	let asking = $state(false);
+	async function ask(e: SubmitEvent) {
+		e.preventDefault();
+		if (asking || !question.trim()) return;
+		asking = true;
+		askError = '';
+		try {
+			// The previous answer stays on screen until this one arrives.
+			({ answer } = await askRecipe({ recipeId: r.id, question: question.trim() }));
+		} catch (err) {
+			askError = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
+		} finally {
+			asking = false;
+		}
+	}
 	let shareOpen = $state(false);
 	let planOpen = $state(false);
 	let deleteOpen = $state(false);
@@ -413,6 +434,41 @@
 					</p>
 				{/if}
 			</div>
+		{/if}
+
+		{#if data.aiEnabled}
+			<section class="card-muted no-print mt-5 p-3.5" aria-labelledby="ask-heading">
+				<h2 id="ask-heading" class="eyebrow">Ask about this recipe</h2>
+				<form class="mt-2 flex flex-col gap-2" onsubmit={ask}>
+					<label class="label" for="ask-question">Your question</label>
+					<textarea
+						class="field min-h-20 py-2.5"
+						id="ask-question"
+						bind:value={question}
+						maxlength={LLM_QUESTION_MAX_CHARS}
+						required
+						placeholder="Can I swap the butter for oil?"></textarea>
+					<button class="btn-secondary btn-sm self-start" disabled={asking} aria-busy={asking}
+						>{asking ? 'Asking…' : 'Ask'}</button
+					>
+				</form>
+				<div aria-live="polite">
+					{#if asking}
+						<p class="mt-2 text-[12.5px] text-sage">
+							Reading the recipe with the assistant… this can take a minute.
+						</p>
+					{/if}
+					{#if askError}<div class="mt-2"><Alert kind="error">{askError}</Alert></div>{/if}
+					{#if answer}
+						<p class="mt-3 text-[13px] leading-relaxed whitespace-pre-line text-ink-soft">
+							{answer}
+						</p>
+					{/if}
+				</div>
+				<p class="mt-2 text-[11.5px] text-sage-soft">
+					Answers come from the assistant and can be wrong.
+				</p>
+			</section>
 		{/if}
 	</div>
 </article>

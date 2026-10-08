@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseRecipeForm, validateRecipe, parseTags } from './recipe-input';
+import { parseRecipeForm, validateRecipe, parseTags, isEmptyRecipe } from './recipe-input';
+import { emptyRecipeFormInput } from './recipe-html';
 
 function fd(entries: Record<string, string>): FormData {
 	const f = new FormData();
@@ -107,5 +108,52 @@ describe('validateRecipe', () => {
 
 	it('parses tags deduplicated and capped', () => {
 		expect(parseTags('a, b,, A ,c')).toEqual(['a', 'b', 'c']);
+	});
+});
+
+describe('isEmptyRecipe', () => {
+	const row = { section: '', text: '' };
+	const ing = {
+		name: '',
+		ingredientId: null,
+		amount: '',
+		unit: '',
+		preparation: '',
+		group: '',
+		optional: false,
+		createIdentity: false
+	};
+
+	it('is empty with no rows at all', () => {
+		expect(isEmptyRecipe(emptyRecipeFormInput())).toBe(true);
+	});
+
+	it('counts blank and whitespace-only rows as empty, even with an amount or a unit', () => {
+		const input = {
+			...emptyRecipeFormInput(),
+			ingredients: [ing, { ...ing, name: '   ', amount: '2', unit: 'g' }],
+			steps: [row, { ...row, text: '  \n ' }]
+		};
+		expect(isEmptyRecipe(input)).toBe(true);
+	});
+
+	it('counts a recipe that has only a title, description or notes as empty', () => {
+		const input = {
+			...emptyRecipeFormInput(),
+			title: 'Found on the page',
+			description: 'Nice',
+			notes: 'The whole page text'
+		};
+		expect(isEmptyRecipe(input)).toBe(true);
+	});
+
+	it('is not empty with one named ingredient', () => {
+		const input = { ...emptyRecipeFormInput(), ingredients: [ing, { ...ing, name: 'flour' }] };
+		expect(isEmptyRecipe(input)).toBe(false);
+	});
+
+	it('is not empty with one step that has text', () => {
+		const input = { ...emptyRecipeFormInput(), steps: [row, { ...row, text: 'Mix.' }] };
+		expect(isEmptyRecipe(input)).toBe(false);
 	});
 });
