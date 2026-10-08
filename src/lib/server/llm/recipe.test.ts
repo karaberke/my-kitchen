@@ -14,6 +14,7 @@ import {
 	recipeFromModel,
 	type ModelRecipe
 } from './recipe';
+import { SCRIPT_DATA_HEADING } from './prompts';
 
 const model = (over: Partial<ModelRecipe> = {}): ModelRecipe => ({
 	title: 'Red lentil dal',
@@ -91,6 +92,44 @@ describe('cleanSourceText', () => {
 	it('returns an empty string for a page with only markup', () => {
 		expect(cleanSourceText('<nav>Menu</nav><script>x()</script>')).toBe('');
 		expect(cleanSourceText('')).toBe('');
+	});
+
+	it('keeps data lines from inline scripts after the visible text, and drops code lines', () => {
+		const out = cleanSourceText(`
+			<h1>Buns</h1><div id="ing-list"></div>
+			<script>
+			  var groups = [
+			    { title: "Bread dough", items: [
+			      [2/3, "cup", "heavy cream", "room temperature"],
+			      [1, "", "large egg", ""]
+			    ]}
+			  ];
+			  var steps = ["Mix for 15 minutes (on low)."];
+			  html += "<li>" + esc(it[2]) + "</li>";
+			  var q = fmt(amt) + (it[1] ? " " + unitLabel(it[1], amt) : "");
+			  document.getElementById("x").textContent = "hello there";
+			</script>`);
+		const [visible, data] = out.split(SCRIPT_DATA_HEADING);
+		expect(visible).toContain('Buns');
+		expect(data).toContain('[2/3, "cup", "heavy cream", "room temperature"],');
+		expect(data).toContain('{ title: "Bread dough", items: [');
+		expect(data).toContain('"Mix for 15 minutes (on low)."');
+		expect(data).not.toContain('html +=');
+		expect(data).not.toContain('unitLabel');
+		expect(data).not.toContain('getElementById');
+	});
+
+	it('skips external scripts, and adds no heading when no script holds data', () => {
+		expect(cleanSourceText('<p>Soup</p><script src="/app.js">"some words"</script>')).toBe('Soup');
+		expect(cleanSourceText('<p>Soup</p><script>var a = 1;</script>')).toBe('Soup');
+	});
+
+	it('drops button labels, which are page controls, not recipe text', () => {
+		const out = cleanSourceText(
+			'<h2>Ingredients</h2><button>12 buns</button><button>24 buns</button><p>1 egg</p>'
+		);
+		expect(out).not.toContain('buns');
+		expect(out).toContain('1 egg');
 	});
 });
 
