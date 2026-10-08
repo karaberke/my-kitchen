@@ -10,6 +10,8 @@ export const SERVINGS_INPUT_MAX_CHARS = 16;
 
 /** The longest question a cook may ask the assistant about a recipe. */
 export const LLM_QUESTION_MAX_CHARS = 500;
+/** The most ingredient names one assistant match request asks about. */
+export const INGREDIENT_MATCH_MAX_NAMES = 8;
 /** Earlier question-and-answer pairs a chat sends with a new question; older ones are dropped. */
 export const LLM_CHAT_MAX_TURNS = 6;
 /** The longest earlier answer a chat may send back; the assistant's answers are shorter. */

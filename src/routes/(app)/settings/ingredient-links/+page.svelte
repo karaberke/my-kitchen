@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/recipe-input';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -6,6 +7,9 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import IngredientLinkRow from '$lib/components/IngredientLinkRow.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
+	import { remoteErrorMessage } from '$lib/client/remote';
+	import { assistantIngredientMatch } from '$lib/remote/ingredients.remote';
+	import type { IngredientSuggestion } from '$lib/server/ingredients';
 
 	let { data, form } = $props();
 
@@ -16,6 +20,43 @@
 	const errorMessage = $derived(
 		form && 'message' in form ? (form as { message?: string }).message : null
 	);
+
+	// Assistant suggestions, by group key. They only prefill rows; the Link button decides.
+	const cleanName = (name: string) => name.trim().replace(/\s+/g, ' ');
+	let asked = $state<Record<string, boolean>>({});
+	let suggestions = $state<Record<string, IngredientSuggestion>>({});
+	let suggesting = $state(false);
+	let suggestError = $state<string | null>(null);
+	let suggestNote = $state<string | null>(null);
+	const askable = $derived(data.groups.filter((g) => !g.proposal && !asked[g.key]));
+	async function suggest() {
+		if (suggesting) return;
+		const batch = askable.slice(0, INGREDIENT_MATCH_MAX_NAMES);
+		suggesting = true;
+		suggestError = null;
+		suggestNote = null;
+		try {
+			const { picks } = await assistantIngredientMatch({
+				names: batch.map((g) => cleanName(g.name))
+			});
+			let found = 0;
+			for (const g of batch) {
+				asked[g.key] = true;
+				const pick = picks[cleanName(g.name)];
+				if (pick) {
+					suggestions[g.key] = pick;
+					found++;
+				}
+			}
+			suggestNote = found
+				? `The assistant suggested ${found} of ${batch.length}. Check each row, then press the button at the end.`
+				: 'The assistant is not sure about any of these. Choose a match yourself.';
+		} catch (err) {
+			suggestError = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
+		} finally {
+			suggesting = false;
+		}
+	}
 </script>
 
 <PageHeader
@@ -38,6 +79,29 @@
 		The app proposes a match for each name. Nothing changes until you push the button at the end.
 		Push ✕ on a row to leave it as it is.
 	</p>
+	{#if data.aiEnabled && (askable.length > 0 || suggesting)}
+		<div class="mt-3">
+			<button
+				type="button"
+				class="btn-secondary btn-sm"
+				onclick={suggest}
+				disabled={suggesting || askable.length === 0}
+				aria-busy={suggesting}
+			>
+				{suggesting ? 'Asking the assistant…' : 'Suggest with assistant'}
+			</button>
+		</div>
+	{/if}
+	<div class="mt-2" aria-live="polite">
+		{#if suggesting}
+			<p class="text-[12.5px] text-sage">
+				Asking the assistant about {Math.min(askable.length, INGREDIENT_MATCH_MAX_NAMES)} names… this
+				can take a minute.
+			</p>
+		{/if}
+		{#if suggestError}<Alert kind="error">{suggestError}</Alert>{/if}
+		{#if suggestNote}<p class="text-[12.5px] text-sage">{suggestNote}</p>{/if}
+	</div>
 	<form
 		method="post"
 		action="?/link"
@@ -58,7 +122,7 @@
 	>
 		<ul class="mt-4 grid gap-3">
 			{#each data.groups as g, i (g.key)}
-				<IngredientLinkRow group={g} index={i} {onchoice} />
+				<IngredientLinkRow group={g} index={i} suggestion={suggestions[g.key] ?? null} {onchoice} />
 			{/each}
 		</ul>
 		<div class="sticky bottom-0 mt-4 bg-parchment/95 py-3">

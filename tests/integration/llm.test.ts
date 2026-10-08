@@ -11,9 +11,17 @@ import {
 	type TestUser
 } from './helpers';
 import { db } from '$lib/server/db';
-import { recipeAttachments, recipeIngredients, recipes, recipeSteps } from '$lib/server/db/schema';
-import { AppError } from '$lib/server/errors';
+import {
+	ingredients as ingredientRows,
+	recipeAttachments,
+	recipeIngredients,
+	recipes,
+	recipeSteps
+} from '$lib/server/db/schema';
+import { AppError, ReviewConflict } from '$lib/server/errors';
 import { askAboutRecipe } from '$lib/server/llm/ask';
+import { tidyGroceryList } from '$lib/server/llm/grocery';
+import { suggestIngredientMatch } from '$lib/server/llm/match';
 import {
 	LLM_MAX_JOBS_PER_USER,
 	dismissAssistantJobFor,
@@ -25,12 +33,21 @@ import {
 	waitForJob,
 	type AssistantJobView
 } from '$lib/server/llm/jobs';
+import {
+	addBatch,
+	addManualLine,
+	createList,
+	getListDetail,
+	updateLine
+} from '$lib/server/grocery';
+import { searchIngredients } from '$lib/server/ingredients';
 import { createRecipe } from '$lib/server/recipes';
 import { cleanupUnreferencedAttachments } from '$lib/server/media/attachments';
 import { LLM_LIMITS, resetRateLimits } from '$lib/server/ratelimit';
 import { emptyRecipeFormInput } from '$lib/shared/recipe-html';
 import { LLM_CHAT_MAX_TURNS, LLM_QUESTION_MAX_CHARS } from '$lib/shared/recipe-input';
 import { actions } from '../../src/routes/(app)/recipes/import/+page.server';
+import { actions as groceryActions } from '../../src/routes/(app)/grocery/[listId=uuid]/+page.server';
 import { STUB_LLM_CONFIG, completionResponse, jsonResponse, stubLlm, unstubLlm } from '../llm-stub';
 import { claimLlmCall, setLlmForTests } from '$lib/server/llm/client';
 import type { RequestEvent } from '@sveltejs/kit';
@@ -745,5 +762,470 @@ describe('import jobs: list and dismiss', () => {
 		expect(waitForJob(id)).toBeUndefined();
 		// The recipe the job saved stays.
 		expect(await draftsOf(alice)).toHaveLength(1);
+	});
+});
+
+/* Grocery tidy and ingredient match suggestions. */
+
+const MESSY_LINE = '2x tins chopped tomatoes 400g';
+
+const tidyReply = (
+	lines: { id: number; name: string; amount: string; unit: string; aisle: string }[]
+) => JSON.stringify({ lines });
+
+/** A draft list of `user`'s household with the given manual lines (all unlinked, no amount unless given). */
+async function listWith(
+	user: TestUser,
+	lines: { name: string; amount?: string; category?: string }[]
+): Promise<{ listId: string; lineIds: string[] }> {
+	const listId = await createList(user.ctx, 'Weekly');
+	const lineIds: string[] = [];
+	for (const l of lines) {
+		const { lineId } = await addManualLine(user.ctx, {
+			listId,
+			name: l.name,
+			ingredientId: null,
+			amount: l.amount ? d(l.amount) : null,
+			unit: null,
+			category: l.category ?? '',
+			subtractPantry: false,
+			note: ''
+		});
+		lineIds.push(lineId);
+	}
+	return { listId, lineIds };
+}
+
+const detailOf = (user: TestUser, listId: string) => getListDetail(db, user.householdId, listId);
+
+/** A form-action event for the grocery list page. */
+function groceryEvent(
+	user: TestUser,
+	listId: string,
+	action: string,
+	fields: Record<string, string>
+): RequestEvent {
+	const body = new FormData();
+	for (const [k, v] of Object.entries(fields)) body.set(k, v);
+	return {
+		...requestAs(user),
+		params: { listId },
+		request: new Request(`http://localhost/grocery/${listId}?/${action}`, { method: 'POST', body })
+	} as unknown as RequestEvent;
+}
+
+interface ActionResult {
+	ok?: boolean;
+	applied?: number;
+	conflicts?: string[];
+	message?: string;
+}
+
+/** What a SvelteKit action returned: its data, or the data of `fail(...)` with its status. */
+async function runAction(
+	name: 'addLine' | 'applyTidy',
+	event: RequestEvent
+): Promise<{ status: number; data: ActionResult }> {
+	const out = (await groceryActions[name]!(event as never)) as unknown as
+		ActionResult | { status: number; data: ActionResult };
+	return 'status' in out ? out : { status: 200, data: out };
+}
+
+describe('grocery tidy', () => {
+	it('proposes changes from the reply and writes nothing', async () => {
+		const { listId, lineIds } = await listWith(alice, [{ name: MESSY_LINE }]);
+		const { requests } = stubLlm([
+			tidyReply([{ id: 1, name: 'chopped tomatoes', amount: '400', unit: 'g', aisle: 'Pantry' }])
+		]);
+		const before = await detailOf(alice, listId);
+
+		const out = await tidyGroceryList(requestAs(alice), { listId });
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0].messages.at(-1)!.content).toContain(`1: ${MESSY_LINE}`);
+		expect(out.sent).toBe(1);
+		expect(out.proposals).toHaveLength(1);
+		expect(out.proposals[0]).toMatchObject({
+			lineId: lineIds[0],
+			revision: before.lines[0].revision,
+			kind: 'manual',
+			before: { name: MESSY_LINE, amount: null, unit: null, category: 'Other' },
+			after: { name: 'chopped tomatoes', amount: '400', unit: 'g', category: 'Pantry' }
+		});
+		expect(out.proposals[0].changed.sort()).toEqual(['amount', 'category', 'name', 'unit']);
+		// Only Apply changes rows.
+		expect(await detailOf(alice, listId)).toEqual(before);
+	});
+
+	it('drops an amount the model made up, and keeps the name and aisle it gave', async () => {
+		const { listId } = await listWith(alice, [{ name: MESSY_LINE }]);
+		stubLlm([
+			tidyReply([{ id: 1, name: 'chopped tomatoes', amount: '800', unit: 'g', aisle: 'Pantry' }])
+		]);
+		const out = await tidyGroceryList(requestAs(alice), { listId });
+		expect(out.proposals).toHaveLength(1);
+		expect(out.proposals[0].after).toEqual({
+			name: 'chopped tomatoes',
+			amount: null,
+			unit: null,
+			category: 'Pantry'
+		});
+		expect(out.proposals[0].changed.sort()).toEqual(['category', 'name']);
+	});
+
+	it('proposes nothing for an id it did not send or an aisle that is not on the list', async () => {
+		const { listId } = await listWith(alice, [{ name: MESSY_LINE }]);
+		stubLlm([
+			tidyReply([
+				{ id: 7, name: 'ghost', amount: '', unit: '', aisle: 'Pantry' },
+				{ id: 1, name: MESSY_LINE, amount: '', unit: '', aisle: 'Other' }
+			])
+		]);
+		const out = await tidyGroceryList(requestAs(alice), { listId });
+		expect(out.sent).toBe(1);
+		expect(out.proposals).toEqual([]);
+	});
+
+	it('applies the kept proposals through the applyTidy action, bumping the revisions', async () => {
+		const { listId, lineIds } = await listWith(alice, [{ name: MESSY_LINE }, { name: 'bananas' }]);
+		stubLlm([
+			tidyReply([
+				{ id: 1, name: 'chopped tomatoes', amount: '400', unit: 'g', aisle: 'Pantry' },
+				{ id: 2, name: 'bananas', amount: '', unit: '', aisle: 'Produce' }
+			])
+		]);
+		const before = await detailOf(alice, listId);
+		const { proposals } = await tidyGroceryList(requestAs(alice), { listId });
+		expect(proposals).toHaveLength(2);
+
+		const fields: Record<string, string> = {};
+		proposals.forEach((p, i) => {
+			fields[`change.${i}.lineId`] = p.lineId;
+			fields[`change.${i}.expectedRevision`] = String(p.revision);
+			if (p.changed.includes('name')) fields[`change.${i}.name`] = p.after.name;
+			if (p.changed.includes('amount')) {
+				fields[`change.${i}.amount`] = p.after.amount ?? '';
+				fields[`change.${i}.unit`] = p.after.unit ?? '';
+			}
+			if (p.changed.includes('category')) fields[`change.${i}.category`] = p.after.category;
+		});
+		const res = await runAction('applyTidy', groceryEvent(alice, listId, 'applyTidy', fields));
+		expect(res.status).toBe(200);
+		expect(res.data).toMatchObject({ ok: true, applied: 2 });
+
+		const after = await detailOf(alice, listId);
+		const tomatoes = after.lines.find((l) => l.id === lineIds[0])!;
+		expect(tomatoes).toMatchObject({ name: 'chopped tomatoes', unit: 'g', category: 'Pantry' });
+		expect(Number(tomatoes.demandAmount)).toBe(400);
+		expect(tomatoes.revision).toBe(before.lines.find((l) => l.id === lineIds[0])!.revision + 1);
+		expect(after.lines.find((l) => l.id === lineIds[1])).toMatchObject({
+			name: 'bananas',
+			category: 'Produce'
+		});
+		expect(after.revision).toBeGreaterThan(before.revision);
+	});
+
+	it('gives a conflict for a line changed after the proposal, and still applies the others', async () => {
+		const { listId, lineIds } = await listWith(alice, [{ name: MESSY_LINE }, { name: 'bananas' }]);
+		stubLlm([
+			tidyReply([
+				{ id: 1, name: 'chopped tomatoes', amount: '', unit: '', aisle: 'Pantry' },
+				{ id: 2, name: 'bananas', amount: '', unit: '', aisle: 'Produce' }
+			])
+		]);
+		const { proposals } = await tidyGroceryList(requestAs(alice), { listId });
+		expect(proposals).toHaveLength(2);
+
+		// Someone edits the first line while the review sheet is open.
+		await updateLine(alice.ctx, {
+			listId,
+			lineId: lineIds[0],
+			expectedRevision: proposals[0].revision,
+			note: 'the small tins'
+		});
+		await expect(
+			updateLine(alice.ctx, {
+				listId,
+				lineId: lineIds[0],
+				expectedRevision: proposals[0].revision,
+				name: 'chopped tomatoes'
+			})
+		).rejects.toBeInstanceOf(ReviewConflict);
+
+		const fields: Record<string, string> = {};
+		proposals.forEach((p, i) => {
+			fields[`change.${i}.lineId`] = p.lineId;
+			fields[`change.${i}.expectedRevision`] = String(p.revision);
+			fields[`change.${i}.category`] = p.after.category;
+		});
+		const res = await runAction('applyTidy', groceryEvent(alice, listId, 'applyTidy', fields));
+		expect(res.status).toBe(409);
+		expect(res.data).toMatchObject({ applied: 1, conflicts: [lineIds[0]] });
+
+		const after = await detailOf(alice, listId);
+		expect(after.lines.find((l) => l.id === lineIds[0])).toMatchObject({
+			name: MESSY_LINE,
+			category: 'Other',
+			note: 'the small tins'
+		});
+		expect(after.lines.find((l) => l.id === lineIds[1])!.category).toBe('Produce');
+	});
+
+	it('is a 400 for an applyTidy post with no changes, an unknown aisle or a bad line id', async () => {
+		const { listId, lineIds } = await listWith(alice, [{ name: MESSY_LINE }]);
+		const before = await detailOf(alice, listId);
+		const base = { 'change.0.lineId': lineIds[0], 'change.0.expectedRevision': '0' };
+		const posts: Record<string, string>[] = [
+			{},
+			{ ...base, 'change.0.category': 'Gadgets' },
+			{ 'change.0.lineId': 'not-a-uuid', 'change.0.expectedRevision': '0' }
+		];
+		for (const fields of posts) {
+			const res = await runAction('applyTidy', groceryEvent(alice, listId, 'applyTidy', fields));
+			expect(res.status).toBe(400);
+		}
+		expect(await detailOf(alice, listId)).toEqual(before);
+	});
+
+	it('is a 404 for another household’s list, with no model call and no quota spent', async () => {
+		const { listId } = await listWith(bob, [{ name: MESSY_LINE }]);
+		const { requests } = stubLlm([tidyReply([])]);
+		await expect(tidyGroceryList(requestAs(alice), { listId })).rejects.toMatchObject({
+			status: 404
+		});
+		await expect(tidyGroceryList(requestAs(alice), { listId: 'nope' })).rejects.toMatchObject({
+			status: 404
+		});
+		expect(requests).toHaveLength(0);
+		// Every call in Alice's allowance is still there.
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(alice.id);
+		expect(() => claimLlmCall(alice.id)).toThrow(expect.objectContaining({ status: 429 }));
+	});
+
+	it('returns sent: 0 with no model call or quota when no line needs help', async () => {
+		const { listId } = await listWith(alice, [
+			{ name: 'bananas', amount: '6', category: 'Produce' }
+		]);
+		const { requests } = stubLlm([tidyReply([])]);
+		const out = await tidyGroceryList(requestAs(alice), { listId });
+		expect(out).toEqual({ proposals: [], sent: 0 });
+		const empty = await createList(alice.ctx, 'Empty');
+		expect(await tidyGroceryList(requestAs(alice), { listId: empty })).toEqual({
+			proposals: [],
+			sent: 0
+		});
+		expect(requests).toHaveLength(0);
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(alice.id);
+	});
+
+	it('is a 429 when the allowance is used up, and a 401 when signed out, with no model call', async () => {
+		const { listId } = await listWith(alice, [{ name: MESSY_LINE }]);
+		const { requests } = stubLlm([tidyReply([])]);
+		await expect(tidyGroceryList(requestAs(null), { listId })).rejects.toMatchObject({
+			status: 401
+		});
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(alice.id);
+		await expect(tidyGroceryList(requestAs(alice), { listId })).rejects.toMatchObject({
+			status: 429
+		});
+		expect(requests).toHaveLength(0);
+	});
+
+	it('is a 503 when the assistant is off', async () => {
+		const { listId } = await listWith(alice, [{ name: MESSY_LINE }]);
+		setLlmForTests({ config: null });
+		await expect(tidyGroceryList(requestAs(alice), { listId })).rejects.toMatchObject({
+			status: 503
+		});
+	});
+});
+
+describe('updateLine: name, unit and link', () => {
+	it('changes the name, unit and catalog link of a manual line', async () => {
+		const chicken = await catalogIngredientId('chicken breast');
+		const { listId, lineIds } = await listWith(alice, [{ name: 'chiken 500g' }]);
+		const line = (await detailOf(alice, listId)).lines[0];
+		await updateLine(alice.ctx, {
+			listId,
+			lineId: lineIds[0],
+			expectedRevision: line.revision,
+			name: '  chicken   breast ',
+			unit: 'g',
+			ingredientId: chicken,
+			amount: d(500)
+		});
+		const changed = (await detailOf(alice, listId)).lines[0];
+		expect(changed).toMatchObject({
+			name: 'chicken breast',
+			unit: 'g',
+			ingredientId: chicken,
+			revision: line.revision + 1
+		});
+		expect(Number(changed.demandAmount)).toBe(500);
+
+		await updateLine(alice.ctx, {
+			listId,
+			lineId: lineIds[0],
+			expectedRevision: changed.revision,
+			unit: null,
+			ingredientId: null
+		});
+		expect((await detailOf(alice, listId)).lines[0]).toMatchObject({
+			unit: null,
+			ingredientId: null
+		});
+	});
+
+	it('is a 400 for a blank name or an unknown unit, and leaves the line as it was', async () => {
+		const { listId, lineIds } = await listWith(alice, [{ name: 'rice' }]);
+		const before = await detailOf(alice, listId);
+		const base = { listId, lineId: lineIds[0], expectedRevision: before.lines[0].revision };
+		await expect(updateLine(alice.ctx, { ...base, name: '   ' })).rejects.toMatchObject({
+			status: 400
+		});
+		await expect(updateLine(alice.ctx, { ...base, unit: 'bushels' })).rejects.toMatchObject({
+			status: 400
+		});
+		expect(await detailOf(alice, listId)).toEqual(before);
+	});
+
+	it('is a 409 for a name, unit or link on a recipe line', async () => {
+		const chicken = await catalogIngredientId('chicken breast');
+		const recipeId = await makeChickenRecipe(alice, 'Roast', '500');
+		const listId = await createList(alice.ctx, 'Recipes');
+		await addBatch(alice.ctx, {
+			listId,
+			recipeId,
+			servings: d(4),
+			clientKey: 'tidy',
+			includeOptional: []
+		});
+		const before = await detailOf(alice, listId);
+		const line = before.lines.find((l) => l.kind === 'recipe')!;
+		const base = { listId, lineId: line.id, expectedRevision: line.revision };
+		for (const edit of [{ name: 'hen' }, { unit: 'kg' }, { ingredientId: chicken }]) {
+			const err = await updateLine(alice.ctx, { ...base, ...edit }).catch((e) => e);
+			expect(err).toBeInstanceOf(AppError);
+			expect(err).not.toBeInstanceOf(ReviewConflict);
+			expect(err.status).toBe(409);
+		}
+		// Its aisle can still change.
+		await updateLine(alice.ctx, { ...base, category: 'Meat & fish' });
+		const after = await detailOf(alice, listId);
+		expect(after.lines.find((l) => l.id === line.id)).toMatchObject({
+			name: line.name,
+			unit: line.unit,
+			ingredientId: line.ingredientId,
+			category: 'Meat & fish'
+		});
+	});
+});
+
+describe('grocery addLine action', () => {
+	const added = async (fields: Record<string, string>) => {
+		const { listId } = await listWith(alice, []);
+		const res = await runAction('addLine', groceryEvent(alice, listId, 'addLine', fields));
+		expect(res.status).toBe(200);
+		const lines = (await detailOf(alice, listId)).lines;
+		expect(lines).toHaveLength(1);
+		return lines[0];
+	};
+
+	it('splits "400 g rice" typed in the name alone into amount, unit and name', async () => {
+		const line = await added({ name: '400 g rice' });
+		expect(line).toMatchObject({ name: 'rice', unit: 'g', kind: 'manual' });
+		expect(Number(line.demandAmount)).toBe(400);
+	});
+
+	it('keeps a line it cannot read exactly as typed', async () => {
+		for (const name of [MESSY_LINE, 'bananas']) {
+			const line = await added({ name });
+			expect(line).toMatchObject({ name, unit: null, demandAmount: null });
+		}
+	});
+
+	it('does not split when the amount or unit field is filled in', async () => {
+		const withAmount = await added({ name: '400 g rice', amount: '2' });
+		expect(withAmount).toMatchObject({ name: '400 g rice', unit: null });
+		expect(Number(withAmount.demandAmount)).toBe(2);
+	});
+});
+
+describe('suggestIngredientMatch', () => {
+	const pickReply = (picks: { name: string; pick: number | null }[]) => JSON.stringify({ picks });
+
+	/** Rows the suggestion must never touch. */
+	const catalogState = async () => ({
+		ingredients: await db.select().from(ingredientRows),
+		recipeIngredients: await db.select().from(recipeIngredients)
+	});
+
+	it('maps a pick to that candidate, asks with numbered candidates, and writes nothing', async () => {
+		const candidates = await searchIngredients(db, alice.id, 'chicken', 5, alice.householdId);
+		expect(candidates.length).toBeGreaterThan(1);
+		const { requests } = stubLlm([pickReply([{ name: 'chicken', pick: 2 }])]);
+		const before = await catalogState();
+
+		const out = await suggestIngredientMatch(requestAs(alice), { names: ['chicken'] });
+
+		expect(out.picks).toEqual({ chicken: candidates[1] });
+		expect(requests).toHaveLength(1);
+		expect(requests[0].response_format?.type).toBe('json_schema');
+		const asked = requests[0].messages.at(-1)!.content;
+		expect(asked).toContain('1. chicken');
+		candidates.forEach((c, i) => expect(asked).toContain(`${i + 1}) ${c.name}`));
+		expect(await catalogState()).toEqual(before);
+	});
+
+	it('gives null for a null pick and for a pick outside the candidates', async () => {
+		stubLlm([
+			pickReply([
+				{ name: 'chicken', pick: 99 },
+				{ name: 'milk', pick: null },
+				{ name: 'rice', pick: 0 }
+			])
+		]);
+		const out = await suggestIngredientMatch(requestAs(alice), {
+			names: ['chicken', 'milk', 'rice']
+		});
+		expect(out.picks).toEqual({ chicken: null, milk: null, rice: null });
+	});
+
+	it('makes no model call and spends no quota for names with no candidates', async () => {
+		const gibberish = 'qqzzxxvvkk';
+		expect(await searchIngredients(db, alice.id, gibberish, 5, alice.householdId)).toEqual([]);
+		const { requests } = stubLlm([pickReply([])]);
+		const out = await suggestIngredientMatch(requestAs(alice), { names: [gibberish, '   '] });
+		expect(out.picks).toEqual({ [gibberish]: null });
+		expect(requests).toHaveLength(0);
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(alice.id);
+	});
+
+	it('asks only about names that have candidates, and answers null for the rest', async () => {
+		const gibberish = 'qqzzxxvvkk';
+		const candidates = await searchIngredients(db, alice.id, 'chicken', 5, alice.householdId);
+		const { requests } = stubLlm([pickReply([{ name: 'chicken', pick: 1 }])]);
+		const out = await suggestIngredientMatch(requestAs(alice), { names: [gibberish, 'chicken'] });
+		expect(out.picks).toEqual({ [gibberish]: null, chicken: candidates[0] });
+		expect(requests[0].messages.at(-1)!.content).not.toContain(gibberish);
+	});
+
+	it('is a 401 signed out and a 429 when the allowance is used up, with no model call', async () => {
+		const { requests } = stubLlm([pickReply([{ name: 'chicken', pick: 1 }])]);
+		await expect(
+			suggestIngredientMatch(requestAs(null), { names: ['chicken'] })
+		).rejects.toMatchObject({ status: 401 });
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(alice.id);
+		await expect(
+			suggestIngredientMatch(requestAs(alice), { names: ['chicken'] })
+		).rejects.toMatchObject({ status: 429 });
+		expect(requests).toHaveLength(0);
+	});
+
+	it('is a 503 when the assistant is off', async () => {
+		setLlmForTests({ config: null });
+		await expect(
+			suggestIngredientMatch(requestAs(alice), { names: ['chicken'] })
+		).rejects.toMatchObject({ status: 503 });
 	});
 });

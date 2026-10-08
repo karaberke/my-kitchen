@@ -1,5 +1,6 @@
 import type { RecipeFormInput, RecipeIngredientInput, RecipeStepInput } from './recipe-input';
 import { parseAmount } from './amount-parse';
+import type { Dec } from './decimal';
 import { normalizeUnitInput } from './units';
 
 /**
@@ -225,6 +226,30 @@ export function splitIngredientLine(line: string): SplitIngredient {
 	// Without a name there is nothing to track; keep the line as written.
 	if (!rest) return empty;
 	return { amount, unit, name: rest, original };
+}
+
+/** A count written as a multiplier: "2x tins", "3 × 400 g". */
+const MULTIPLIER = new RegExp(`^${QUANTITY_PATTERN}\\s*[x×](?=\\s|$)`, 'i');
+
+/**
+ * Read an item typed on a grocery list with no amount fields, such as
+ * "400 g chopped tomatoes", into amount, unit and name. Null when the text is
+ * not that plain: a multiplier ("2x tins …"), a second number in the name
+ * ("tins chopped tomatoes 400g"), a name that does not start with a letter, or
+ * a number joined to a word that is not a unit ("7up"). Then the item stays as
+ * typed; this never guesses.
+ */
+export function parseGroceryEntry(
+	text: string
+): { amount: Dec; unit: string | null; name: string } | null {
+	const split = splitIngredientLine(text);
+	if (!split.amount || !split.name) return null;
+	if (MULTIPLIER.test(split.original)) return null;
+	if (!/^\p{L}/u.test(split.name) || /\d/.test(split.name)) return null;
+	if (!split.unit && !split.original.endsWith(` ${split.name}`)) return null;
+	const amount = parseAmount(split.amount);
+	if (!amount.ok || !amount.value?.isPositive()) return null;
+	return { amount: amount.value, unit: split.unit || null, name: split.name };
 }
 
 /** One written ingredient line as a form row, split into amount, unit and name. */

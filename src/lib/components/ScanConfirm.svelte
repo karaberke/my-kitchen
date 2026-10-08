@@ -3,6 +3,8 @@
 	import Alert from '$lib/components/Alert.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import { enhance } from '$app/forms';
+	import { remoteErrorMessage } from '$lib/client/remote';
+	import { assistantIngredientMatch } from '$lib/remote/ingredients.remote';
 	import { parseAmount } from '$lib/shared/amount-parse';
 	import { pantryAmount } from '$lib/shared/package-size';
 	import { UNITS, unitLabel } from '$lib/shared/units';
@@ -26,6 +28,7 @@
 	let {
 		scan,
 		categories,
+		aiEnabled = false,
 		operationId,
 		form = null,
 		onclose,
@@ -33,6 +36,8 @@
 	}: {
 		scan: Scan | null;
 		categories: readonly string[];
+		/** show "Ask the assistant" beside the candidates */
+		aiEnabled?: boolean;
 		operationId: string;
 		/** The last action result for this sheet, so a server rejection shows in place. */
 		form?: { message?: string } | null;
@@ -50,11 +55,18 @@
 	let packageCount = $state('1');
 	let busy = $state(false);
 	let seen = $state('');
+	// The assistant's pick among the listed candidates; the user still taps to choose.
+	let asking = $state(false);
+	let askError = $state<string | null>(null);
+	let askedPick = $state<{ id: string | null } | null>(null);
 
 	// Re-seed the form each time a different barcode arrives.
 	$effect(() => {
 		if (!scan || seen === scan.lookup.gtin + scan.suggestion.from) return;
 		seen = scan.lookup.gtin + scan.suggestion.from;
+		asking = false;
+		askError = null;
+		askedPick = null;
 		name = scan.suggestion.name;
 		if (scan.suggestion.ingredientId) {
 			// The household already links this barcode to an ingredient.
@@ -85,6 +97,25 @@
 		identityLabel = c.name;
 		createIdentity = false;
 		proposed = false;
+	}
+
+	async function askAssistant() {
+		if (!scan || asking) return;
+		// The candidates were searched with the product name, so ask about that.
+		const asked = (scan.suggestion.name || name).trim().replace(/\s+/g, ' ');
+		if (!asked) return;
+		asking = true;
+		askError = null;
+		try {
+			const { picks } = await assistantIngredientMatch({ names: [asked] });
+			const pick = picks[asked];
+			const listed = scan.suggestion.candidates.some((c) => c.id === pick?.id);
+			askedPick = { id: pick && listed ? pick.id : null };
+		} catch (err) {
+			askError = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
+		} finally {
+			asking = false;
+		}
 	}
 
 	const SOURCE_LABEL: Record<string, string> = {
@@ -218,11 +249,44 @@
 					<legend class="label">Which ingredient is this?</legend>
 					<div class="flex flex-wrap gap-2">
 						{#each scan.suggestion.candidates as c (c.id)}
-							<button type="button" class="btn-secondary btn-sm" onclick={() => chooseCandidate(c)}>
-								{c.name}
+							<button
+								type="button"
+								class="btn-secondary btn-sm {askedPick?.id === c.id
+									? 'border-leaf bg-leaf-soft'
+									: ''}"
+								onclick={() => chooseCandidate(c)}
+							>
+								{c.name}{#if askedPick?.id === c.id}
+									<span class="pill bg-leaf-soft text-leaf-dark">Assistant's pick</span>{/if}
 							</button>
 						{/each}
 					</div>
+					{#if aiEnabled}
+						<div class="mt-2">
+							<button
+								type="button"
+								class="btn-ghost btn-sm"
+								onclick={askAssistant}
+								disabled={asking}
+								aria-busy={asking}
+							>
+								{asking ? 'Asking the assistant…' : 'Ask the assistant'}
+							</button>
+						</div>
+						<div aria-live="polite">
+							{#if asking}
+								<p class="mt-1 text-[12.5px] text-sage">
+									Asking the assistant… this can take a minute.
+								</p>
+							{/if}
+							{#if askError}<div class="mt-2"><Alert kind="error">{askError}</Alert></div>{/if}
+							{#if askedPick && askedPick.id === null}
+								<p class="mt-1 text-[12.5px] text-sage">
+									The assistant is not sure. Choose one or type a name.
+								</p>
+							{/if}
+						</div>
+					{/if}
 				</fieldset>
 			{/if}
 

@@ -752,6 +752,14 @@ export async function refreshDraft(ctx: ActorContext, listId: string) {
 	});
 }
 
+/** The longest name a grocery line keeps. */
+export const GROCERY_LINE_NAME_MAX = 120;
+
+/** A typed line name on one line with single spaces, cut to `GROCERY_LINE_NAME_MAX`. Empty when blank. */
+export function cleanLineName(raw: string): string {
+	return raw.trim().replace(/\s+/g, ' ').slice(0, GROCERY_LINE_NAME_MAX);
+}
+
 export async function addManualLine(
 	ctx: ActorContext,
 	input: {
@@ -765,7 +773,7 @@ export async function addManualLine(
 		note: string;
 	}
 ) {
-	const name = input.name.trim().replace(/\s+/g, ' ').slice(0, 120);
+	const name = cleanLineName(input.name);
 	if (!name) throw new AppError(400, 'Name the item');
 	if (input.unit && !isUnitId(input.unit)) throw new AppError(400, 'Unknown unit');
 	if (input.amount && input.amount.isNegative())
@@ -842,9 +850,18 @@ export interface UpdateLineInput {
 	category?: string;
 	note?: string;
 	status?: 'pending' | 'handled';
+	/** manual lines only */
+	name?: string;
+	/** manual lines only; null clears the unit */
+	unit?: string | null;
+	/** manual lines only; null unlinks the line from the catalog */
+	ingredientId?: string | null;
 }
 
 export async function updateLine(ctx: ActorContext, input: UpdateLineInput) {
+	const name = input.name === undefined ? undefined : cleanLineName(input.name);
+	if (name === '') throw new AppError(400, 'Name the item');
+	if (input.unit && !isUnitId(input.unit)) throw new AppError(400, 'Unknown unit');
 	return withTransaction(async (tx) => {
 		await assertMember(tx, ctx.householdId, ctx.userId);
 		const { pantryRevision } = await lockHousehold(tx, ctx.householdId, { grocery: true });
@@ -869,10 +886,28 @@ export async function updateLine(ctx: ActorContext, input: UpdateLineInput) {
 				}
 			);
 		}
+		const identityEdit =
+			name !== undefined || input.unit !== undefined || input.ingredientId !== undefined;
+		if (identityEdit && line.kind !== 'manual')
+			throw new AppError(409, 'Only items you added yourself can be renamed or relinked');
+		const unitChanged = input.unit !== undefined && input.unit !== line.unit;
+		const linkChanged =
+			input.ingredientId !== undefined && input.ingredientId !== line.ingredientId;
+		if ((unitChanged || linkChanged) && Dec.from(line.purchasedAmount).isPositive())
+			throw new AppError(
+				409,
+				'Part of this item is already bought; its unit and link stay as they are'
+			);
+		if (input.ingredientId) await assertIngredientsVisible(tx, ctx.userId, [input.ingredientId]);
 		const set: Partial<typeof groceryLines.$inferInsert> = {
 			revision: sql`${groceryLines.revision} + 1` as never,
 			updatedAt: sql`now()` as never
 		};
+		if (name !== undefined) set.name = name;
+		if (input.unit !== undefined) set.unit = input.unit;
+		if (input.ingredientId !== undefined) set.ingredientId = input.ingredientId;
+		// While shopping, stock counted in the old unit or for the old item no longer applies.
+		if ((unitChanged || linkChanged) && list.status !== 'draft') set.stockConsidered = null;
 		if (input.category !== undefined) set.category = input.category.trim().slice(0, 40) || 'Other';
 		if (input.note !== undefined) set.note = input.note.trim().slice(0, 300);
 		if (input.amount !== undefined) {
@@ -901,7 +936,7 @@ export async function updateLine(ctx: ActorContext, input: UpdateLineInput) {
 		}
 		if (input.status !== undefined) set.status = input.status;
 		await tx.update(groceryLines).set(set).where(eq(groceryLines.id, line.id));
-		if (list.status === 'draft' && input.amount !== undefined)
+		if (list.status === 'draft' && (input.amount !== undefined || unitChanged || linkChanged))
 			await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
 		const revision = await bumpList(tx, input.listId);
 		return { listRevision: revision };
