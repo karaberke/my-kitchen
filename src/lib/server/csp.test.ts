@@ -67,4 +67,27 @@ describe('permissions policy', () => {
 		expect(policy).toContain('microphone=()');
 		expect(policy).toContain('geolocation=()');
 	});
+
+	it('grants the microphone to this origin on the cook page only', async () => {
+		const { applyResponsePolicy } = await import('./http');
+		const policyFor = (path: string) =>
+			applyResponsePolicy(
+				{ url: new URL(`https://kitchen.example.test${path}`) } as never,
+				new Response('')
+			).headers.get('permissions-policy');
+		const id = '0b5f4a52-7a3e-4c1d-9e2f-3a4b5c6d7e8f';
+		const cook = policyFor(`/recipes/${id}/cook`);
+		expect(cook).toContain('microphone=(self)');
+		expect(cook).toContain('camera=(self)');
+		expect(cook).toContain('geolocation=()');
+		for (const path of [
+			`/recipes/${id}`,
+			`/recipes/${id}/edit`,
+			`/recipes/${id}/cook/extra`,
+			'/recipes/not-a-uuid/cook',
+			`/plan/recipes/${id}/cook`,
+			'/pantry'
+		])
+			expect(policyFor(path), path).toContain('microphone=()');
+	});
 });

@@ -20,6 +20,7 @@ import { AppError, ReviewConflict, notFound } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
 import { UNITS, convertAmount, unitsCompatible, type Convention } from '$lib/shared/units';
 import { ingredientLine } from '$lib/shared/ingredient-line';
+import { scaleAmount } from '$lib/shared/scaling';
 import type { ValidRecipe } from '$lib/shared/recipe-input';
 import { withTransaction } from '$lib/server/operations';
 import { CATEGORIES_PER_HOUSEHOLD_MAX } from '$lib/server/recipe-categories';
@@ -887,14 +888,19 @@ export async function exportRecipes(
 }
 
 /** Plain printable text for one recipe. */
-export function recipeToPlainText(r: RecipeDetail): string {
+/**
+ * The recipe as plain text. With `servings` (positive) and a recipe that has
+ * base servings, the amounts are scaled in code to those servings and the text
+ * says so; without it the amounts are as stored.
+ */
+export function recipeToPlainText(r: RecipeDetail, servings?: Dec): string {
+	const base = r.baseServings ? Dec.from(r.baseServings) : null;
+	const target = base?.isPositive() && servings?.isPositive() ? servings : null;
 	const lines: string[] = [r.title.toUpperCase(), ''];
 	if (r.description) lines.push(r.description, '');
 	const meta: string[] = [];
-	if (r.baseServings)
-		meta.push(
-			`Serves ${Dec.from(r.baseServings).toHuman()}${r.yieldNote ? ` (${r.yieldNote})` : ''}`
-		);
+	if (base)
+		meta.push(`Serves ${(target ?? base).toHuman()}${r.yieldNote ? ` (${r.yieldNote})` : ''}`);
 	if (r.prepMinutes) meta.push(`Prep ${r.prepMinutes} min`);
 	if (r.cookMinutes) meta.push(`Cook ${r.cookMinutes} min`);
 	if (meta.length) lines.push(meta.join(' · '), '');
@@ -905,7 +911,9 @@ export function recipeToPlainText(r: RecipeDetail): string {
 			group = i.groupName;
 			lines.push(`  ${group}:`);
 		}
-		const amt = i.amount ? `${Dec.from(i.amount).toHuman()}${i.unit ? ' ' + i.unit : ''}` : '';
+		const amount = i.amount ? Dec.from(i.amount) : null;
+		const shown = base && target ? scaleAmount(amount, base, target) : amount;
+		const amt = shown ? `${shown.toHuman()}${i.unit ? ' ' + i.unit : ''}` : '';
 		const line = ingredientLine({ quantity: amt, name: i.name, preparation: i.preparation });
 		lines.push(`  - ${line}${i.optional ? ' (optional)' : ''}`);
 	}

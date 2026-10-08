@@ -7,9 +7,10 @@ import { requireHousehold } from '$lib/server/access';
 import { finishCooking, previewCooking, type CookItemInput } from '$lib/server/cooking';
 import { getRecipeDetail } from '$lib/server/recipes';
 import { undoEvent } from '$lib/server/undo';
-import { parseAmount } from '$lib/shared/amount-parse';
+import { parseAmount, parsePositiveAmount } from '$lib/shared/amount-parse';
 import { Dec } from '$lib/shared/decimal';
 import { operationIdFrom } from '$lib/server/operations';
+import { llmEnabled } from '$lib/server/llm/client';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -17,18 +18,15 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	const ctx = { userId: user.id, actorName: user.name, householdId: household.id };
 	const recipe = await getRecipeDetail(db, user.id, event.params.id, household.id);
 	const servingsRaw = event.url.searchParams.get('servings') ?? recipe.baseServings ?? '1';
-	const parsed = parseAmount(servingsRaw);
-	const servings =
-		parsed.ok && parsed.value && parsed.value.isPositive()
-			? parsed.value
-			: Dec.from(recipe.baseServings ?? '1');
+	const servings = parsePositiveAmount(servingsRaw) ?? Dec.from(recipe.baseServings ?? '1');
 	const preview = recipe.cookable ? await previewCooking(db, ctx, recipe.id, servings) : null;
 	return {
 		title: `Cooking ${recipe.title}`,
 		recipe,
 		preview,
 		operationId: randomUUID(),
-		undoOperationId: randomUUID()
+		undoOperationId: randomUUID(),
+		aiEnabled: llmEnabled()
 	};
 };
 

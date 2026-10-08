@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAmount } from './amount-parse';
+import { parseAmount, parsePositiveAmount } from './amount-parse';
 
 const ok = (s: string) => {
 	const r = parseAmount(s);
@@ -57,5 +57,20 @@ describe('parseAmount', () => {
 
 	it('rejects absurdly large values', () => {
 		expect(parseAmount('100000000000').ok).toBe(false);
+	});
+});
+
+describe('parsePositiveAmount', () => {
+	it('returns the value for a positive amount in any accepted form', () => {
+		expect(parsePositiveAmount('2')?.toString()).toBe('2');
+		expect(parsePositiveAmount(' 1.5 ')?.toString()).toBe('1.5');
+		expect(parsePositiveAmount('1/2')?.toString()).toBe('0.5');
+		expect(parsePositiveAmount('1 1/2')?.toString()).toBe('1.5');
+		expect(parsePositiveAmount('0,25')?.toString()).toBe('0.25');
+	});
+
+	it('is null for blank, zero, negative and unreadable text', () => {
+		for (const raw of ['', '   ', '0', '0.0', '-2', 'abc', '1/0', '1e5', '100000000000'])
+			expect(parsePositiveAmount(raw), JSON.stringify(raw)).toBeNull();
 	});
 });

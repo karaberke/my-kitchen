@@ -5,6 +5,7 @@
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
+	import RecipeChat from '$lib/components/RecipeChat.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { fmtNum, fmtQty, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
@@ -46,11 +47,19 @@
 	let finishOpen = $state(false);
 	let settingsOpen = $state(false);
 	let slideIndex = $state(0);
+	let chatOpen = $state(false);
 	const sizes = $derived(cookTextSizes(cookView.textStep));
 	const slide = $derived(Math.min(slideIndex, Math.max(0, r.steps.length - 1)));
 	const stepLabel = (i: number) =>
 		`${r.steps[i].sectionTitle ? r.steps[i].sectionTitle + ' · ' : ''}Step ${i + 1}`;
 	let servings = $derived(data.preview?.servings ?? data.recipe.baseServings ?? '1');
+	/** The 1-based step the cook is on: the slide shown, or the first step not ticked off. Undefined when none. */
+	const chatStep = $derived.by(() => {
+		if (!r.steps.length) return undefined;
+		if (cookView.mode === 'slides') return slide + 1;
+		const i = r.steps.findIndex((s) => !doneSteps[s.id]);
+		return i < 0 ? undefined : i + 1;
+	});
 
 	interface Alloc {
 		lotId: string;
@@ -408,6 +417,46 @@
 			</section>
 		{/if}
 	</div>
+
+	{#if data.aiEnabled}
+		<!-- Phones: above the tab bar (64px) and the toasts' row; the spacer keeps the last content clear of it. -->
+		<div class="h-16" aria-hidden="true"></div>
+		<button
+			type="button"
+			class="btn-primary no-print fixed right-4 bottom-[calc(80px+env(safe-area-inset-bottom))] z-30 h-12 rounded-full px-5 shadow-sheet md:right-8 md:bottom-6"
+			aria-haspopup="dialog"
+			onclick={() => (chatOpen = true)}
+		>
+			<svg
+				width="18"
+				height="18"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.8"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+				><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"></path></svg
+			>
+			Ask
+		</button>
+		<Sheet
+			bind:open={chatOpen}
+			title="Ask the assistant"
+			description="Questions about {r.title}. The assistant sees the recipe at {fmtNum(
+				servings
+			)} servings."
+		>
+			<RecipeChat
+				recipeId={r.id}
+				step={chatStep}
+				servings={String(servings)}
+				storageKey="recipe-chat:{r.id}"
+				voice
+			/>
+		</Sheet>
+	{/if}
 
 	<Sheet
 		bind:open={finishOpen}

@@ -76,3 +76,9 @@ export function parseAmount(raw: string): ParsedAmount {
 	}
 	return { ok: false, error: 'Enter a number such as 2, 1.5, 1/2 or 1 ½' };
 }
+
+/** A positive amount such as a servings count, or null when `raw` is blank, unreadable, zero or negative. */
+export function parsePositiveAmount(raw: string): Dec | null {
+	const parsed = parseAmount(raw);
+	return parsed.ok && parsed.value && parsed.value.isPositive() ? parsed.value : null;
+}

@@ -52,10 +52,12 @@ export const PROVIDER_LIMITS = {
 /**
  * Calls to the AI assistant. The model server is one small CPU box that runs
  * one request at a time, so a cook gets a few calls, not a queue of them.
- * Keyed by user.
+ * Keyed by user and rule: each rule has its own bucket.
  */
 export const LLM_LIMITS = {
-	user: { windowMs: 10 * 60_000, max: 10 }
+	user: { windowMs: 10 * 60_000, max: 10 },
+	/** Questions about a recipe: a conversation while cooking needs more than an import does. */
+	chat: { windowMs: 10 * 60_000, max: 30 }
 } as const;
 
 function sweep(now: number) {

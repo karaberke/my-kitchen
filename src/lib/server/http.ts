@@ -1,6 +1,7 @@
 import { error, fail, type RequestEvent } from '@sveltejs/kit';
 import { getRequestEvent } from '$app/server';
 import { asAppError, ReviewConflict } from '$lib/server/errors';
+import { match as isUuid } from '../../params/uuid';
 
 /**
  * Explicit caching policy per response type.
@@ -50,13 +51,21 @@ export function applyResponsePolicy(event: RequestEvent, response: Response): Re
 	headers.set('referrer-policy', 'strict-origin-when-cross-origin');
 	headers.set('x-frame-options', 'DENY');
 	// The barcode scanner needs the camera, and only this origin gets it. The
-	// microphone and location are still refused to everyone, this app included.
-	headers.set('permissions-policy', 'camera=(self), microphone=(), geolocation=()');
+	// microphone is for spoken questions in cook mode, so only that page gets it;
+	// location is refused to everyone, this app included.
+	const microphone = isCookPage(path) ? '(self)' : '()';
+	headers.set('permissions-policy', `camera=(self), microphone=${microphone}, geolocation=()`);
 	// Only over https: a plain-http LAN install would lock itself out of its own
 	// hostname for a year. The Content-Security-Policy comes from kit.csp.
 	if (event.url.protocol === 'https:')
 		headers.set('strict-transport-security', 'max-age=31536000; includeSubDomains');
 	return response;
+}
+
+/** The cook-mode page `/recipes/<uuid>/cook`, with the same id check as its route. */
+export function isCookPage(path: string): boolean {
+	const m = /^\/recipes\/([^/]+)\/cook$/.exec(path);
+	return m !== null && isUuid(m[1]);
 }
 
 function isPublicStaticAsset(path: string): boolean {

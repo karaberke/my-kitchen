@@ -5,8 +5,26 @@ import { isRfcUuid } from './text';
 
 export type RecipeIntent = 'draft' | 'save';
 
+/** The longest servings text a form or a request may send, such as "1 1/2". */
+export const SERVINGS_INPUT_MAX_CHARS = 16;
+
 /** The longest question a cook may ask the assistant about a recipe. */
 export const LLM_QUESTION_MAX_CHARS = 500;
+/** Earlier question-and-answer pairs a chat sends with a new question; older ones are dropped. */
+export const LLM_CHAT_MAX_TURNS = 6;
+/** The longest earlier answer a chat may send back; the assistant's answers are shorter. */
+export const LLM_CHAT_ANSWER_MAX_CHARS = 2000;
+/**
+ * All earlier turns together, in characters (about 1500 tokens). With the
+ * recipe text and the answer this stays inside the model's 8192-token context.
+ */
+export const LLM_CHAT_HISTORY_MAX_CHARS = 6000;
+
+/** One earlier question and the assistant's answer to it. */
+export interface RecipeChatTurn {
+	question: string;
+	answer: string;
+}
 
 export interface RecipeIngredientInput {
 	name: string;
@@ -125,7 +143,7 @@ export function parseRecipeForm(fd: FormData): RecipeFormInput {
 	return {
 		title: str(fd, 'title', 200),
 		description: str(fd, 'description', 4000),
-		baseServings: str(fd, 'baseServings', 16),
+		baseServings: str(fd, 'baseServings', SERVINGS_INPUT_MAX_CHARS),
 		yieldNote: str(fd, 'yieldNote', 200),
 		prepMinutes: str(fd, 'prepMinutes', 8),
 		cookMinutes: str(fd, 'cookMinutes', 8),
