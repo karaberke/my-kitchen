@@ -6,6 +6,7 @@ import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { revisionPollMs, serverEnv } from '$lib/server/env';
+import { llmEnabled } from '$lib/server/llm/client';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 import { consistencyCheck } from '$lib/server/pantry';
 import { eq } from 'drizzle-orm';
@@ -43,6 +44,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		linked,
 		registrationOpen: env.REGISTRATION_OPEN,
 		storageBackend: env.STORAGE_BACKEND,
+		aiEnabled: llmEnabled(),
 		pollMs: revisionPollMs()
 	};
 };

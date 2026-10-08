@@ -24,6 +24,7 @@ import { addBatch, createList, getCurrentListId, getListDetail } from '$lib/serv
 import { Dec } from '$lib/shared/decimal';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { randomUUID } from 'node:crypto';
+import { llmEnabled } from '$lib/server/llm/client';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
@@ -52,7 +53,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		categories,
 		categoryIds,
 		sharedWithActive,
-		categoryNameMax: CATEGORY_NAME_MAX
+		categoryNameMax: CATEGORY_NAME_MAX,
+		aiEnabled: llmEnabled()
 	};
 };
 

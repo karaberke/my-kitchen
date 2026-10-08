@@ -12,6 +12,7 @@
 	let pasted = $state('');
 	let link = $state('');
 	let busy = $state(false);
+	let useAssistant = $state(false);
 
 	const isPdf = $derived(data.kind === 'pdf');
 	const isUrl = $derived(data.kind === 'url');
@@ -29,6 +30,8 @@
 		pageCount: number | null;
 		/** Set for a link import: where the page was fetched from. */
 		url: string;
+		/** Set when the assistant was tried and failed; the normal parse is still shown. */
+		assistantError: string | null;
 		input: RecipeFormInput;
 		/** catalog names for the links the import proposed, keyed by ingredient id */
 		identityLabels: Record<string, string>;
@@ -41,6 +44,7 @@
 				filename: String(form.filename ?? 'source file'),
 				pageCount: (form.pageCount as number | null) ?? null,
 				url: String(form.url ?? ''),
+				assistantError: typeof form.assistantError === 'string' ? form.assistantError : null,
 				input: form.input as RecipeFormInput,
 				identityLabels:
 					('identityLabels' in form ? (form.identityLabels as Record<string, string>) : {}) ?? {}
@@ -57,7 +61,14 @@
 {#if review}
 	<PageHeader title="Check the import" subtitle="Nothing is saved yet." back="/recipes/add" />
 	<div class="mb-3 flex flex-col gap-2">
-		{#if review.source === 'json-ld'}
+		{#if review.assistantError}
+			<Alert kind="warn">{review.assistantError}</Alert>
+		{/if}
+		{#if review.source === 'assistant'}
+			<Alert kind="info"
+				>Parsed by the assistant. Check the amounts and steps before you save.</Alert
+			>
+		{:else if review.source === 'json-ld'}
 			<Alert kind="success">
 				Found recipe data in the page. Original wording is kept — check the fields below, then save.
 			</Alert>
@@ -236,8 +247,33 @@
 			layout.
 		</p>
 
-		<button class="btn-primary w-full" disabled={!ready || busy}>
+		{#if data.aiEnabled}
+			<div>
+				<label class="flex items-center gap-2 text-[13px]"
+					><input
+						type="checkbox"
+						name="useAssistant"
+						value="on"
+						bind:checked={useAssistant}
+						disabled={busy}
+						class="h-4 w-4 accent-leaf"
+					/> Use the assistant to check and parse</label
+				>
+				<p class="mt-1.5 text-[11.5px] leading-relaxed text-sage">
+					The app also uses the assistant on its own when it finds no ingredients and no steps.
+				</p>
+			</div>
+		{/if}
+
+		<button class="btn-primary w-full" disabled={!ready || busy} aria-busy={busy}>
 			{busy ? (isUrl ? 'Fetching…' : 'Reading…') : 'Read the recipe'}
 		</button>
+		{#if data.aiEnabled}
+			<p class="px-0.5 text-[12.5px] text-sage" aria-live="polite">
+				{#if busy}{useAssistant
+						? 'Reading the recipe with the assistant… this can take a minute.'
+						: 'Reading… if the assistant is needed, this can take a minute.'}{/if}
+			</p>
+		{/if}
 	</form>
 {/if}
