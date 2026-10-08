@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IngredientSuggestion } from '$lib/server/ingredients';
+import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/assistant-limits';
 import { stubLlm, unstubLlm } from '../../../../tests/llm-stub';
 import {
 	INGREDIENT_MATCH_BASE_TOKENS,
-	INGREDIENT_MATCH_MAX_NAMES,
 	INGREDIENT_MATCH_TOKENS_PER_NAME,
 	checkPicks,
 	cleanMatchNames,

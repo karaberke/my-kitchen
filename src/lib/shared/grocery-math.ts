@@ -72,6 +72,11 @@ export interface PlanLine {
 	sources: PlanSource[];
 }
 
+/** A source before the plan is returned: the amount stays a Dec until the public edge. */
+type DraftSource = Omit<PlanSource, 'amount'> & { amount: Dec | null };
+
+type DraftLine = Omit<PlanLine, 'sources'> & { sources: DraftSource[]; _convention: Convention };
+
 export interface ManualPlanLine {
 	lineId: string;
 	stockConsidered: Dec | null;
@@ -96,19 +101,29 @@ interface StockView {
 	other: OtherStock[];
 }
 
+/** Positive lots grouped by ingredient id, so each line reads only its own lots. */
+function groupStock(stock: StockLotInput[]): Map<string, StockLotInput[]> {
+	const byIngredient = new Map<string, StockLotInput[]>();
+	for (const lot of stock) {
+		if (!lot.quantity.isPositive()) continue;
+		const group = byIngredient.get(lot.ingredientId);
+		if (group) group.push(lot);
+		else byIngredient.set(lot.ingredientId, [lot]);
+	}
+	return byIngredient;
+}
+
 function stockFor(
 	ingredientId: string,
 	unit: string,
-	stock: StockLotInput[],
+	lots: readonly StockLotInput[],
 	options: PlanOptions
 ): StockView {
 	const convention = options.stockConvention ?? 'metric';
 	const density = options.densities?.[ingredientId] ?? null;
 	let considered = Dec.zero;
 	const other: OtherStock[] = [];
-	for (const lot of stock) {
-		if (lot.ingredientId !== ingredientId) continue;
-		if (!lot.quantity.isPositive()) continue;
+	for (const lot of lots) {
 		let converted: Dec | null = null;
 		if (unitsCompatible(lot.unit, unit)) {
 			converted = convertAmount(lot.quantity, lot.unit, unit, convention);
@@ -132,7 +147,7 @@ export function computePlan(
 	manualLines: ManualLineInput[],
 	options: PlanOptions = {}
 ): PlanResult {
-	const lines = new Map<string, PlanLine & { _convention: Convention }>();
+	const lines = new Map<string, DraftLine>();
 	const skippedOptional: { batchId: string; name: string }[] = [];
 
 	for (const batch of batches) {
@@ -144,10 +159,10 @@ export function computePlan(
 				continue;
 			}
 			const scaled = scaleAmount(req.baseAmount, batch.baseServings, remainingServings);
-			const source: PlanSource = {
+			const source: DraftSource = {
 				batchId: batch.batchId,
 				recipeTitle: batch.recipeTitle,
-				amount: scaled ? scaled.toString() : null,
+				amount: scaled,
 				unit: req.unit
 			};
 
@@ -210,14 +225,13 @@ export function computePlan(
 						key: massKey,
 						unit: req.unit,
 						demand: Dec.zero,
-						sources: [] as PlanSource[]
+						sources: [] as DraftSource[]
 					};
 					lines.set(massKey, merged);
 					for (const s of volumeLine.sources) {
-						const amt = s.amount ? Dec.from(s.amount) : null;
 						const conv =
-							amt && s.unit
-								? convertAmount(amt, s.unit, req.unit, volumeLine._convention, {
+							s.amount && s.unit
+								? convertAmount(s.amount, s.unit, req.unit, volumeLine._convention, {
 										gramsPerMl: density
 									})
 								: null;
@@ -265,10 +279,12 @@ export function computePlan(
 		}
 	}
 
+	const stockByIngredient = groupStock(stock);
 	const result: PlanLine[] = [];
 	for (const line of lines.values()) {
 		if (line.ingredientId && line.unit && line.demand) {
-			const view = stockFor(line.ingredientId, line.unit, stock, options);
+			const lots = stockByIngredient.get(line.ingredientId) ?? [];
+			const view = stockFor(line.ingredientId, line.unit, lots, options);
 			line.stockConsidered = view.considered;
 			line.otherStock = view.other;
 			line.suggested = Dec.max(Dec.zero, line.demand.sub(view.considered));
@@ -278,26 +294,49 @@ export function computePlan(
 			line.suggested = line.demand;
 		}
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		const { _convention, ...pub } = line;
-		result.push(pub);
+		const { _convention, sources, ...pub } = line;
+		result.push({
+			...pub,
+			sources: sources.map((s) => ({ ...s, amount: s.amount ? s.amount.toString() : null }))
+		});
 	}
 
-	const manual: ManualPlanLine[] = manualLines.map((m) => {
-		if (m.requested === null)
-			return { lineId: m.lineId, stockConsidered: null, suggested: null, otherStock: [] };
-		if (m.subtractPantry && m.ingredientId && m.unit) {
-			const view = stockFor(m.ingredientId, m.unit, stock, options);
-			return {
-				lineId: m.lineId,
-				stockConsidered: view.considered,
-				suggested: Dec.max(Dec.zero, m.requested.sub(view.considered)),
-				otherStock: view.other
-			};
-		}
-		return { lineId: m.lineId, stockConsidered: null, suggested: m.requested, otherStock: [] };
-	});
-
+	const manual = manualLines.map((m) => manualLinePlan(m, stockByIngredient, options));
 	return { lines: result, manual, skippedOptional };
+}
+
+function manualLinePlan(
+	m: ManualLineInput,
+	stockByIngredient: Map<string, StockLotInput[]>,
+	options: PlanOptions
+): ManualPlanLine {
+	if (m.requested === null)
+		return { lineId: m.lineId, stockConsidered: null, suggested: null, otherStock: [] };
+	if (m.subtractPantry && m.ingredientId && m.unit) {
+		const lots = stockByIngredient.get(m.ingredientId) ?? [];
+		const view = stockFor(m.ingredientId, m.unit, lots, options);
+		return {
+			lineId: m.lineId,
+			stockConsidered: view.considered,
+			suggested: Dec.max(Dec.zero, m.requested.sub(view.considered)),
+			otherStock: view.other
+		};
+	}
+	return { lineId: m.lineId, stockConsidered: null, suggested: m.requested, otherStock: [] };
+}
+
+/**
+ * One manual line planned alone, with the same stock rule as `computePlan`:
+ * compatible lots converted, other dimensions through the ingredient's density,
+ * the rest kept as `otherStock`. `stockConsidered` is null when the line does
+ * not subtract the pantry or has no identity, amount or unit.
+ */
+export function planManualLine(
+	line: ManualLineInput,
+	stock: StockLotInput[],
+	options: PlanOptions = {}
+): ManualPlanLine {
+	return manualLinePlan(line, groupStock(stock), options);
 }
 
 /** remaining = max(0, committed target - net credited purchases) */

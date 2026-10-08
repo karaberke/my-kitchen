@@ -2,11 +2,10 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { actionError, guard } from '$lib/server/http';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
-import { getRecipeDetail } from '$lib/server/recipes';
-import { handleRecipeSubmit, type RecipeFormClientInput } from '$lib/server/recipe-form';
+import { getRecipeDetail, recipeToFormInput } from '$lib/server/recipes';
+import { handleRecipeSubmit } from '$lib/server/recipe-form';
 import { getIngredientMeta } from '$lib/server/ingredients';
 import { error, fail } from '@sveltejs/kit';
-import { Dec } from '$lib/shared/decimal';
 import { parseRecipeForm } from '$lib/shared/recipe-input';
 import { AppError } from '$lib/server/errors';
 import { claimLlmCall, llmEnabled } from '$lib/server/llm/client';
@@ -21,35 +20,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		db,
 		recipe.ingredients.map((i) => i.ingredientId).filter((x): x is string => !!x)
 	);
-	const initial: RecipeFormClientInput = {
-		title: recipe.title,
-		description: recipe.description,
-		baseServings: recipe.baseServings ? Dec.from(recipe.baseServings).toHuman() : '',
-		yieldNote: recipe.yieldNote,
-		prepMinutes: recipe.prepMinutes?.toString() ?? '',
-		cookMinutes: recipe.cookMinutes?.toString() ?? '',
-		source: recipe.source,
-		notes: recipe.notes,
-		tags: recipe.tags.join(', '),
-		convention: recipe.convention,
-		ingredients: recipe.ingredients.map((i) => ({
-			name: i.name,
-			ingredientId: i.ingredientId,
-			amount: i.amount ? Dec.from(i.amount).toString() : '',
-			unit: i.unit ?? '',
-			preparation: i.preparation,
-			group: i.groupName,
-			optional: i.optional,
-			createIdentity: false
-		})),
-		steps: recipe.steps.map((s) => ({ section: s.sectionTitle, text: s.text })),
-		intent: 'save',
-		expectedRevision: recipe.revision,
-		removeImage: false,
-		// Always empty: the picture the recipe has is shown as a picture, not as a
-		// link, and a link left here would be downloaded again on every save.
-		imageUrl: ''
-	};
+	const initial = recipeToFormInput(recipe);
 	return {
 		title: `Edit ${recipe.title}`,
 		recipeId: recipe.id,
@@ -84,7 +55,7 @@ export const actions: Actions = {
 		const input = parseRecipeForm(await event.request.formData());
 		try {
 			claimLlmCall(user.id);
-			const proposed = await fixRecipe(input);
+			const proposed = await fixRecipe(input, { signal: event.request.signal });
 			return { input: proposed, errors: {}, message: '', conflict: false, aiFixed: true };
 		} catch (err) {
 			// The form keeps what the user typed; only the message changes.

@@ -1,5 +1,5 @@
 import { Dec } from './decimal';
-import { convertAmount, formatQuantity, unitInfo, type Convention, type UnitDef } from './units';
+import { convertAmount, formatQuantity, unitInfo, unitLabel, type Convention } from './units';
 
 /**
  * A display-time unit system. This is deliberately NOT the same thing as
@@ -73,7 +73,7 @@ const LADDERS: Record<'metric' | 'us', Record<'mass' | 'volume', Rung[]>> = {
  * is why "1/3 cup" appears at all — a plain eighths grid would round it to
  * 3/8 and read wrong to anyone holding a measuring cup.
  */
-const FRACTION_SETS: Record<string, ReadonlyArray<readonly [number, number]>> = {
+const FRACTION_PAIRS: Record<string, ReadonlyArray<readonly [number, number]>> = {
 	cup: [
 		[0, 1],
 		[1, 8],
@@ -99,6 +99,22 @@ const FRACTION_SETS: Record<string, ReadonlyArray<readonly [number, number]>> = 
 		[1, 1]
 	]
 };
+
+interface Fraction {
+	num: number;
+	den: number;
+	/** num / den, parsed one time */
+	value: Dec;
+}
+
+const NO_FRACTION: Fraction = { num: 0, den: 1, value: Dec.zero };
+
+const FRACTION_SETS: Record<string, readonly Fraction[]> = Object.fromEntries(
+	Object.entries(FRACTION_PAIRS).map(([unit, pairs]) => [
+		unit,
+		pairs.map(([num, den]) => ({ num, den, value: Dec.from(num).div(Dec.from(den)) }))
+	])
+);
 
 /** Decimal snap steps for units that are measured on a scale, not in a cup. */
 const STEPS: Record<string, ReadonlyArray<readonly [Dec, Dec]>> = {
@@ -133,14 +149,8 @@ function passthrough(amount: Dec | null, unit: string | null): DisplayQuantity {
 	};
 }
 
-/** Integer part of a non-negative Dec, without rounding. */
-function floorDec(value: Dec): Dec {
-	return Dec.from(value.toFixed(6).split('.')[0]!);
-}
-
 function roundToStep(value: Dec, step: Dec): Dec {
-	const n = Dec.from(value.div(step).toFixed(0));
-	const snapped = n.mul(step);
+	const snapped = value.div(step).round().mul(step);
 	// A positive amount must never display as nothing at all.
 	return snapped.isZero() && value.isPositive() ? step : snapped;
 }
@@ -160,37 +170,33 @@ interface Snapped {
 	text: string;
 }
 
-function snapToFractions(
-	value: Dec,
-	set: ReadonlyArray<readonly [number, number]>
-): Snapped | null {
-	const whole = floorDec(value);
+function snapToFractions(value: Dec, set: readonly Fraction[]): Snapped | null {
+	// Only positive values reach this, so truncation is the floor.
+	const whole = value.trunc();
 	const frac = value.sub(whole);
-	let best: readonly [number, number] | null = null;
+	let best: Fraction | null = null;
 	let bestDiff: Dec | null = null;
 	for (const cand of set) {
-		const candValue = Dec.from(cand[0]).div(Dec.from(cand[1]));
-		const diff = frac.sub(candValue).abs();
+		const diff = frac.sub(cand.value).abs();
 		if (bestDiff === null || diff.lt(bestDiff)) {
 			best = cand;
 			bestDiff = diff;
 		}
 	}
 	if (!best) return null;
-	let [num, den] = best;
+	let pick = best;
 	let intPart = whole;
-	if (num === den) {
+	if (pick.num === pick.den) {
 		// Rounded up to the next whole unit.
 		intPart = intPart.add(Dec.one);
-		num = 0;
+		pick = NO_FRACTION;
 	}
 	// A positive amount must never display as nothing at all.
-	if (intPart.isZero() && num === 0 && value.isPositive()) {
-		const smallest = set.find((c) => c[0] !== 0)!;
-		num = smallest[0];
-		den = smallest[1];
+	if (intPart.isZero() && pick.num === 0 && value.isPositive()) {
+		pick = set.find((c) => c.num !== 0)!;
 	}
-	const snappedValue = intPart.add(Dec.from(num).div(Dec.from(den)));
+	const { num, den } = pick;
+	const snappedValue = intPart.add(pick.value);
 	let text: string;
 	if (num === 0) text = intPart.toHuman();
 	else if (intPart.isZero()) text = `${num}/${den}`;
@@ -211,11 +217,6 @@ function snapDecimal(value: Dec, unit: string): Snapped {
 	}
 	const snapped = roundToStep(value, step);
 	return { value: snapped, text: snapped.toHuman() };
-}
-
-/** Plural above one, singular at or below it — "1/2 cup", "1 cup", "2 cups". */
-function label(unit: UnitDef, value: Dec): string {
-	return value.gt(Dec.one) ? unit.plural : unit.singular;
 }
 
 /**
@@ -268,8 +269,7 @@ export function displayQuantity(
 	const fractions = FRACTION_SETS[rung.unit];
 	const snapped = (fractions && snapToFractions(exact, fractions)) ?? snapDecimal(exact, rung.unit);
 
-	const target = unitInfo(rung.unit)!;
 	const approx = !snapped.value.eq(exact);
-	const text = `${approx ? '~' : ''}${snapped.text} ${label(target, snapped.value)}`;
+	const text = `${approx ? '~' : ''}${snapped.text} ${unitLabel(rung.unit, snapped.value)}`;
 	return { text, amount: snapped.value, unit: rung.unit, exact, approx };
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { HOUSEHOLD_NAME_MAX_CHARS } from '$lib/shared/text';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
@@ -62,7 +63,7 @@
 				name="name"
 				required
 				minlength="2"
-				maxlength="60"
+				maxlength={HOUSEHOLD_NAME_MAX_CHARS}
 				placeholder="e.g. Lake House"
 			/>
 		</div>

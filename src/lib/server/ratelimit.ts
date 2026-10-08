@@ -4,7 +4,10 @@
  * `auth.api.*` calls bypass it, so the form actions apply this one.
  * Single-process by design (one app instance in v1); a restart resets it.
  */
-const buckets = new Map<string, number[]>();
+import { serverEnv } from './env';
+
+/** Hit times per key, with the window of the rule that fills the bucket, so the sweep keeps it as long as that rule needs. */
+const buckets = new Map<string, { hits: number[]; windowMs: number }>();
 let lastSweep = Date.now();
 
 export interface RateLimitRule {
@@ -12,13 +15,22 @@ export interface RateLimitRule {
 	max: number;
 }
 
-const factor = Number(process.env.AUTH_RATE_LIMIT_FACTOR ?? 1) || 1; // tests raise this; production keeps 1
+/** Read at use, not at import: the environment is validated on first use (tests raise the factor; production keeps 1). */
+function authRule(max: number): RateLimitRule {
+	return { windowMs: 60_000, max: max * serverEnv().AUTH_RATE_LIMIT_FACTOR };
+}
 
 export const AUTH_LIMITS = {
-	signIn: { windowMs: 60_000, max: 8 * factor },
-	signUp: { windowMs: 60_000, max: 5 * factor },
-	password: { windowMs: 60_000, max: 5 * factor }
-} as const;
+	get signIn() {
+		return authRule(8);
+	},
+	get signUp() {
+		return authRule(5);
+	},
+	get password() {
+		return authRule(5);
+	}
+};
 
 /**
  * Fetching a link the user gave — a recipe page, or a picture. The fetch reaches
@@ -63,8 +75,8 @@ export const LLM_LIMITS = {
 function sweep(now: number) {
 	if (now - lastSweep < 60_000) return;
 	lastSweep = now;
-	for (const [key, hits] of buckets) {
-		if (!hits.length || hits[hits.length - 1] < now - 10 * 60_000) buckets.delete(key);
+	for (const [key, { hits, windowMs }] of buckets) {
+		if (!hits.length || hits[hits.length - 1] <= now - windowMs) buckets.delete(key);
 	}
 }
 
@@ -75,14 +87,16 @@ export function consume(
 	now = Date.now()
 ): { allowed: boolean; retryAfterSeconds: number } {
 	sweep(now);
-	const hits = (buckets.get(key) ?? []).filter((t) => t > now - rule.windowMs);
+	const bucket = buckets.get(key);
+	const hits = (bucket?.hits ?? []).filter((t) => t > now - rule.windowMs);
+	const windowMs = Math.max(bucket?.windowMs ?? 0, rule.windowMs);
 	if (hits.length >= rule.max) {
 		const retryAfterSeconds = Math.max(1, Math.ceil((hits[0] + rule.windowMs - now) / 1000));
-		buckets.set(key, hits);
+		buckets.set(key, { hits, windowMs });
 		return { allowed: false, retryAfterSeconds };
 	}
 	hits.push(now);
-	buckets.set(key, hits);
+	buckets.set(key, { hits, windowMs });
 	return { allowed: true, retryAfterSeconds: 0 };
 }
 
@@ -106,4 +120,5 @@ export function clientKey(event: { getClientAddress: () => string }): string {
 /** Test hook. */
 export function resetRateLimits() {
 	buckets.clear();
+	lastSweep = 0;
 }

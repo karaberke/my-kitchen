@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, or, exists, sql } from 'drizzle-orm';
+import { and, eq, or, exists, inArray, sql } from 'drizzle-orm';
 import { db, type DbOrTx } from '$lib/server/db';
 import { images, recipes } from '$lib/server/db/schema';
 import { recipeReadableBy } from '$lib/server/access';
@@ -7,7 +7,7 @@ import { serverEnv } from '$lib/server/env';
 import { AppError } from '$lib/server/errors';
 import { fetchImageBytes } from './image-fetch';
 import { IMAGE_VARIANTS, renderImageVariants, type ImageVariant } from './image-pipeline';
-import { storage } from './storage';
+import { MEDIA_SWEEP_BATCH, storage } from './storage';
 
 export { IMAGE_VARIANTS, type ImageVariant };
 
@@ -58,8 +58,12 @@ async function storeImageBytes(userId: string, buffer: Buffer): Promise<string> 
 	const store = storage();
 	const variants: Record<string, { width: number; height: number; bytes: number; mime: string }> =
 		{};
+	await Promise.all(
+		Object.entries(rendered.variants).map(([name, variant]) =>
+			store.put(variantKey(objectKey, name as ImageVariant), variant.data, variant.mime)
+		)
+	);
 	for (const [name, variant] of Object.entries(rendered.variants)) {
-		await store.put(variantKey(objectKey, name as ImageVariant), variant.data, variant.mime);
 		variants[name] = {
 			width: variant.width,
 			height: variant.height,
@@ -165,26 +169,33 @@ export async function deleteImageIfUnreferenced(userId: string, imageId: string)
 	return true;
 }
 
-/** Maintenance: remove image rows (and files) no recipe references. Never touches referenced images. */
+/**
+ * Maintenance: remove image rows (and files) no recipe references. Never touches referenced images.
+ * One statement checks and deletes, so a recipe that takes the image between a read and a delete
+ * cannot lose it to the sweep.
+ */
 export async function cleanupUnreferencedImages(olderThanMinutes = 60): Promise<number> {
+	const unreferenced = and(
+		sql`not exists (select 1 from ${recipes} where ${recipes.imageId} = ${images.id})`,
+		sql`${images.createdAt} < now() - make_interval(mins => ${olderThanMinutes})`
+	);
 	const rows = await db
-		.select({ id: images.id, objectKey: images.objectKey })
-		.from(images)
+		.delete(images)
 		.where(
 			and(
-				sql`not exists (select 1 from ${recipes} where ${recipes.imageId} = ${images.id})`,
-				sql`${images.createdAt} < now() - make_interval(mins => ${olderThanMinutes})`
+				inArray(
+					images.id,
+					db.select({ id: images.id }).from(images).where(unreferenced).limit(MEDIA_SWEEP_BATCH)
+				),
+				unreferenced
 			)
 		)
-		.limit(500);
+		.returning({ objectKey: images.objectKey });
 	const store = storage();
-	let removed = 0;
 	for (const row of rows) {
-		await db.delete(images).where(eq(images.id, row.id));
 		for (const variant of Object.keys(IMAGE_VARIANTS) as ImageVariant[]) {
 			await store.delete(variantKey(row.objectKey, variant)).catch(() => {});
 		}
-		removed++;
 	}
-	return removed;
+	return rows.length;
 }

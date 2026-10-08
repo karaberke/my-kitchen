@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
+	import type { ActionResult } from '@sveltejs/kit';
 	import { debouncedSubmit } from '$lib/client/debounced-search';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
@@ -11,34 +12,25 @@
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import BarcodeScanner from '$lib/components/BarcodeScanner.svelte';
 	import ScanConfirm, { type Scan } from '$lib/components/ScanConfirm.svelte';
+	import StockFields from '$lib/components/StockFields.svelte';
+	import CategoryField from '$lib/components/CategoryField.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
+	import { createUndo } from '$lib/client/undo';
 	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
-	import { barcodeLookup, undo } from '$lib/remote/pantry.remote';
+	import { barcodeLookup } from '$lib/remote/pantry.remote';
 	import { fmtDate, fmtQty } from '$lib/client/format';
-	import { UNITS } from '$lib/shared/units';
+	import { GROCERY_CATEGORIES } from '$lib/shared/grocery-categories';
+	import { LOCATION_MAX_CHARS, NOTE_MAX_CHARS } from '$lib/shared/text';
 	import type { PantryGroup, PantryLotView } from '$lib/server/pantry';
 
 	let { data, form } = $props();
-	type LooseForm =
-		| {
-				ok?: boolean;
-				action?: string;
-				message?: string;
-				form?: string;
-				review?: { lot?: { quantity: string; unit: string } };
-				eventId?: string | null;
-				noChange?: boolean;
-		  }
-		| null
-		| undefined;
-	const f = $derived(form as LooseForm);
+	const f = $derived(form);
 	let q = $derived(data.filters.q);
 
 	type Mode = 'add' | 'correct' | 'waste' | 'metadata';
 	let sheet = $state<{ mode: Mode; group?: PantryGroup; lot?: PantryLotView } | null>(null);
 	let opId = $derived<string>(data.operationId);
-	let undoOp = $state(newOperationId());
 
 	// add form state
 	let addName = $state('');
@@ -74,7 +66,7 @@
 		{ id: 'dated', label: 'With date' },
 		{ id: 'undated', label: 'No date' }
 	]);
-	function afterSuccess(result: { type: string; data?: Record<string, unknown> }) {
+	function afterSuccess(result: ActionResult) {
 		if (result.type !== 'success') return;
 		const d = result.data ?? {};
 		sheet = null;
@@ -133,7 +125,7 @@
 		}
 	}
 
-	function afterScanSave(result: { type: string; data?: Record<string, unknown> }) {
+	function afterScanSave(result: ActionResult) {
 		if (result.type !== 'success') return;
 		const d = result.data ?? {};
 		scan = null;
@@ -147,16 +139,11 @@
 		scannerOpen = true;
 	}
 
-	async function undoEventNow(eventId: string) {
-		try {
-			await undo({ operationId: undoOp, eventId });
-			pushToast('Undone.', { kind: 'success' });
-		} catch (err) {
-			pushToast(remoteErrorMessage(err, 'Could not undo'), { kind: 'error' });
-		}
-		undoOp = newOperationId();
-		await invalidate('app:pantry');
-	}
+	const undoEventNow = createUndo({
+		depends: 'app:pantry',
+		done: 'Undone.',
+		failed: 'Could not undo'
+	});
 </script>
 
 <PageHeader
@@ -348,7 +335,7 @@
 				return async ({ result, update }) => {
 					sheetBusy = false;
 					await update({ reset: false });
-					afterSuccess(result as never);
+					afterSuccess(result);
 				};
 			}}
 		>
@@ -371,59 +358,23 @@
 						</p>{/if}
 				</div>
 				{#if !addIngredientId}
-					<div>
-						<label class="label" for="add-category">Category (for new ingredients)</label>
-						<select class="field" id="add-category" name="category"
-							>{#each data.categories as c (c)}<option value={c}>{c}</option>{/each}</select
-						>
-					</div>
+					<CategoryField id="add-category" categories={GROCERY_CATEGORIES} />
 				{/if}
-				<div class="grid grid-cols-2 gap-3">
-					<div>
-						<label class="label" for="add-qty">Quantity</label>
-						<input
-							class="field"
-							id="add-qty"
-							name="quantity"
-							inputmode="decimal"
-							required
-							placeholder="500"
-						/>
-					</div>
-					<div>
-						<label class="label" for="add-unit">Unit</label>
-						<select class="field" id="add-unit" name="unit" bind:value={addUnit}
-							>{#each UNITS as u (u.id)}<option value={u.id}
-									>{u.singular}{u.plural !== u.singular ? ` / ${u.plural}` : ''}</option
-								>{/each}</select
-						>
-						<p class="hint">
-							A can or bag is not a known weight — enter the contents if you know them.
-						</p>
-					</div>
-					<div>
-						<label class="label" for="add-loc">Location</label>
-						<input
-							class="field"
-							id="add-loc"
-							name="location"
-							list="loc-options"
-							placeholder="Fridge, Freezer, Cupboard"
-							maxlength="60"
-						/>
-					</div>
-					<div>
-						<label class="label" for="add-exp"
-							>Use-by date <span class="font-normal text-sage">(optional)</span></label
-						>
-						<input class="field" id="add-exp" name="expiresOn" type="date" />
-					</div>
-				</div>
+				<StockFields
+					idPrefix="add"
+					bind:unit={addUnit}
+					quantityLabel="Quantity"
+					quantityPlaceholder="500"
+					quantityRequired
+					unitHint="A can or bag is not a known weight — enter the contents if you know them."
+					locationPlaceholder="Fridge, Freezer, Cupboard"
+					locationList="loc-options"
+				/>
 				<div>
 					<label class="label" for="add-note"
 						>Note <span class="font-normal text-sage">(optional)</span></label
 					>
-					<input class="field" id="add-note" name="note" maxlength="300" />
+					<input class="field" id="add-note" name="note" maxlength={NOTE_MAX_CHARS} />
 				</div>
 			{:else if sheet.lot}
 				<input type="hidden" name="lotId" value={sheet.lot.id} />
@@ -449,7 +400,7 @@
 							id="correct-note"
 							name="note"
 							placeholder="e.g. weighed the bag"
-							maxlength="300"
+							maxlength={NOTE_MAX_CHARS}
 						/>
 					</div>
 				{:else if sheet.mode === 'waste'}
@@ -473,7 +424,7 @@
 							id="waste-reason"
 							name="reason"
 							placeholder="past its date, spoiled"
-							maxlength="300"
+							maxlength={NOTE_MAX_CHARS}
 						/>
 					</div>
 				{:else}
@@ -486,7 +437,7 @@
 								name="location"
 								list="loc-options"
 								value={sheet.lot.location}
-								maxlength="60"
+								maxlength={LOCATION_MAX_CHARS}
 							/>
 						</div>
 						<div>
@@ -507,7 +458,7 @@
 							id="meta-note"
 							name="note"
 							value={sheet.lot.note}
-							maxlength="300"
+							maxlength={NOTE_MAX_CHARS}
 						/>
 					</div>
 				{/if}
@@ -549,7 +500,7 @@
 
 <ScanConfirm
 	{scan}
-	categories={data.categories}
+	categories={GROCERY_CATEGORIES}
 	aiEnabled={data.aiEnabled}
 	operationId={scanOpId}
 	form={f}

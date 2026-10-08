@@ -5,10 +5,11 @@ import { assertMember, householdActor } from '$lib/server/access';
 import { AppError, notFound } from '$lib/server/errors';
 import {
 	GROCERY_LINE_NAME_MAX,
-	getListDetail,
-	type LineView,
-	type ListDetail
+	getListLines,
+	type LineFields,
+	type LineView
 } from '$lib/server/grocery';
+import type { ListStatus } from '$lib/server/db/schema';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { Dec } from '$lib/shared/decimal';
 import {
@@ -16,11 +17,11 @@ import {
 	OTHER_CATEGORY,
 	isGroceryCategory
 } from '$lib/shared/grocery-categories';
-import { QUANTITY_PATTERN } from '$lib/shared/recipe-html';
+import { QUANTITY_PATTERN } from '$lib/shared/ingredient-line';
 import { normalizeUnitInput } from '$lib/shared/units';
 import { match as isUuid } from '../../../params/uuid';
-import { cleanChatText } from './ask';
-import { claimLlmCall, completeJson } from './client';
+import { cleanChatText } from '$lib/shared/text';
+import { claimLlmCall, completeJson, type LlmCallOptions } from './client';
 import { GROCERY_TIDY_SYSTEM, GROCERY_TIDY_TASK } from './prompts';
 
 /** The most lines one tidy request sends; the rest wait for the next press. */
@@ -92,7 +93,7 @@ export interface TidyProposal {
 	changed: TidyField[];
 }
 
-function lineAmount(line: LineView, status: ListDetail['status']): string | null {
+function lineAmount(line: LineFields, status: ListStatus): string | null {
 	const raw = status === 'draft' ? line.demandAmount : line.remaining;
 	return raw === null ? null : Dec.from(raw).toString();
 }
@@ -102,10 +103,7 @@ function lineAmount(line: LineView, status: ListDetail['status']): string | null
  * `GROCERY_TIDY_MAX_LINES`: manual lines with a number in the name or no
  * amount, and any line in "Other" that is not linked to the catalog.
  */
-export function tidyLinesToSend(
-	lines: readonly LineView[],
-	status: ListDetail['status']
-): TidySource[] {
+export function tidyLinesToSend(lines: readonly LineFields[], status: ListStatus): TidySource[] {
 	return lines
 		.filter((l) => l.status === 'pending')
 		.filter(
@@ -214,11 +212,15 @@ export function checkTidy(
 }
 
 /** One request for the lines in `sent`; the reply is checked by `checkTidy`. */
-export async function requestTidy(sent: readonly TidySource[]): Promise<TidyProposal[]> {
+export async function requestTidy(
+	sent: readonly TidySource[],
+	call: LlmCallOptions = {}
+): Promise<TidyProposal[]> {
 	if (!sent.length) return [];
 	const reply = await completeJson(tidyReplySchema, GROCERY_TIDY_SYSTEM, tidyUserText(sent), {
 		maxTokens: GROCERY_TIDY_BASE_TOKENS + GROCERY_TIDY_TOKENS_PER_LINE * sent.length,
-		name: 'grocery_tidy'
+		name: 'grocery_tidy',
+		...call
 	});
 	return checkTidy(sent, reply.lines);
 }
@@ -236,10 +238,13 @@ export async function tidyGroceryList(
 	if (!isUuid(arg.listId)) throw notFound('Grocery list not found');
 	const ctx = householdActor(event);
 	await assertMember(db, ctx.householdId, ctx.userId);
-	const list = await getListDetail(db, ctx.householdId, arg.listId);
+	const list = await getListLines(db, ctx.householdId, arg.listId);
 	if (list.status === 'completed') throw new AppError(409, 'This trip is completed');
 	const sent = tidyLinesToSend(list.lines, list.status);
 	if (!sent.length) return { proposals: [], sent: 0 };
 	claimLlmCall(ctx.userId);
-	return { proposals: await requestTidy(sent), sent: sent.length };
+	return {
+		proposals: await requestTidy(sent, { signal: event.request.signal }),
+		sent: sent.length
+	};
 }

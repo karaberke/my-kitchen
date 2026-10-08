@@ -62,6 +62,8 @@ export async function fetchWithRedirects(
 		}
 
 		if (REDIRECT_STATUSES.has(res.status)) {
+			// A redirect body is never read; release the connection before the next hop or the throw.
+			await discardBody(res);
 			const location = res.headers.get('location');
 			if (!location) throw new AppError(502, options.noLocationMessage);
 			if (hop >= options.maxRedirects) throw new AppError(502, 'That link has too many redirects.');
@@ -73,20 +75,23 @@ export async function fetchWithRedirects(
 	}
 }
 
+/** Release a response whose body will not be read, so its connection is not held open. */
+export async function discardBody(res: Response): Promise<void> {
+	await res.body?.cancel().catch(() => {});
+}
+
 /**
- * Read the body, and stop at the cap.
+ * Read the body, and stop at the cap. Null means the body is larger than the cap.
  *
  * Content-length is checked first because it is cheap, and again while reading
- * because a header can understate the body. `onTooLarge` never returns: it is
- * the caller's own 413, worded for what was being fetched.
+ * because a header can understate the body.
  */
-export async function readCapped(
-	res: Response,
-	maxBytes: number,
-	onTooLarge: (maxBytes: number) => never
-): Promise<Buffer> {
+export async function readCappedOrNull(res: Response, maxBytes: number): Promise<Buffer | null> {
 	const declared = Number(res.headers.get('content-length'));
-	if (Number.isFinite(declared) && declared > maxBytes) onTooLarge(maxBytes);
+	if (Number.isFinite(declared) && declared > maxBytes) {
+		await discardBody(res);
+		return null;
+	}
 	if (!res.body) return Buffer.alloc(0);
 	const reader = res.body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -96,11 +101,24 @@ export async function readCapped(
 			const { done, value } = await reader.read();
 			if (done) break;
 			total += value.byteLength;
-			if (total > maxBytes) onTooLarge(maxBytes);
+			if (total > maxBytes) return null;
 			chunks.push(value);
 		}
 	} finally {
 		await reader.cancel().catch(() => {});
 	}
 	return Buffer.concat(chunks);
+}
+
+/**
+ * The same, for a caller that answers an oversized body with its own error.
+ * `onTooLarge` never returns: it is the caller's own 413, worded for what was
+ * being fetched.
+ */
+export async function readCapped(
+	res: Response,
+	maxBytes: number,
+	onTooLarge: (maxBytes: number) => never
+): Promise<Buffer> {
+	return (await readCappedOrNull(res, maxBytes)) ?? onTooLarge(maxBytes);
 }

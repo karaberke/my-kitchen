@@ -5,47 +5,42 @@ import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
-import { revisionPollMs, serverEnv } from '$lib/server/env';
+import { serverEnv } from '$lib/server/env';
 import { llmEnabled } from '$lib/server/llm/client';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
 import { consistencyCheck } from '$lib/server/pantry';
-import { eq } from 'drizzle-orm';
-import { userPreferences } from '$lib/server/db/schema';
-import { sql } from 'drizzle-orm';
+import { getConvention, setConvention } from '$lib/server/households';
+import { PERSON_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
-	const [pref] = await db
-		.select({ convention: userPreferences.convention })
-		.from(userPreferences)
-		.where(eq(userPreferences.userId, user.id))
-		.limit(1);
 	const env = serverEnv();
 	const providers = enabledSocialProviders();
 	// Which of them this account is already signed in with. Password accounts here
 	// are unverified by design (no mail transport), so implicit linking refuses
 	// them — linking has to be a deliberate act, which is what this shows.
-	let linked: { id: string; providerId: string }[] = [];
-	if (providers.length) {
+	const linkedAccounts = async (): Promise<{ id: string; providerId: string }[]> => {
+		if (!providers.length) return [];
 		try {
 			const accounts = await auth.api.listUserAccounts({ headers: event.request.headers });
-			linked = (accounts ?? []).map((a: { id: string; providerId: string }) => ({
+			return (accounts ?? []).map((a: { id: string; providerId: string }) => ({
 				id: a.id,
 				providerId: a.providerId
 			}));
 		} catch {
-			linked = [];
+			return [];
 		}
-	}
+	};
+	const [convention, linked] = await Promise.all([getConvention(db, user.id), linkedAccounts()]);
 	return {
 		title: 'Settings',
-		convention: pref?.convention ?? 'metric',
+		convention,
 		providers,
 		linked,
 		registrationOpen: env.REGISTRATION_OPEN,
 		storageBackend: env.STORAGE_BACKEND,
-		aiEnabled: llmEnabled(),
-		pollMs: revisionPollMs()
+		// pollMs comes from the root layout data.
+		aiEnabled: llmEnabled()
 	};
 };
 
@@ -93,10 +88,7 @@ export const actions: Actions = {
 	name: async (event) => {
 		requireUser(event);
 		const fd = await event.request.formData();
-		const name = String(fd.get('name') ?? '')
-			.trim()
-			.replace(/\s+/g, ' ')
-			.slice(0, 80);
+		const name = cleanText(String(fd.get('name') ?? ''), PERSON_NAME_MAX_CHARS);
 		if (name.length < 2) return fail(400, { message: 'Enter your name', form: 'name' });
 		try {
 			await auth.api.updateUser({ body: { name }, headers: event.request.headers });
@@ -143,13 +135,7 @@ export const actions: Actions = {
 		const user = requireUser(event);
 		const fd = await event.request.formData();
 		const convention = fd.get('convention') === 'us' ? 'us' : 'metric';
-		await db
-			.insert(userPreferences)
-			.values({ userId: user.id, convention })
-			.onConflictDoUpdate({
-				target: userPreferences.userId,
-				set: { convention, updatedAt: sql`now()` }
-			});
+		await setConvention(db, user.id, convention);
 		return { ok: true, form: 'convention' };
 	},
 	signOut: async (event) => {

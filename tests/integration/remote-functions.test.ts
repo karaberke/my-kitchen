@@ -94,6 +94,44 @@ describe('pantryLots', () => {
 		).rejects.toMatchObject({ status: 400 });
 		await expect(pantryLotsFor(requestAs(null), arg())).rejects.toMatchObject({ status: 401 });
 	});
+
+	it("splits a requested amount across lots with the server's planner, density included", async () => {
+		const milk = await catalogIngredientId('milk'); // 1.03 g per ml
+		const stockMilk = (quantity: string, unit: string, expiresOn: string) =>
+			addStock(alice.ctx, {
+				operationId: opId(),
+				ingredientId: milk,
+				newIngredientName: null,
+				quantity: Dec.from(quantity),
+				unit,
+				location: 'Fridge',
+				expiresOn,
+				note: ''
+			});
+		await stockMilk('1', 'l', '2030-01-01');
+		await stockMilk('300', 'ml', '2029-01-01');
+		const out = await pantryLotsFor(requestAs(alice), {
+			ingredient: milk,
+			unit: 'g',
+			convention: 'metric',
+			amount: '515'
+		});
+		// Oldest use-by first: all 300 ml (309 g), then 206 g = 0.2 l from the litre.
+		expect(out.lots.map((l) => [l.quantity, l.unit, l.take])).toEqual([
+			['300', 'ml', '300'],
+			['1', 'l', '0.2']
+		]);
+		expect(out.shortfall).toBe('0');
+
+		const none = await pantryLotsFor(requestAs(alice), {
+			ingredient: milk,
+			unit: 'g',
+			convention: 'metric',
+			amount: 'lots'
+		});
+		expect(none.shortfall).toBeNull();
+		expect(none.lots.every((l) => l.take === null)).toBe(true);
+	});
 });
 
 describe('barcodeLookup', () => {

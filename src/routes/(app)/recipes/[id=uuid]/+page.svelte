@@ -14,24 +14,16 @@
 	import StepText from '$lib/components/StepText.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import { stockStatus, STOCK_STATUS_LABEL, type StockStatus } from '$lib/shared/stock-status';
+	import { prepareStepIngredients } from '$lib/shared/step-amounts';
 
 	let { data, form } = $props();
-	type LooseForm =
-		| {
-				ok?: boolean;
-				message?: string;
-				listId?: string;
-				duplicate?: boolean;
-				servings?: string;
-				shared?: boolean;
-		  }
-		| null
-		| undefined;
-	const f = $derived(form as LooseForm);
+	const f = $derived(form);
 	const r = $derived(data.recipe);
 
 	let servings = $derived(Dec.from(data.recipe.baseServings ?? '1'));
 	const base = $derived(Dec.from(r.baseServings ?? '1'));
+	// Parsed once per recipe; every step shares it.
+	const stepIngredients = $derived(prepareStepIngredients(r.ingredients));
 	const scaled = $derived(
 		!r.baseServings || servings.eq(base) ? null : servings.div(base).toHuman()
 	);
@@ -385,7 +377,7 @@
 					>
 						<StepText
 							text={step.text}
-							ingredients={r.ingredients}
+							ingredients={stepIngredients}
 							{base}
 							{servings}
 							convention={r.convention}
@@ -445,9 +437,9 @@
 					method="post"
 					action="?/share"
 					use:enhance={() =>
-						async ({ update }) => {
+						async ({ result, update }) => {
 							await update({ reset: false });
-							await invalidate('app:recipe');
+							if (result.type === 'failure') await invalidate('app:recipe');
 						}}
 				>
 					<input type="hidden" name="householdId" value={s.householdId} />

@@ -1,6 +1,6 @@
-import { error, fail, type RequestEvent } from '@sveltejs/kit';
+import { error, fail, type ActionFailure, type RequestEvent } from '@sveltejs/kit';
 import { getRequestEvent } from '$app/server';
-import { asAppError, ReviewConflict } from '$lib/server/errors';
+import { asAppError, ReviewConflict, type ReviewDetail } from '$lib/server/errors';
 import { match as isUuid } from '../../params/uuid';
 
 /**
@@ -63,7 +63,7 @@ export function applyResponsePolicy(event: RequestEvent, response: Response): Re
 }
 
 /** The cook-mode page `/recipes/<uuid>/cook`, with the same id check as its route. */
-export function isCookPage(path: string): boolean {
+function isCookPage(path: string): boolean {
 	const m = /^\/recipes\/([^/]+)\/cook$/.exec(path);
 	return m !== null && isUuid(m[1]);
 }
@@ -115,16 +115,28 @@ export function remote<A, R>(fn: (event: RequestEvent, arg: A) => Promise<R>) {
 	};
 }
 
+/** The failure `actionError` returns: one shape, so a page's `ActionData` reads it without a cast. */
+export interface ActionErrorData {
+	message: string;
+	/** the payload of a `ReviewConflict` */
+	review?: ReviewDetail;
+	/** which form on the page failed, when the action names it */
+	form?: string;
+}
+
 /**
  * Map application errors thrown inside a form action to `fail()`, the action
- * twin of `guard`. A `ReviewConflict` keeps its review payload; call sites
- * with an extra field on the failure (beyond `message`) keep their own
- * inlined mapping instead of this helper.
+ * twin of `guard`. A `ReviewConflict` keeps its review payload. `form` names
+ * the form on the page, as the action's own `fail()` calls do, so the page
+ * shows the message beside it. Call sites with another extra field on the
+ * failure keep their own inlined mapping instead of this helper.
  */
-export function actionError(err: unknown) {
-	if (err instanceof ReviewConflict) return fail(409, { message: err.message, review: err.review });
+export function actionError(err: unknown, form?: string): ActionFailure<ActionErrorData> {
+	const tag = form === undefined ? {} : { form };
+	if (err instanceof ReviewConflict)
+		return fail(409, { message: err.message, review: err.review, ...tag });
 	const app = asAppError(err);
-	if (app) return fail(app.status, { message: app.message });
+	if (app) return fail(app.status, { message: app.message, ...tag });
 	throw err;
 }
 

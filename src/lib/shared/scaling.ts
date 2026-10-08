@@ -11,7 +11,3 @@ export function scaleAmount(base: Dec | null, baseServings: Dec, targetServings:
 	if (base === null) return null;
 	return base.mulDiv(targetServings, baseServings);
 }
-
-export function scaleFactor(baseServings: Dec, targetServings: Dec): string {
-	return targetServings.div(baseServings).toHuman();
-}

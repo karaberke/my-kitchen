@@ -3,14 +3,10 @@ import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import {
-	assertMember,
-	householdActor,
-	loadHouseholdOrThrow,
-	requireHousehold
-} from '$lib/server/access';
+import { householdActor, memberHousehold, requireHousehold, revisionsOf } from '$lib/server/access';
 import {
 	addManualLine,
+	applyTidyChanges,
 	completeList,
 	deleteDraftList,
 	getListDetail,
@@ -24,30 +20,24 @@ import {
 	updateLine,
 	type UpdateLineInput
 } from '$lib/server/grocery';
-import { ReviewConflict } from '$lib/server/errors';
 import { llmEnabled } from '$lib/server/llm/client';
 import { GROCERY_TIDY_MAX_LINES } from '$lib/server/llm/grocery';
 import { match as isUuid } from '../../../../params/uuid';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { operationIdFrom } from '$lib/server/operations';
-import { GROCERY_CATEGORIES, isGroceryCategory } from '$lib/shared/grocery-categories';
+import { isGroceryCategory } from '$lib/shared/grocery-categories';
 import { isUnitId } from '$lib/shared/units';
-import { parseGroceryEntry } from '$lib/shared/recipe-html';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
 	event.depends('app:grocery');
-	await assertMember(db, household.id, user.id);
-	const [list, h] = await Promise.all([
-		getListDetail(db, household.id, event.params.listId),
-		loadHouseholdOrThrow(db, household.id)
-	]);
+	const h = await memberHousehold(db, household.id, user.id);
+	const list = await getListDetail(db, household.id, event.params.listId, h.pantryRevision);
 	return {
 		title: list.name,
 		list,
-		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision },
+		revisions: revisionsOf(h),
 		operationId: randomUUID(),
-		categories: GROCERY_CATEGORIES,
 		aiEnabled: llmEnabled()
 	};
 };
@@ -196,31 +186,24 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const amountRaw = String(fd.get('amount') ?? '');
-			const amount = parseAmount(amountRaw);
+			const amount = parseAmount(String(fd.get('amount') ?? ''));
 			if (!amount.ok) return fail(400, { message: amount.error, form: 'addLine' });
-			let unit = String(fd.get('unit') ?? '') || null;
+			const unit = String(fd.get('unit') ?? '') || null;
 			if (unit && !isUnitId(unit)) return fail(400, { message: 'Unknown unit', form: 'addLine' });
-			let name = String(fd.get('name') ?? '');
-			let amountValue = amount.value;
-			// "400 g chopped tomatoes" typed into the name alone: split it, or keep it as typed.
-			if (!amountRaw.trim() && !unit) {
-				const entry = parseGroceryEntry(name);
-				if (entry) ({ amount: amountValue, unit, name } = entry);
-			}
 			await addManualLine(ctx, {
 				listId: event.params.listId,
-				name,
+				name: String(fd.get('name') ?? ''),
+				readTypedName: true,
 				ingredientId: String(fd.get('ingredientId') ?? '') || null,
-				amount: amountValue,
-				unit: amountValue ? unit : null,
+				amount: amount.value,
+				unit,
 				category: String(fd.get('category') ?? ''),
 				subtractPantry: fd.get('subtractPantry') === 'on',
 				note: String(fd.get('note') ?? '')
 			});
 			return { ok: true, action: 'addLine' };
 		} catch (err) {
-			return actionError(err);
+			return actionError(err, 'addLine');
 		}
 	},
 	line: async (event) => {
@@ -257,16 +240,12 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const parsed = parseTidyChanges(event.params.listId, await event.request.formData());
 		if (!parsed.ok) return fail(400, { message: parsed.message, form: 'applyTidy' });
-		const conflicts: string[] = [];
-		let applied = 0;
-		for (const change of parsed.changes) {
-			try {
-				await updateLine(ctx, change);
-				applied++;
-			} catch (err) {
-				if (err instanceof ReviewConflict) conflicts.push(change.lineId);
-				else return actionError(err);
-			}
+		let applied: number;
+		let conflicts: string[];
+		try {
+			({ applied, conflicts } = await applyTidyChanges(ctx, event.params.listId, parsed.changes));
+		} catch (err) {
+			return actionError(err, 'applyTidy');
 		}
 		if (conflicts.length)
 			return fail(409, {
@@ -314,7 +293,7 @@ export const actions: Actions = {
 				replayed: out.replayed
 			};
 		} catch (err) {
-			return actionError(err);
+			return actionError(err, 'purchase');
 		}
 	}
 };

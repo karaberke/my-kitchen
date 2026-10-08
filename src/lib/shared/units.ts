@@ -201,6 +201,13 @@ for (const u of UNITS) {
 	BY_ALIAS.set(u.plural.toLowerCase(), u.id);
 	for (const a of u.aliases) BY_ALIAS.set(a.toLowerCase(), u.id);
 }
+/** `toBase` parsed one time, so a conversion does no string parsing. */
+const FACTORS = new Map<string, Record<Convention, Dec>>(
+	UNITS.flatMap((u) =>
+		u.toBase ? [[u.id, { metric: Dec.from(u.toBase.metric), us: Dec.from(u.toBase.us) }]] : []
+	)
+);
+const THOUSAND = Dec.from(1000);
 
 export function unitInfo(id: string | null | undefined): UnitDef | undefined {
 	return id ? BY_ID.get(id) : undefined;
@@ -215,6 +222,20 @@ export function normalizeUnitInput(raw: string): string | null {
 	const key = raw.trim().toLowerCase().replace(/\.+$/, '').replace(/\s+/g, ' ');
 	if (!key) return null;
 	return BY_ALIAS.get(key) ?? null;
+}
+
+/**
+ * The unit at the start of `words`, or null. "fl oz" is two words, so the
+ * two-word unit is tried before the one-word unit. `words` is the count of
+ * words the unit used.
+ */
+export function readUnitToken(words: readonly string[]): { unit: string; words: number } | null {
+	for (const n of [2, 1]) {
+		if (words.length < n) continue;
+		const unit = normalizeUnitInput(words.slice(0, n).join(' '));
+		if (unit) return { unit, words: n };
+	}
+	return null;
 }
 
 export function unitsCompatible(a: string, b: string): boolean {
@@ -247,9 +268,9 @@ export function convertAmount(
 	const ut = BY_ID.get(to);
 	if (!uf || !ut) return null;
 	if (uf.dimension === 'package' || ut.dimension === 'package') return null;
-	if (!uf.toBase || !ut.toBase) return null;
-	const ff = Dec.from(uf.toBase[convention]);
-	const ft = Dec.from(ut.toBase[convention]);
+	const ff = FACTORS.get(from)?.[convention];
+	const ft = FACTORS.get(to)?.[convention];
+	if (!ff || !ft) return null;
 	if (uf.dimension === ut.dimension) {
 		return amount.mulDiv(ff, ft);
 	}
@@ -266,11 +287,15 @@ export function convertAmount(
 	return null;
 }
 
+/**
+ * Singular for an amount above zero and at most one, plural for all others:
+ * "1/2 cup", "1 cup", "1.5 cups", "0 cups".
+ */
 export function unitLabel(id: string | null | undefined, count: number | Dec = 1): string {
 	const u = unitInfo(id);
 	if (!u) return id ?? '';
-	const isOne = count instanceof Dec ? count.eq(Dec.one) : count === 1;
-	return isOne ? u.singular : u.plural;
+	const size = (count instanceof Dec ? count : Dec.from(count)).abs();
+	return size.isPositive() && size.lte(Dec.one) ? u.singular : u.plural;
 }
 
 /** Human-readable quantity such as "1.5 kg" or "3 cloves". */
@@ -281,11 +306,11 @@ export function formatQuantity(
 	if (amount === null || amount === undefined) return 'unknown amount';
 	let value = amount;
 	let unitId = unit ?? null;
-	if (unitId === 'g' && value.gte(Dec.from(1000))) {
-		value = value.mulRatio(1, 1000);
+	if (unitId === 'g' && value.gte(THOUSAND)) {
+		value = value.div(THOUSAND);
 		unitId = 'kg';
-	} else if (unitId === 'ml' && value.gte(Dec.from(1000))) {
-		value = value.mulRatio(1, 1000);
+	} else if (unitId === 'ml' && value.gte(THOUSAND)) {
+		value = value.div(THOUSAND);
 		unitId = 'l';
 	}
 	const text = value.toHuman();

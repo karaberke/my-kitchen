@@ -18,6 +18,7 @@ import {
 	setMemberRole
 } from '$lib/server/households';
 import { assertMember } from '$lib/server/access';
+import { asAppError, isInvalidTextRepresentation } from '$lib/server/errors';
 import { getPantryOverview } from '$lib/server/pantry';
 import { searchIngredients, createCustomIngredient } from '$lib/server/ingredients';
 
@@ -126,5 +127,12 @@ describe('identity, ownership and isolation', () => {
 		const catalog = await searchIngredients(db, bob.id, 'scall');
 		expect(catalog[0]?.name).toBe('green onion');
 		expect(catalog[0]?.matchedAlias).toBe('scallion');
+	});
+
+	it('maps a malformed uuid to a 404 instead of leaking a driver error', async () => {
+		const alice = await createUser('Alice');
+		const err = await assertMember(db, 'not-a-uuid', alice.id).catch((e) => e);
+		expect(isInvalidTextRepresentation(err)).toBe(true);
+		expect(asAppError(err)?.status).toBe(404);
 	});
 });

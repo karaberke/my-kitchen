@@ -1,19 +1,26 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { RequestEvent } from '@sveltejs/kit';
 import { db, type DbOrTx } from '$lib/server/db';
 import {
 	groceryBatches,
 	groceryLists,
 	ingredients,
-	recipeIngredients,
-	recipes
+	recipeIngredients
 } from '$lib/server/db/schema';
-import { assertMember, assertRecipeReadable, requireUserApi } from '$lib/server/access';
+import {
+	assertMember,
+	assertRecipeReadable,
+	requireHousehold,
+	requireUserApi,
+	type ActorContext
+} from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { getIngredientMeta } from '$lib/server/ingredients';
+import { bumpList } from '$lib/server/grocery';
 import {
 	activeLotsForIngredients,
-	applyMovement,
+	applyMovements,
+	fefoOrder,
 	insertEvent,
 	lockHousehold,
 	lockLots,
@@ -21,10 +28,11 @@ import {
 } from '$lib/server/inventory';
 import { runOperation } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
+import { parsePositiveAmount } from '$lib/shared/amount-parse';
 import { scaleAmount } from '$lib/shared/scaling';
 import { convertAmount, isUnitId, unitsCompatible, type Convention } from '$lib/shared/units';
-import type { ActorContext } from '$lib/server/pantry';
 import { match as isUuid } from '../../params/uuid';
+import { NOTE_MAX_CHARS } from '$lib/shared/text';
 
 export interface CookPreviewItem {
 	position: number;
@@ -80,19 +88,10 @@ export async function previewCooking(
 	if (!servings.isPositive()) throw new AppError(400, 'Servings must be positive');
 	await assertMember(dbx, ctx.householdId, ctx.userId);
 	const recipe = await assertRecipeReadable(dbx, recipeId, ctx.userId);
-	const [full] = await dbx
-		.select({
-			title: recipes.title,
-			baseServings: recipes.baseServings,
-			convention: recipes.convention,
-			status: recipes.status
-		})
-		.from(recipes)
-		.where(eq(recipes.id, recipe.id));
-	if (full.status !== 'active' || !full.baseServings)
+	if (recipe.status !== 'active' || !recipe.baseServings)
 		throw new AppError(409, 'Finish this recipe before cooking from it');
-	const convention: Convention = full.convention === 'us' ? 'us' : 'metric';
-	const base = Dec.from(full.baseServings);
+	const convention: Convention = recipe.convention === 'us' ? 'us' : 'metric';
+	const base = Dec.from(recipe.baseServings);
 	const [rows, batches] = await Promise.all([
 		dbx
 			.select({
@@ -130,12 +129,19 @@ export async function previewCooking(
 	const ingredientIds = rows.map((r) => r.ingredientId).filter((x): x is string => !!x);
 	const [meta, lots] = await Promise.all([
 		getIngredientMeta(dbx, ingredientIds),
-		activeLotsForIngredients(dbx as never, ctx.householdId, ingredientIds)
+		activeLotsForIngredients(dbx, ctx.householdId, ingredientIds)
 	]);
+	const lotsByIngredient = new Map<string, typeof lots>();
+	for (const lot of lots) {
+		const group = lotsByIngredient.get(lot.ingredientId);
+		if (group) group.push(lot);
+		else lotsByIngredient.set(lot.ingredientId, [lot]);
+	}
 	const items: CookPreviewItem[] = rows.map((r) => {
 		const scaled = scaleAmount(r.amount ? Dec.from(r.amount) : null, base, servings);
 		const m = r.ingredientId ? meta.get(r.ingredientId) : undefined;
-		const tracked = !!r.ingredientId && lots.some((l) => l.ingredientId === r.ingredientId);
+		const ingredientLots = (r.ingredientId && lotsByIngredient.get(r.ingredientId)) || [];
+		const tracked = ingredientLots.length > 0;
 		if (!r.ingredientId || !scaled || !r.unit) {
 			return {
 				position: r.position,
@@ -162,7 +168,7 @@ export async function previewCooking(
 			r.ingredientId,
 			scaled,
 			r.unit,
-			lots,
+			ingredientLots,
 			convention,
 			m?.gramsPerMl ? Dec.from(m.gramsPerMl) : null
 		);
@@ -204,7 +210,7 @@ export async function previewCooking(
 	});
 	return {
 		recipeId: recipe.id,
-		title: full.title,
+		title: recipe.title,
 		revision: recipe.revision,
 		baseServings: base.toString(),
 		servings: servings.toString(),
@@ -279,15 +285,8 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 					{ currentRevision: recipe.revision }
 				);
 			}
-			const [full] = await tx
-				.select({
-					title: recipes.title,
-					baseServings: recipes.baseServings,
-					convention: recipes.convention
-				})
-				.from(recipes)
-				.where(eq(recipes.id, recipe.id));
-			if (!full.baseServings) throw new AppError(409, 'Recipe has no base servings');
+			const baseServings = recipe.baseServings;
+			if (!baseServings) throw new AppError(409, 'Recipe has no base servings');
 			const rows = await tx
 				.select({
 					position: recipeIngredients.position,
@@ -372,10 +371,7 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 						status: newFulfilled.gte(Dec.from(batch.servings)) ? 'fulfilled' : 'planned'
 					})
 					.where(eq(groceryBatches.id, batch.id));
-				await tx
-					.update(groceryLists)
-					.set({ revision: sql`${groceryLists.revision} + 1`, updatedAt: sql`now()` })
-					.where(eq(groceryLists.id, batch.listId));
+				await bumpList(tx, batch.listId);
 			}
 
 			const ingredientNames = await getIngredientMeta(
@@ -396,7 +392,7 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 						: null,
 					substituted: !!item.ingredientId && item.ingredientId !== (row?.ingredientId ?? null),
 					mode: item.mode,
-					note: item.note.slice(0, 300),
+					note: item.note.slice(0, NOTE_MAX_CHARS),
 					allocations:
 						item.mode === 'deduct'
 							? item.allocations.map((a) => ({
@@ -414,38 +410,38 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 				actorName: ctx.actorName,
 				operationId: input.operationId,
 				recipeId: recipe.id,
-				recipeTitle: full.title,
+				recipeTitle: recipe.title,
 				recipeRevision: recipe.revision,
 				servings: input.servings,
 				batchId: input.batchId,
 				plannedServingsFulfilled: plannedFulfilled,
 				unplannedServings: unplanned,
-				summary: `Cooked ${full.title} (${input.servings.toHuman()} servings)`,
+				summary: `Cooked ${recipe.title} (${input.servings.toHuman()} servings)`,
 				details: {
 					usage,
-					baseServings: Dec.from(full.baseServings).toString(),
-					convention: full.convention
+					baseServings: Dec.from(baseServings).toString(),
+					convention: recipe.convention
 				}
 			});
-			let deductions = 0;
-			for (const item of input.items) {
-				if (item.mode !== 'deduct') continue;
-				for (const a of item.allocations) {
-					const lot = lots.get(a.lotId)!;
-					await applyMovement(tx, {
-						eventId,
-						householdId: ctx.householdId,
-						lotId: lot.id,
-						ingredientId: lot.ingredientId,
-						delta: a.amount.neg(),
-						unit: lot.unit
-					});
-					deductions++;
-				}
-			}
+			const deductions = input.items
+				.filter((item) => item.mode === 'deduct')
+				.flatMap((item) =>
+					item.allocations.map((a) => {
+						const lot = lots.get(a.lotId)!;
+						return {
+							eventId,
+							householdId: ctx.householdId,
+							lotId: lot.id,
+							ingredientId: lot.ingredientId,
+							delta: a.amount.neg(),
+							unit: lot.unit
+						};
+					})
+				);
+			await applyMovements(tx, deductions);
 			return {
 				eventId,
-				deductions,
+				deductions: deductions.length,
 				plannedServingsFulfilled: plannedFulfilled?.toString() ?? null,
 				unplannedServings: unplanned?.toString() ?? null
 			};
@@ -453,14 +449,17 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 	);
 }
 
-/** `lotsForIngredient` for the caller's active household; the remote `pantryLots` query. */
+/**
+ * `lotsForIngredient` for the caller's active household; the remote `pantryLots`
+ * query. `amount` (text such as "200" or "1 1/2") in `unit` asks for the
+ * planner's split of that amount across the lots; blank or unreadable asks for none.
+ */
 export async function pantryLotsFor(
 	event: RequestEvent,
-	arg: { ingredient: string; unit: string | null; convention: string }
+	arg: { ingredient: string; unit: string | null; convention: string; amount?: string | null }
 ) {
 	const user = requireUserApi(event);
-	const householdId = event.locals.household?.id;
-	if (!householdId) throw new AppError(400, 'No household');
+	const householdId = requireHousehold(event).household.id;
 	await assertMember(db, householdId, user.id);
 	if (!isUuid(arg.ingredient)) throw new AppError(400, 'ingredient required');
 	return lotsForIngredient(
@@ -468,51 +467,55 @@ export async function pantryLotsFor(
 		householdId,
 		arg.ingredient,
 		arg.unit && isUnitId(arg.unit) ? arg.unit : null,
-		arg.convention === 'us' ? 'us' : 'metric'
+		arg.convention === 'us' ? 'us' : 'metric',
+		arg.amount ? parsePositiveAmount(arg.amount) : null
 	);
 }
 
-/** Lots for one ingredient in the household (for substitutions / manual lot choice). */
-export async function lotsForIngredient(
+/**
+ * Lots for one ingredient in the household (for substitutions / manual lot
+ * choice), oldest use-by first. With a positive `amount` and a `unit`, each lot
+ * carries `take`: what the deduction planner (`planDeduction`, the same rule as
+ * the cook preview: unit conversion and the ingredient's density) takes from
+ * it, in the lot's own unit, or null when it takes nothing; `shortfall` is the
+ * part of `amount` the lots do not cover.
+ */
+async function lotsForIngredient(
 	dbx: DbOrTx,
 	householdId: string,
 	ingredientId: string,
 	unit: string | null,
-	convention: Convention = 'metric'
+	convention: Convention = 'metric',
+	amount: Dec | null = null
 ) {
 	const [m] = await dbx
 		.select({ id: ingredients.id, name: ingredients.name, gramsPerMl: ingredients.gramsPerMl })
 		.from(ingredients)
 		.where(eq(ingredients.id, ingredientId));
 	if (!m) throw new AppError(404, 'Ingredient not found');
-	const lots = await activeLotsForIngredients(dbx as never, householdId, [ingredientId]);
+	const lots = await activeLotsForIngredients(dbx, householdId, [ingredientId]);
 	const density = m.gramsPerMl ? Dec.from(m.gramsPerMl) : null;
+	const plan =
+		amount && unit ? planDeduction(ingredientId, amount, unit, lots, convention, density) : null;
+	const takes = new Map(plan?.suggestions.map((s) => [s.lotId, s.take.toString()]));
 	return {
 		ingredient: { id: m.id, name: m.name },
-		lots: lots
-			.sort((a, b) =>
-				a.expiresOn && b.expiresOn
-					? a.expiresOn.localeCompare(b.expiresOn)
-					: a.expiresOn
-						? -1
-						: b.expiresOn
-							? 1
-							: a.createdAt.localeCompare(b.createdAt)
-			)
-			.map((l) => ({
-				lotId: l.id,
-				quantity: l.quantity.toString(),
-				unit: l.unit,
-				location: l.location,
-				expiresOn: l.expiresOn,
-				revision: l.revision,
-				inRequestedUnit:
-					unit && isUnitId(unit)
-						? ((unitsCompatible(l.unit, unit)
-								? convertAmount(l.quantity, l.unit, unit, convention)
-								: convertAmount(l.quantity, l.unit, unit, convention, { gramsPerMl: density })
-							)?.toString() ?? null)
-						: null
-			}))
+		shortfall: plan ? plan.shortfall.toString() : null,
+		lots: lots.sort(fefoOrder).map((l) => ({
+			lotId: l.id,
+			quantity: l.quantity.toString(),
+			unit: l.unit,
+			location: l.location,
+			expiresOn: l.expiresOn,
+			revision: l.revision,
+			inRequestedUnit:
+				unit && isUnitId(unit)
+					? ((unitsCompatible(l.unit, unit)
+							? convertAmount(l.quantity, l.unit, unit, convention)
+							: convertAmount(l.quantity, l.unit, unit, convention, { gramsPerMl: density })
+						)?.toString() ?? null)
+					: null,
+			take: takes.get(l.id) ?? null
+		}))
 	};
 }

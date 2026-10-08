@@ -1,16 +1,12 @@
 import { z } from 'zod';
 import { AppError } from '$lib/server/errors';
-import {
-	emptyRecipeFormInput,
-	ingredientFromLine,
-	servingsFromYield,
-	stripTags
-} from '$lib/shared/recipe-html';
+import { emptyRecipeFormInput, servingsFromYield, stripTags } from '$lib/shared/recipe-html';
 import { timeToMinutes } from '$lib/shared/recipe-text';
-import { ingredientLine } from '$lib/shared/ingredient-line';
+import { ingredientFromLine, ingredientLine } from '$lib/shared/ingredient-line';
 import { isEmptyRecipe, type RecipeFormInput } from '$lib/shared/recipe-input';
-import { normalizeName } from '$lib/shared/text';
-import { claimLlmCall, completeJson, llmEnabled, type LlmCallOptions } from './client';
+import { cleanChatText, normalizeName } from '$lib/shared/text';
+import { LLM_MAX_INPUT_CHARS } from '$lib/shared/assistant-limits';
+import { completeJson, llmEnabled, type LlmCallOptions } from './client';
 import {
 	RECIPE_JSON_SYSTEM,
 	RECIPE_PARSE_TASK,
@@ -18,13 +14,11 @@ import {
 	SCRIPT_DATA_HEADING
 } from './prompts';
 
-/**
- * Text sent to the model is cut here: about 3k tokens, which leaves room in the
- * 8192-token context for the prompt and a 1500-token reply.
- */
-export const LLM_MAX_INPUT_CHARS = 12_000;
 /** A recipe as JSON. At about 19 tokens a second this is also about the time limit. */
 export const LLM_RECIPE_MAX_TOKENS = 1500;
+
+/** A recipe reply cut off by the token limit. */
+const RECIPE_TOO_LONG = 'The recipe is too long for the assistant.';
 
 /** Rows kept from one reply, the same bound the import payload uses. */
 const MAX_ROWS = 200;
@@ -92,7 +86,11 @@ export function cleanSourceText(raw: string): string {
 	return text.slice(0, LLM_MAX_INPUT_CHARS).trim();
 }
 
-/** A recipe form as the plain text the model tidies. */
+/**
+ * A recipe form as the plain text the model tidies, in the printed layout.
+ * Groups and optional marks are left out: the model copies lines as written,
+ * and `recipeFromModel` restores both by name.
+ */
 export function formInputToPlainText(input: RecipeFormInput): string {
 	const lines: string[] = [input.title.trim()];
 	if (input.description.trim()) lines.push('', input.description.trim());
@@ -118,10 +116,6 @@ export function formInputToPlainText(input: RecipeFormInput): string {
 	return lines.join('\n').slice(0, LLM_MAX_INPUT_CHARS);
 }
 
-function clean(s: string, max: number): string {
-	return s.replace(/\s+/g, ' ').trim().slice(0, max);
-}
-
 function minutes(raw: string): string {
 	const m = timeToMinutes(raw);
 	return m === null ? '' : String(m);
@@ -141,7 +135,7 @@ export function recipeFromModel(
 ): RecipeFormInput {
 	const byName = new Map(base.ingredients.map((i) => [normalizeName(i.name), i]));
 	const ingredients = out.ingredients
-		.map((line) => clean(line, 300))
+		.map((line) => cleanChatText(line, 300))
 		.filter(Boolean)
 		.slice(0, MAX_ROWS)
 		.map((line) => {
@@ -158,15 +152,15 @@ export function recipeFromModel(
 				: row;
 		});
 	const steps = out.steps
-		.map((text) => clean(text.replace(/^\s*(?:step\s*)?\d+[.):]\s*/i, ''), 4000))
+		.map((text) => cleanChatText(text.replace(/^\s*(?:step\s*)?\d+[.):]\s*/i, ''), 4000))
 		.filter(Boolean)
 		.slice(0, MAX_ROWS)
 		.map((text) => ({ section: '', text }));
-	const servings = servingsFromYield(clean(out.servings, 200));
+	const servings = servingsFromYield(cleanChatText(out.servings, 200));
 	return {
 		...base,
-		title: clean(out.title, 200) || base.title,
-		description: clean(out.description, 4000) || base.description,
+		title: cleanChatText(out.title, 200) || base.title,
+		description: cleanChatText(out.description, 4000) || base.description,
 		baseServings: servings.baseServings || base.baseServings,
 		yieldNote: servings.yieldNote || base.yieldNote,
 		prepMinutes: minutes(out.prepMinutes) || base.prepMinutes,
@@ -187,7 +181,15 @@ export async function llmParseRecipe(
 	base: RecipeFormInput = emptyRecipeFormInput(),
 	call: LlmCallOptions = {}
 ): Promise<RecipeFormInput> {
-	const source = cleanSourceText(text);
+	return parseCleanSource(cleanSourceText(text), base, call);
+}
+
+/** `llmParseRecipe` for text `cleanSourceText` already cleaned, such as a plan's source. */
+async function parseCleanSource(
+	source: string,
+	base: RecipeFormInput,
+	call: LlmCallOptions
+): Promise<RecipeFormInput> {
 	if (!source) throw new AppError(422, 'There is no text the assistant can read.');
 	const out = await completeJson(
 		modelRecipeSchema,
@@ -196,6 +198,7 @@ export async function llmParseRecipe(
 		{
 			maxTokens: LLM_RECIPE_MAX_TOKENS,
 			name: 'recipe',
+			tooLongMessage: RECIPE_TOO_LONG,
 			...call
 		}
 	);
@@ -213,7 +216,7 @@ export async function fixRecipe(
 		modelRecipeSchema,
 		RECIPE_JSON_SYSTEM,
 		RECIPE_TIDY_TASK + formInputToPlainText(input),
-		{ maxTokens: LLM_RECIPE_MAX_TOKENS, name: 'recipe', ...call }
+		{ maxTokens: LLM_RECIPE_MAX_TOKENS, name: 'recipe', tooLongMessage: RECIPE_TOO_LONG, ...call }
 	);
 	return recipeFromModel(out, input);
 }
@@ -284,30 +287,10 @@ export async function runAssist(
 	try {
 		const input =
 			plan.source !== null
-				? await llmParseRecipe(plan.source, plan.base, call)
+				? await parseCleanSource(plan.source, plan.base, call)
 				: await fixRecipe(plan.base, call);
 		return { input, assisted: true, assistantError: null };
 	} catch (err) {
 		return { input: plan.base, assisted: false, assistantError: assistFailure(err) };
-	}
-}
-
-/**
- * The assistant's part in an import, start to end, while the caller waits:
- * `planAssist`, then the quota, then `runAssist`. It never fails the import:
- * any failure leaves the app's own result and a message.
- */
-export async function assistImport(
-	userId: string,
-	args: ImportAssistArgs
-): Promise<AssistedImport> {
-	const unchanged = { input: args.input, assisted: false, assistantError: null };
-	try {
-		const planned = await planAssist(args);
-		if ('skip' in planned) return { ...unchanged, assistantError: planned.skip };
-		claimLlmCall(userId);
-		return await runAssist(planned.plan);
-	} catch (err) {
-		return { ...unchanged, assistantError: assistFailure(err) };
 	}
 }

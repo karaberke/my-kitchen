@@ -3,7 +3,7 @@ import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { requireHousehold } from '$lib/server/access';
+import { householdActor } from '$lib/server/access';
 import { finishCooking, previewCooking, type CookItemInput } from '$lib/server/cooking';
 import { getRecipeDetail } from '$lib/server/recipes';
 import { undoEvent } from '$lib/server/undo';
@@ -11,12 +11,12 @@ import { parseAmount, parsePositiveAmount } from '$lib/shared/amount-parse';
 import { Dec } from '$lib/shared/decimal';
 import { operationIdFrom } from '$lib/server/operations';
 import { llmEnabled } from '$lib/server/llm/client';
+import { NOTE_MAX_CHARS } from '$lib/shared/text';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
-	const { user, household } = requireHousehold(event);
+	const ctx = householdActor(event);
 	event.depends('app:cook');
-	const ctx = { userId: user.id, actorName: user.name, householdId: household.id };
-	const recipe = await getRecipeDetail(db, user.id, event.params.id, household.id);
+	const recipe = await getRecipeDetail(db, ctx.userId, event.params.id, ctx.householdId);
 	const servingsRaw = event.url.searchParams.get('servings') ?? recipe.baseServings ?? '1';
 	const servings = parsePositiveAmount(servingsRaw) ?? Dec.from(recipe.baseServings ?? '1');
 	const preview = recipe.cookable ? await previewCooking(db, ctx, recipe.id, servings) : null;
@@ -32,7 +32,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 
 export const actions: Actions = {
 	finish: async (event) => {
-		const { user, household } = requireHousehold(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const operationId = operationIdFrom(fd);
@@ -71,20 +71,17 @@ export const actions: Actions = {
 					mode: mode === 'deduct' && allocations.length ? 'deduct' : 'skip',
 					ingredientId,
 					allocations,
-					note: String(fd.get(`item.${pos}.note`) ?? '').slice(0, 300)
+					note: String(fd.get(`item.${pos}.note`) ?? '').slice(0, NOTE_MAX_CHARS)
 				});
 			}
-			const out = await finishCooking(
-				{ userId: user.id, actorName: user.name, householdId: household.id },
-				{
-					operationId,
-					recipeId: event.params.id,
-					expectedRecipeRevision,
-					servings: servingsParsed.value,
-					batchId,
-					items
-				}
-			);
+			const out = await finishCooking(ctx, {
+				operationId,
+				recipeId: event.params.id,
+				expectedRecipeRevision,
+				servings: servingsParsed.value,
+				batchId,
+				items
+			});
 			return {
 				ok: true,
 				eventId: out.result.eventId,
@@ -98,15 +95,12 @@ export const actions: Actions = {
 		}
 	},
 	undo: async (event) => {
-		const { user, household } = requireHousehold(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const operationId = operationIdFrom(fd);
 			const eventId = String(fd.get('eventId') ?? '');
-			await undoEvent(
-				{ userId: user.id, actorName: user.name, householdId: household.id },
-				{ operationId, eventId }
-			);
+			await undoEvent(ctx, { operationId, eventId });
 			return { undone: true };
 		} catch (err) {
 			return actionError(err);

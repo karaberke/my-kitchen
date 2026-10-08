@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { isRfcUuid } from './text';
+import { cleanChatText, cleanText, collapseSpaces, isRfcUuid, normalizeName } from './text';
 
 describe('isRfcUuid', () => {
 	it('accepts a generated id in either case', () => {
@@ -15,5 +15,32 @@ describe('isRfcUuid', () => {
 		expect(isRfcUuid('3da6236d-fd8e-49a7-b7c7-1e7a03f0c82')).toBe(false);
 		expect(isRfcUuid(undefined)).toBe(false);
 		expect(isRfcUuid(42)).toBe(false);
+	});
+});
+
+describe('collapseSpaces and cleanText', () => {
+	it('puts text on one line with single spaces', () => {
+		expect(collapseSpaces('  two\t\n  words  ')).toBe('two words');
+		expect(collapseSpaces(' \n ')).toBe('');
+	});
+
+	it('cuts after it collapses', () => {
+		expect(cleanText('  a   b   c  ', 3)).toBe('a b');
+	});
+
+	it('keeps normalizeName as before', () => {
+		expect(normalizeName('  Crème   Fraîche! ')).toBe('creme fraiche');
+	});
+});
+
+describe('cleanChatText', () => {
+	it('removes control characters and joins the lines', () => {
+		expect(cleanChatText('a\u0000b\u0007c\nd\te‮f', 100)).toBe('a b c d e f');
+		expect(cleanChatText('  one \r\n\r\n two  ', 100)).toBe('one two');
+	});
+
+	it('cuts to the limit and gives an empty string for blank text', () => {
+		expect(cleanChatText('x'.repeat(50), 10)).toBe('x'.repeat(10));
+		expect(cleanChatText(' \n\t\u0000 ', 10)).toBe('');
 	});
 });

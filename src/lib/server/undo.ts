@@ -1,20 +1,19 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import {
 	groceryBatches,
 	groceryLines,
-	groceryLists,
 	inventoryEvents,
 	inventoryMovements,
 	purchaseAllocations
 } from '$lib/server/db/schema';
 import type { RequestEvent } from '@sveltejs/kit';
-import { assertMember, householdActor } from '$lib/server/access';
+import { assertMember, householdActor, type ActorContext } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
-import { applyMovement, insertEvent, lockHousehold, lockLots } from '$lib/server/inventory';
+import { bumpList } from '$lib/server/grocery';
+import { applyMovements, insertEvent, lockHousehold, lockLots } from '$lib/server/inventory';
 import { requireOperationId, runOperation } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
 import { remainingTarget } from '$lib/shared/grocery-math';
-import type { ActorContext } from '$lib/server/pantry';
 
 /** `undoEvent` for the caller's active household; the remote `undo` command. */
 export async function undoFor(event: RequestEvent, arg: { operationId: string; eventId: string }) {
@@ -106,39 +105,57 @@ export async function undoEvent(
 				summary: `Undid: ${original.summary}`,
 				details: { originalKind: original.kind, originalEventId: original.id }
 			});
-			for (const m of movements) {
-				const lot = lots.get(m.lotId)!;
-				await applyMovement(tx, {
-					eventId: undoId,
-					householdId: ctx.householdId,
-					lotId: lot.id,
-					ingredientId: lot.ingredientId,
-					delta: Dec.from(m.delta).neg(),
-					unit: m.unit
-				});
-			}
+			await applyMovements(
+				tx,
+				movements.map((m) => {
+					const lot = lots.get(m.lotId)!;
+					return {
+						eventId: undoId,
+						householdId: ctx.householdId,
+						lotId: lot.id,
+						ingredientId: lot.ingredientId,
+						delta: Dec.from(m.delta).neg(),
+						unit: m.unit
+					};
+				})
+			);
 
-			// Reverse purchase credits on list lines.
+			// Reverse purchase credits on list lines: one locking read in id order,
+			// one allocation insert, and one bump for each list touched.
 			const allocations = await tx
 				.select()
 				.from(purchaseAllocations)
 				.where(eq(purchaseAllocations.eventId, original.id));
+			const lines = allocations.length
+				? await tx
+						.select({
+							id: groceryLines.id,
+							listId: groceryLines.listId,
+							purchasedAmount: groceryLines.purchasedAmount,
+							targetAmount: groceryLines.targetAmount
+						})
+						.from(groceryLines)
+						.where(
+							inArray(
+								groceryLines.id,
+								allocations.map((a) => a.lineId)
+							)
+						)
+						.orderBy(asc(groceryLines.id))
+						.for('update')
+				: [];
+			const lineById = new Map(lines.map((l) => [l.id, l]));
+			const reversed: { lineId: string; amount: Dec }[] = [];
+			const touchedLists = new Set<string>();
 			for (const a of allocations) {
-				const amount = Dec.from(a.amount);
-				const [line] = await tx
-					.select()
-					.from(groceryLines)
-					.where(eq(groceryLines.id, a.lineId))
-					.for('update');
+				const line = lineById.get(a.lineId);
 				if (!line) continue;
+				const amount = Dec.from(a.amount);
 				const purchasedAfter = Dec.max(Dec.zero, Dec.from(line.purchasedAmount).sub(amount));
 				const target = line.targetAmount ? Dec.from(line.targetAmount) : null;
 				const remaining = remainingTarget(target, purchasedAfter);
 				const status =
 					target === null ? 'pending' : remaining!.isPositive() ? 'pending' : 'purchased';
-				await tx
-					.insert(purchaseAllocations)
-					.values({ eventId: undoId, lineId: line.id, amount: amount.neg().toDb() });
 				await tx
 					.update(groceryLines)
 					.set({
@@ -148,11 +165,18 @@ export async function undoEvent(
 						updatedAt: sql`now()`
 					})
 					.where(eq(groceryLines.id, line.id));
-				await tx
-					.update(groceryLists)
-					.set({ revision: sql`${groceryLists.revision} + 1`, updatedAt: sql`now()` })
-					.where(eq(groceryLists.id, line.listId));
+				reversed.push({ lineId: line.id, amount });
+				touchedLists.add(line.listId);
 			}
+			if (reversed.length)
+				await tx.insert(purchaseAllocations).values(
+					reversed.map((r) => ({
+						eventId: undoId,
+						lineId: r.lineId,
+						amount: r.amount.neg().toDb()
+					}))
+				);
+			for (const listId of touchedLists) await bumpList(tx, listId);
 
 			// Restore planned servings for cooking events linked to a batch.
 			if (original.kind === 'cook' && original.batchId && original.plannedServingsFulfilled) {
@@ -172,10 +196,7 @@ export async function undoEvent(
 								status: fulfilled.gte(Dec.from(batch.servings)) ? 'fulfilled' : 'planned'
 							})
 							.where(eq(groceryBatches.id, batch.id));
-						await tx
-							.update(groceryLists)
-							.set({ revision: sql`${groceryLists.revision} + 1`, updatedAt: sql`now()` })
-							.where(eq(groceryLists.id, batch.listId));
+						await bumpList(tx, batch.listId);
 					}
 				}
 			}

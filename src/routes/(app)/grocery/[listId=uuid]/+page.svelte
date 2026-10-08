@@ -1,46 +1,35 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
+	import type { ActionResult, SubmitFunction } from '@sveltejs/kit';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PollRevisions from '$lib/components/PollRevisions.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
+	import StockFields from '$lib/components/StockFields.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
-	import { undo } from '$lib/remote/pantry.remote';
+	import { createUndo } from '$lib/client/undo';
 	import { reopenList, tidyGroceryList } from '$lib/remote/grocery.remote';
 	import { remoteErrorMessage } from '$lib/client/remote';
 	import { fmtDateTime, fmtNum, fmtQty } from '$lib/client/format';
 	import { UNITS } from '$lib/shared/units';
-	import { compareAisles } from '$lib/shared/grocery-categories';
+	import { GROCERY_CATEGORIES, compareAisles } from '$lib/shared/grocery-categories';
+	import { NOTE_MAX_CHARS } from '$lib/shared/text';
 	import type { LineView, BatchView } from '$lib/server/grocery';
 	import type { TidyProposal, TidyValues } from '$lib/server/llm/grocery';
 
 	let { data, form } = $props();
 	const list = $derived(data.list);
-	type LooseForm =
-		| {
-				ok?: boolean;
-				action?: string;
-				message?: string;
-				form?: string;
-				review?: { reason?: string; changedRecipes?: string[]; revision?: number };
-				eventId?: string | null;
-				remaining?: string | null;
-				lineStatus?: string;
-		  }
-		| null
-		| undefined;
-	const f = $derived(form as LooseForm);
+	const f = $derived(form);
 	let view = $state<'pending' | 'purchased' | 'all'>('pending');
 	let addOpen = $state(false);
 	let purchase = $state<LineView | null>(null);
 	let editBatch = $state<BatchView | null>(null);
 	let editLine = $state<LineView | null>(null);
 	let opId = $derived<string>(data.operationId);
-	let undoOp = $state(newOperationId());
 	const dirty = () => addOpen || !!purchase || !!editBatch || !!editLine || tidyOpen;
 
 	// tidy with the assistant: ask, review, then apply only the checked changes
@@ -112,7 +101,7 @@
 		incompatible_stock_units: 'Pantry has this in other units — review'
 	};
 
-	function afterMutation(result: { type: string; data?: Record<string, unknown> }) {
+	function afterMutation(result: ActionResult) {
 		if (result.type !== 'success') return;
 		const d = result.data ?? {};
 		const unitForToast = purchase?.unit ?? null;
@@ -149,6 +138,24 @@
 		else if (d.action === 'refresh')
 			pushToast('Preview recalculated from current pantry.', { kind: 'success' });
 	}
+	/**
+	 * `use:enhance` for a mutation: keep what was typed, then run the shared
+	 * after-effects. `onSuccess` adds what only one form needs. A failure does
+	 * not reload by itself, so `reloadOnFailure` fetches the list again when
+	 * the server rejected the change because the data moved on.
+	 */
+	const mutate =
+		({
+			onSuccess,
+			reloadOnFailure = false
+		}: { onSuccess?: () => void; reloadOnFailure?: boolean } = {}): SubmitFunction =>
+		() =>
+		async ({ result, update }) => {
+			await update({ reset: false });
+			afterMutation(result);
+			if (result.type === 'success') onSuccess?.();
+			else if (result.type === 'failure' && reloadOnFailure) await invalidate('app:grocery');
+		};
 	async function startTidy() {
 		if (tidyPending) return;
 		tidyPending = true;
@@ -170,16 +177,11 @@
 	function tidyQty(v: TidyValues): string {
 		return v.amount === null ? (v.unit ?? 'no amount') : fmtQty(v.amount, v.unit);
 	}
-	async function undoNow(eventId: string) {
-		try {
-			await undo({ operationId: undoOp, eventId });
-			pushToast('Purchase undone: pantry and list credit reversed.', { kind: 'success' });
-		} catch {
-			pushToast('Could not undo. See history for details.', { kind: 'error' });
-		}
-		undoOp = newOperationId();
-		await invalidate('app:grocery');
-	}
+	const undoNow = createUndo({
+		depends: 'app:grocery',
+		done: 'Purchase undone: pantry and list credit reversed.',
+		failed: 'Could not undo. See history for details.'
+	});
 	async function reopenNow() {
 		try {
 			await reopenList({ listId: list.id, expectedRevision: list.revision });
@@ -211,7 +213,7 @@
 		/>{/if}
 </PageHeader>
 
-{#if f?.message && !dirty()}
+{#if f?.message && !f.form && !dirty()}
 	<div class="mb-3">
 		<Alert kind={f.review ? 'warn' : 'error'}
 			>{f.message}{#if f.review?.changedRecipes?.length}
@@ -226,16 +228,7 @@
 				>{list.pantryChanged ? 'The pantry changed since this preview.' : ''}
 				{list.anyRecipeChanged ? 'A planned recipe changed since it was added.' : ''} Recalculate to see
 				current numbers; starting shopping checks this again.
-				<form
-					method="post"
-					action="?/refresh"
-					class="mt-2"
-					use:enhance={() =>
-						async ({ result, update }) => {
-							await update({ reset: false });
-							afterMutation(result as never);
-						}}
-				>
+				<form method="post" action="?/refresh" class="mt-2" use:enhance={mutate()}>
 					<button class="btn-secondary btn-sm">Recalculate</button>
 				</form></Alert
 			>
@@ -402,16 +395,7 @@
 		{/if}
 	{/if}
 	{#if list.status === 'draft'}
-		<form
-			method="post"
-			action="?/start"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					afterMutation(result as never);
-					if (result.type === 'failure') await invalidate('app:grocery');
-				}}
-		>
+		<form method="post" action="?/start" use:enhance={mutate({ reloadOnFailure: true })}>
 			<input type="hidden" name="expectedRevision" value={list.revision} />
 			<button class="btn-primary" disabled={list.lines.length === 0}>Start shopping</button>
 		</form>
@@ -419,29 +403,12 @@
 			<button class="btn-ghost text-brick-dark">Delete draft</button>
 		</form>
 	{:else if list.status === 'shopping'}
-		<form
-			method="post"
-			action="?/complete"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					afterMutation(result as never);
-				}}
-		>
+		<form method="post" action="?/complete" use:enhance={mutate()}>
 			<input type="hidden" name="expectedRevision" value={list.revision} />
 			<button class="btn-primary">Complete trip</button>
 		</form>
 	{:else}
-		<form
-			method="post"
-			action="?/reopen"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					afterMutation(result as never);
-					if (result.type === 'failure') await invalidate('app:grocery');
-				}}
-		>
+		<form method="post" action="?/reopen" use:enhance={mutate({ reloadOnFailure: true })}>
 			<input type="hidden" name="expectedRevision" value={list.revision} />
 			<button class="btn-secondary">Reopen trip</button>
 		</form>
@@ -463,18 +430,15 @@
 		method="post"
 		action="?/addLine"
 		class="flex flex-col gap-3.5"
-		use:enhance={() =>
-			async ({ result, update }) => {
-				await update({ reset: false });
-				afterMutation(result as never);
-				if (result.type === 'success') {
-					addName = '';
-					addIngredientId = null;
-					addLabel = null;
-					addCreate = false;
-					pushToast('Item added.', { kind: 'success' });
-				}
-			}}
+		use:enhance={mutate({
+			onSuccess() {
+				addName = '';
+				addIngredientId = null;
+				addLabel = null;
+				addCreate = false;
+				pushToast('Item added.', { kind: 'success' });
+			}
+		})}
 	>
 		<div>
 			<label class="label" for="line-name">Item</label>
@@ -506,14 +470,14 @@
 			<div>
 				<label class="label" for="line-category">Category</label>
 				<select class="field" id="line-category" name="category"
-					><option value="">Auto</option>{#each data.categories as c (c)}<option value={c}
+					><option value="">Auto</option>{#each GROCERY_CATEGORIES as c (c)}<option value={c}
 							>{c}</option
 						>{/each}</select
 				>
 			</div>
 			<div>
 				<label class="label" for="line-note">Note</label>
-				<input class="field" id="line-note" name="note" maxlength="300" />
+				<input class="field" id="line-note" name="note" maxlength={NOTE_MAX_CHARS} />
 			</div>
 		</div>
 		<label class="flex min-h-10 items-center gap-2.5 text-[13px]"
@@ -536,52 +500,17 @@
 		{#if f?.message && f?.form === 'purchase'}<div class="mb-3">
 				<Alert kind="error">{f.message}</Alert>
 			</div>{/if}
-		<form
-			method="post"
-			action="?/purchase"
-			class="flex flex-col gap-3.5"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					afterMutation(result as never);
-				}}
-		>
+		<form method="post" action="?/purchase" class="flex flex-col gap-3.5" use:enhance={mutate()}>
 			<input type="hidden" name="operationId" value={opId} />
 			<input type="hidden" name="lineId" value={purchase.id} />
-			<div class="grid grid-cols-2 gap-3">
-				<div>
-					<label class="label" for="buy-qty">Amount bought</label>
-					<input
-						class="field"
-						id="buy-qty"
-						name="quantity"
-						inputmode="decimal"
-						placeholder="e.g. 1000 for a 1 kg bag"
-					/>
-				</div>
-				<div>
-					<label class="label" for="buy-unit">Unit</label>
-					<select class="field" id="buy-unit" name="unit" bind:value={buyUnit}
-						>{#each UNITS as u (u.id)}<option value={u.id}>{u.singular}</option>{/each}</select
-					>
-				</div>
-				<div>
-					<label class="label" for="buy-loc">Where it goes</label>
-					<input
-						class="field"
-						id="buy-loc"
-						name="location"
-						placeholder="Fridge, Cupboard"
-						maxlength="60"
-					/>
-				</div>
-				<div>
-					<label class="label" for="buy-exp"
-						>Use-by date <span class="font-normal text-sage">(optional)</span></label
-					>
-					<input class="field" id="buy-exp" name="expiresOn" type="date" />
-				</div>
-			</div>
+			<StockFields
+				idPrefix="buy"
+				bind:unit={buyUnit}
+				quantityLabel="Amount bought"
+				quantityPlaceholder="e.g. 1000 for a 1 kg bag"
+				locationLabel="Where it goes"
+				locationPlaceholder="Fridge, Cupboard"
+			/>
 			{#if !purchase.ingredientId}
 				<div>
 					<label class="label" for="buy-ing">Track it as</label>
@@ -621,16 +550,7 @@
 		: ''}
 >
 	{#if editBatch}
-		<form
-			method="post"
-			action="?/batch"
-			class="flex flex-col gap-3.5"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					afterMutation(result as never);
-				}}
-		>
+		<form method="post" action="?/batch" class="flex flex-col gap-3.5" use:enhance={mutate()}>
 			<input type="hidden" name="batchId" value={editBatch.id} />
 			<div>
 				<label class="label" for="batch-servings">Servings</label>
@@ -684,12 +604,7 @@
 			method="post"
 			action="?/line"
 			class="flex flex-col gap-3.5"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					afterMutation(result as never);
-					if (result.type === 'failure') await invalidate('app:grocery');
-				}}
+			use:enhance={mutate({ reloadOnFailure: true })}
 		>
 			<input type="hidden" name="lineId" value={editLine.id} />
 			<input type="hidden" name="expectedRevision" value={editLine.revision} />
@@ -718,12 +633,18 @@
 				<div>
 					<label class="label" for="edit-category">Category</label>
 					<select class="field" id="edit-category" name="category" value={editLine.category}
-						>{#each data.categories as c (c)}<option value={c}>{c}</option>{/each}</select
+						>{#each GROCERY_CATEGORIES as c (c)}<option value={c}>{c}</option>{/each}</select
 					>
 				</div>
 				<div>
 					<label class="label" for="edit-note">Note</label>
-					<input class="field" id="edit-note" name="note" value={editLine.note} maxlength="300" />
+					<input
+						class="field"
+						id="edit-note"
+						name="note"
+						value={editLine.note}
+						maxlength={NOTE_MAX_CHARS}
+					/>
 				</div>
 			</div>
 			<div class="flex flex-wrap gap-2.5">

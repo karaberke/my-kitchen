@@ -173,11 +173,17 @@ export async function resolveIngredientNames(
 		.map((n) => [n, matchCandidates(n)] as const)
 		.filter(([, candidates]) => candidates.length);
 	if (!open.length) return out;
-	const rows = await loadIdentities(dbx, userId);
+	// Every identity per text, not only the best one: two identities with an equal text are a doubt.
+	const byText = new Map<string, IdentityRow[]>();
+	for (const row of await loadIdentities(dbx, userId)) {
+		const held = byText.get(row.text);
+		if (held) held.push(row);
+		else byText.set(row.text, [row]);
+	}
 	for (const [name, candidates] of open) {
 		const found = new Map<string, IdentityRow>();
 		for (const candidate of candidates) {
-			const equal = rows.filter((r) => r.text === candidate);
+			const equal = byText.get(candidate) ?? [];
 			const catalog = equal.filter((r) => r.fromCatalog);
 			for (const r of catalog.length ? catalog : equal) found.set(r.id, r);
 		}

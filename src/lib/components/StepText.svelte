@@ -2,7 +2,12 @@
 	import type { Dec } from '$lib/shared/decimal';
 	import { displayQuantity } from '$lib/shared/display-units';
 	import type { Convention } from '$lib/shared/units';
-	import { scaleStepText, type StepIngredient } from '$lib/shared/step-amounts';
+	import {
+		findStepAmounts,
+		scaleStepParts,
+		type PreparedStepIngredients,
+		type StepIngredient
+	} from '$lib/shared/step-amounts';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 
 	/**
@@ -18,16 +23,20 @@
 		convention
 	}: {
 		text: string;
-		ingredients: StepIngredient[];
+		ingredients: StepIngredient[] | PreparedStepIngredients;
 		base: Dec;
 		servings: Dec;
 		convention: Convention;
 	} = $props();
 
+	// Matching depends only on the text and the ingredients, so a change of
+	// servings or unit system scales the found amounts again without a new match.
+	// A page that shows many steps passes the ingredients prepared once, so
+	// a step does not parse every ingredient again.
+	const matched = $derived(findStepAmounts(text, ingredients));
 	const parts = $derived(
-		scaleStepText(
-			text,
-			ingredients,
+		scaleStepParts(
+			matched,
 			base,
 			servings,
 			// Reading unitSystem here re-renders the step on toggle, as the list does.

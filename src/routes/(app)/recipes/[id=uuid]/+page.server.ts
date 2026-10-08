@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { assertMember, householdActor, requireHousehold, requireUser } from '$lib/server/access';
+import { assertMember, householdActor, requireUser } from '$lib/server/access';
 import {
 	deleteRecipe,
 	duplicateRecipe,
@@ -20,7 +20,7 @@ import {
 	setRecipeCategory,
 	type CategoryView
 } from '$lib/server/recipe-categories';
-import { addBatch, createList, getCurrentListId, getListDetail } from '$lib/server/grocery';
+import { addBatchesToDraft, getCurrentList } from '$lib/server/grocery';
 import { Dec } from '$lib/shared/decimal';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { randomUUID } from 'node:crypto';
@@ -30,25 +30,28 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:recipe');
 	const householdId = event.locals.household?.id ?? null;
-	const recipe = await getRecipeDetail(db, user.id, event.params.id, householdId);
-	const currentListId = householdId ? await getCurrentListId(db, householdId) : null;
-	const currentList = currentListId ? await getListDetail(db, householdId!, currentListId) : null;
-	// locals.household is a cache; confirm membership before reading its categories
+	// locals.household is a cache; confirm membership before reading any of its data
+	// (the recipe detail reads its pantry stock too).
 	if (householdId) await assertMember(db, householdId, user.id);
-	const [categories, categoryIds, sharedWithActive]: [CategoryView[], string[], boolean] =
-		householdId
-			? await Promise.all([
-					listCategories(db, householdId),
-					recipeCategoryIds(db, householdId, recipe.id),
-					recipeSharedWith(db, recipe.id, householdId)
-				])
-			: [[], [], false];
+	const recipeId = event.params.id;
+	// The household reads only reach the page when the recipe read succeeds.
+	const [recipe, currentList, categories, categoryIds, sharedWithActive]: [
+		Awaited<ReturnType<typeof getRecipeDetail>>,
+		Awaited<ReturnType<typeof getCurrentList>>,
+		CategoryView[],
+		string[],
+		boolean
+	] = await Promise.all([
+		getRecipeDetail(db, user.id, recipeId, householdId),
+		householdId ? getCurrentList(db, householdId) : null,
+		householdId ? listCategories(db, householdId) : [],
+		householdId ? recipeCategoryIds(db, householdId, recipeId) : [],
+		householdId ? recipeSharedWith(db, recipeId, householdId) : false
+	]);
 	return {
 		title: recipe.title,
 		recipe,
-		currentList: currentList
-			? { id: currentList.id, name: currentList.name, status: currentList.status }
-			: null,
+		currentList,
 		clientKey: randomUUID(),
 		categories,
 		categoryIds,
@@ -137,7 +140,7 @@ export const actions: Actions = {
 		throw redirect(303, '/recipes');
 	},
 	addToList: async (event) => {
-		const { user, household } = requireHousehold(event);
+		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		const servingsRaw = String(fd.get('servings') ?? '');
 		const parsed = parseAmount(servingsRaw);
@@ -148,26 +151,23 @@ export const actions: Actions = {
 			.map((v) => Number(v))
 			.filter((n) => Number.isInteger(n));
 		const clientKey = String(fd.get('clientKey') ?? '').slice(0, 100);
-		const ctx = { userId: user.id, actorName: user.name, householdId: household.id };
 		try {
-			let listId = String(fd.get('listId') ?? '');
-			if (!listId) listId = (await getCurrentListId(db, household.id)) ?? '';
-			if (listId) {
-				const detail = await getListDetail(db, household.id, listId);
-				if (detail.status !== 'draft') listId = '';
-			}
-			if (!listId) listId = await createList(ctx, 'Shopping list');
-			const result = await addBatch(ctx, {
-				listId,
-				recipeId: event.params.id,
-				servings: parsed.value,
-				clientKey: clientKey || randomUUID(),
-				includeOptional
+			const { listId, batches } = await addBatchesToDraft(ctx, {
+				listId: String(fd.get('listId') ?? '') || null,
+				newListName: 'Shopping list',
+				batches: [
+					{
+						recipeId: event.params.id,
+						servings: parsed.value,
+						clientKey: clientKey || randomUUID(),
+						includeOptional
+					}
+				]
 			});
 			return {
 				ok: true,
 				listId,
-				duplicate: result.duplicate,
+				duplicate: batches[0].duplicate,
 				servings: Dec.from(parsed.value).toString()
 			};
 		} catch (err) {

@@ -4,12 +4,9 @@ import { db as appDb, type DbOrTx } from '$lib/server/db';
 import { assertMember, requireUserApi } from '$lib/server/access';
 import { barcodeLinks, ingredientAliases, ingredients, stockLots } from '$lib/server/db/schema';
 import { matchCandidates } from '$lib/shared/ingredient-name';
-import { normalizeName } from '$lib/shared/text';
+import { collapseSpaces, normalizeName } from '$lib/shared/text';
 import { AppError } from '$lib/server/errors';
 import { OTHER_CATEGORY, isGroceryCategory } from '$lib/shared/grocery-categories';
-
-/** Re-exported for older imports; the list lives in `$lib/shared/grocery-categories`. */
-export { GROCERY_CATEGORIES } from '$lib/shared/grocery-categories';
 
 /** The longest ingredient name a user may type. */
 export const INGREDIENT_NAME_MAX = 80;
@@ -141,7 +138,7 @@ export async function createCustomIngredient(
 	name: string,
 	category: string = 'Other'
 ) {
-	const clean = name.trim().replace(/\s+/g, ' ');
+	const clean = collapseSpaces(name);
 	if (clean.length < 1 || clean.length > INGREDIENT_NAME_MAX)
 		throw new AppError(400, `Ingredient name must be 1-${INGREDIENT_NAME_MAX} characters`);
 	const normalized = normalizeName(clean);

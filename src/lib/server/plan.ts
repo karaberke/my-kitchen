@@ -1,42 +1,32 @@
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import { db, type DbOrTx } from '$lib/server/db';
 import { mealPlanEntries, recipes } from '$lib/server/db/schema';
-import { assertMember, assertRecipeReadable } from '$lib/server/access';
+import { assertMember, assertRecipeReadable, type ActorContext } from '$lib/server/access';
 import { AppError, notFound } from '$lib/server/errors';
 import { lockHousehold } from '$lib/server/inventory';
 import { withTransaction } from '$lib/server/operations';
-import { addBatch, createList, getCurrentListId } from '$lib/server/grocery';
+import { addBatchesToDraft } from '$lib/server/grocery';
 import { Dec } from '$lib/shared/decimal';
-import type { ActorContext } from '$lib/server/pantry';
+import { addDays, isIsoDate } from '$lib/shared/time';
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-export const PLAN_DAYS = 7;
+const PLAN_DAYS = 7;
 
 function assertIsoDate(value: string): string {
-	if (!ISO_DATE.test(value)) throw new AppError(400, 'Pick a day of the week');
-	const d = new Date(`${value}T00:00:00Z`);
-	if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== value)
-		throw new AppError(400, 'Pick a day of the week');
+	if (!isIsoDate(value)) throw new AppError(400, 'Pick a day of the week');
 	return value;
-}
-
-function shift(dateIso: string, days: number): string {
-	const d = new Date(`${dateIso}T00:00:00Z`);
-	d.setUTCDate(d.getUTCDate() + days);
-	return d.toISOString().slice(0, 10);
 }
 
 /** The Monday of the week containing this calendar date. Weeks run Monday to Sunday. */
 export function mondayOf(dateIso: string): string {
 	assertIsoDate(dateIso);
 	const day = new Date(`${dateIso}T00:00:00Z`).getUTCDay(); // 0 = Sunday
-	return shift(dateIso, day === 0 ? -6 : 1 - day);
+	return addDays(dateIso, day === 0 ? -6 : 1 - day);
 }
 
 /** The seven calendar dates of the week starting on this Monday. */
 export function weekDates(startIso: string): string[] {
 	assertIsoDate(startIso);
-	return Array.from({ length: PLAN_DAYS }, (_, i) => shift(startIso, i));
+	return Array.from({ length: PLAN_DAYS }, (_, i) => addDays(startIso, i));
 }
 
 export interface PlanEntryView {
@@ -123,14 +113,9 @@ export async function addPlanEntry(ctx: ActorContext, input: AddPlanEntryInput):
 		let recipeId: string | null = null;
 		if (input.recipeId) {
 			// Only a recipe this user may read can be planned.
-			await assertRecipeReadable(tx, input.recipeId, ctx.userId);
-			const [full] = await tx
-				.select({ title: recipes.title })
-				.from(recipes)
-				.where(eq(recipes.id, input.recipeId))
-				.limit(1);
-			recipeId = input.recipeId;
-			title = full.title;
+			const recipe = await assertRecipeReadable(tx, input.recipeId, ctx.userId);
+			recipeId = recipe.id;
+			title = recipe.title;
 		}
 		if (!title) throw new AppError(400, 'Pick a recipe, or type a meal name');
 		await lockHousehold(tx, ctx.householdId, { plan: true });
@@ -155,27 +140,28 @@ export async function removePlanEntry(ctx: ActorContext, entryId: string): Promi
 }
 
 /**
- * Add every recipe planned this week to the open grocery list, at its base
- * servings. Free-text notes have nothing to shop for and are skipped.
+ * Add every recipe planned this week to the newest draft grocery list (a new
+ * one when there is none; never a list being shopped), at its base servings,
+ * all in one transaction. Free-text notes have nothing to shop for and are skipped.
  */
 export async function planWeekToGrocery(ctx: ActorContext, startIso: string): Promise<string> {
 	await assertMember(db, ctx.householdId, ctx.userId);
 	const week = await getWeekPlan(db, ctx.householdId, startIso);
-	const planned = week.flatMap((d) => d.entries).filter((e) => e.recipeId);
+	const planned = week
+		.flatMap((d) => d.entries)
+		.flatMap((e) => (e.recipeId ? [{ ...e, recipeId: e.recipeId }] : []));
 	if (!planned.length) throw new AppError(409, 'Nothing planned with a recipe attached yet');
 
-	const existing = await getCurrentListId(db, ctx.householdId);
-	const listId = existing ?? (await createList(ctx, 'This week'));
-
-	for (const entry of planned) {
-		await addBatch(ctx, {
-			listId,
-			recipeId: entry.recipeId!,
+	const { listId } = await addBatchesToDraft(ctx, {
+		listId: null,
+		newListName: 'This week',
+		batches: planned.map((entry) => ({
+			recipeId: entry.recipeId,
 			servings: Dec.from(entry.baseServings ?? '4'),
 			// Same week planned twice adds one batch per entry, not duplicates.
 			clientKey: `plan:${entry.id}`,
 			includeOptional: []
-		});
-	}
+		}))
+	});
 	return listId;
 }

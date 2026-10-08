@@ -5,7 +5,7 @@ import { assertMember, assertRecipeReadable } from '$lib/server/access';
 import { AppError, notFound, pgError } from '$lib/server/errors';
 import { lockHousehold } from '$lib/server/inventory';
 import { isUniqueViolation, withTransaction } from '$lib/server/operations';
-import type { ActorContext } from '$lib/server/pantry';
+import type { ActorContext } from '$lib/server/access';
 
 /** Mirrors `recipe_category_name_length_chk`. */
 export const CATEGORY_NAME_MAX = 40;
