@@ -17,12 +17,16 @@ import { matchIngredientNames } from '$lib/server/ingredient-match';
 import type { RecipeIngredientInput } from '$lib/shared/recipe-input';
 import { fetchRecipePage } from '$lib/server/import-fetch';
 import { llmEnabled } from '$lib/server/llm/client';
-import { assistImport } from '$lib/server/llm/recipe';
+import { startImportJob } from '$lib/server/llm/jobs';
+import type { ImportAssistArgs } from '$lib/server/llm/recipe';
+import { AppError } from '$lib/server/errors';
 import { IMPORT_LIMITS, consume } from '$lib/server/ratelimit';
 import { match as isUuid } from '../../../../params/uuid';
 
 /** Generous for a saved page, small enough to keep parsing cheap. */
 const MAX_HTML_BYTES = 2_000_000;
+/** The name a pasted page source is kept under. */
+const PASTED_FILENAME = 'pasted-source.html';
 
 const TITLES = {
 	pdf: 'Import a PDF',
@@ -39,6 +43,24 @@ const loadImpl = (event: PageServerLoadEvent) => {
 
 function looksLikePdf(bytes: Buffer): boolean {
 	return bytes.subarray(0, 5).toString('latin1') === '%PDF-';
+}
+
+/**
+ * Hand the import to the assistant in the background when it asks for one.
+ * The review form shows the app's own reading at once; the job saves the
+ * assistant's as a draft later. A job that cannot start leaves the message.
+ */
+async function startAssistant(
+	userId: string,
+	args: ImportAssistArgs & { attachmentId: string; titleOverride: string; label: string }
+): Promise<{ assistantJob: { id: string; title: string } | null; assistantError: string | null }> {
+	try {
+		const job = await startImportJob(userId, args);
+		return { assistantJob: job && { id: job.id, title: job.title }, assistantError: null };
+	} catch (err) {
+		if (err instanceof AppError) return { assistantJob: null, assistantError: err.message };
+		throw err;
+	}
 }
 
 async function parseImport(event: RequestEvent) {
@@ -66,14 +88,7 @@ async function parseImport(event: RequestEvent) {
 			const parsed = fromClient
 				? { input: fromClient.input, empty: fromClient.source === 'pdf-empty' }
 				: parseRecipeText(pages);
-			// The browser sends only its parse, so the text is read here again
-			// when the assistant needs it, and only then.
-			const assist = await assistImport(user.id, {
-				input: parsed.input,
-				forced,
-				sourceText: async () =>
-					(fromClient ? (await extractPdfText(bytes)).pages : pages).join('\n\n')
-			});
+			const { input } = parsed;
 			// Kept either way: a scan with no text is still worth having to hand.
 			const attachmentId = await storeAttachment(user.id, {
 				bytes,
@@ -81,12 +96,24 @@ async function parseImport(event: RequestEvent) {
 				kind: 'pdf',
 				pageCount
 			});
-			if (titleOverride) assist.input.title = titleOverride;
+			if (titleOverride) input.title = titleOverride;
+			// The browser sends only its parse, so the text is read here again
+			// when the assistant needs it, and only then.
+			const assistant = await startAssistant(user.id, {
+				input,
+				forced,
+				sourceText: async () =>
+					(fromClient ? (await extractPdfText(bytes)).pages : pages).join('\n\n'),
+				attachmentId,
+				titleOverride,
+				label: file.name
+			});
 			return {
 				parsed: true,
-				source: assist.assisted ? 'assistant' : parsed.empty ? 'pdf-empty' : 'pdf',
-				input: assist.input,
-				assistantError: assist.assistantError,
+				source: parsed.empty ? 'pdf-empty' : 'pdf',
+				input,
+				assistantJob: assistant.assistantJob,
+				assistantError: assistant.assistantError,
 				attachmentId,
 				filename: file.name,
 				pageCount
@@ -97,24 +124,27 @@ async function parseImport(event: RequestEvent) {
 			return fail(413, { message: 'That page is larger than 2 MB.' });
 		const fromClient = readImportedRecipe(fd.get('clientParsed'));
 		const read = fromClient ?? importRecipeHtml(bytes.toString('utf8'));
-		const assist = await assistImport(user.id, {
-			input: read.input,
-			forced,
-			sourceText: async () => bytes.toString('utf8')
-		});
-		const { input } = assist;
-		const source = assist.assisted ? 'assistant' : read.source;
+		const { input } = read;
 		const attachmentId = await storeAttachment(user.id, {
 			bytes,
 			filename: file.name,
 			kind: 'html'
 		});
 		if (titleOverride) input.title = titleOverride;
+		const assistant = await startAssistant(user.id, {
+			input,
+			forced,
+			sourceText: async () => bytes.toString('utf8'),
+			attachmentId,
+			titleOverride,
+			label: file.name
+		});
 		return {
 			parsed: true,
-			source,
+			source: read.source,
 			input,
-			assistantError: assist.assistantError,
+			assistantJob: assistant.assistantJob,
+			assistantError: assistant.assistantError,
 			attachmentId,
 			filename: file.name,
 			pageCount: null
@@ -132,13 +162,7 @@ async function parseImport(event: RequestEvent) {
 		const page = await fetchRecipePage(link, { maxBytes: MAX_HTML_BYTES });
 		// The final URL, so a relative og:image on the page becomes a usable address.
 		const read = importRecipeHtml(page.html, page.finalUrl);
-		const assist = await assistImport(user.id, {
-			input: read.input,
-			forced,
-			sourceText: async () => page.html
-		});
-		const { input } = assist;
-		const source = assist.assisted ? 'assistant' : read.source;
+		const { input } = read;
 		// Kept like every other import source, so a recipe can be traced back.
 		const attachmentId = await storeAttachment(user.id, {
 			bytes: Buffer.from(page.html, 'utf8'),
@@ -147,11 +171,20 @@ async function parseImport(event: RequestEvent) {
 		});
 		if (!input.source) input.source = page.finalUrl;
 		if (titleOverride) input.title = titleOverride;
+		const assistant = await startAssistant(user.id, {
+			input,
+			forced,
+			sourceText: async () => page.html,
+			attachmentId,
+			titleOverride,
+			label: page.filename
+		});
 		return {
 			parsed: true,
-			source,
+			source: read.source,
 			input,
-			assistantError: assist.assistantError,
+			assistantJob: assistant.assistantJob,
+			assistantError: assistant.assistantError,
 			attachmentId,
 			filename: page.filename,
 			pageCount: null,
@@ -166,27 +199,30 @@ async function parseImport(event: RequestEvent) {
 
 	const fromClient = readImportedRecipe(fd.get('clientParsed'));
 	const read = fromClient ?? importRecipeHtml(pasted);
-	const assist = await assistImport(user.id, {
-		input: read.input,
-		forced,
-		sourceText: async () => pasted
-	});
-	const { input } = assist;
-	const source = assist.assisted ? 'assistant' : read.source;
+	const { input } = read;
 	// Pasted source is kept too, so a recipe can always be traced back.
 	const attachmentId = await storeAttachment(user.id, {
 		bytes: Buffer.from(pasted, 'utf8'),
-		filename: 'pasted-source.html',
+		filename: PASTED_FILENAME,
 		kind: 'html'
 	});
 	if (titleOverride) input.title = titleOverride;
+	const assistant = await startAssistant(user.id, {
+		input,
+		forced,
+		sourceText: async () => pasted,
+		attachmentId,
+		titleOverride,
+		label: PASTED_FILENAME
+	});
 	return {
 		parsed: true,
-		source,
+		source: read.source,
 		input,
-		assistantError: assist.assistantError,
+		assistantJob: assistant.assistantJob,
+		assistantError: assistant.assistantError,
 		attachmentId,
-		filename: 'pasted-source.html',
+		filename: PASTED_FILENAME,
 		pageCount: null
 	};
 }

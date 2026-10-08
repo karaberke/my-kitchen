@@ -36,8 +36,14 @@
 		/** catalog names for the links the import proposed, keyed by ingredient id */
 		identityLabels: Record<string, string>;
 	} | null>(null);
+	/** Set when the assistant took the file: it reads in the background and saves a draft. */
+	const started = $derived(
+		form && 'assistantJob' in form && form.assistantJob
+			? (form.assistantJob as { id: string; title: string })
+			: null
+	);
 	$effect(() => {
-		if (form && 'parsed' in form && form.parsed)
+		if (form && 'parsed' in form && form.parsed && !started)
 			review = {
 				source: String(form.source ?? 'text'),
 				attachmentId: String(form.attachmentId ?? ''),
@@ -58,17 +64,23 @@
 	);
 </script>
 
-{#if review}
+{#if started}
+	<PageHeader title="Import started" back="/recipes/add" />
+	<Alert kind="success">
+		The assistant is reading “{started.title}”. You can leave this page. The recipe will be saved as
+		a draft.
+	</Alert>
+	<div class="mt-4 flex flex-wrap gap-2.5">
+		<a class="btn-primary" href="/recipes">Go to recipes</a>
+		<a class="btn-secondary" href="/recipes/add">Import another</a>
+	</div>
+{:else if review}
 	<PageHeader title="Check the import" subtitle="Nothing is saved yet." back="/recipes/add" />
 	<div class="mb-3 flex flex-col gap-2">
 		{#if review.assistantError}
 			<Alert kind="warn">{review.assistantError}</Alert>
 		{/if}
-		{#if review.source === 'assistant'}
-			<Alert kind="info"
-				>Parsed by the assistant. Check the amounts and steps before you save.</Alert
-			>
-		{:else if review.source === 'json-ld'}
+		{#if review.source === 'json-ld'}
 			<Alert kind="success">
 				Found recipe data in the page. Original wording is kept — check the fields below, then save.
 			</Alert>
@@ -268,12 +280,5 @@
 		<button class="btn-primary w-full" disabled={!ready || busy} aria-busy={busy}>
 			{busy ? (isUrl ? 'Fetching…' : 'Reading…') : 'Read the recipe'}
 		</button>
-		{#if data.aiEnabled}
-			<p class="px-0.5 text-[12.5px] text-sage" aria-live="polite">
-				{#if busy}{useAssistant
-						? 'Reading the recipe with the assistant… this can take a minute.'
-						: 'Reading… if the assistant is needed, this can take a minute.'}{/if}
-			</p>
-		{/if}
 	</form>
 {/if}

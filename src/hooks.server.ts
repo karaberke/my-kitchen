@@ -12,6 +12,7 @@ import { cleanupUnreferencedImages } from '$lib/server/media/images';
 import { cleanupUnreferencedAttachments } from '$lib/server/media/attachments';
 import { cleanupOperations } from '$lib/server/operations';
 import { cleanupBarcodeCache } from '$lib/server/barcode/lookup';
+import { pendingAttachmentIds, pruneAssistantJobs } from '$lib/server/llm/jobs';
 
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -22,16 +23,18 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
  * decided to keep anything, and a replaced photo outlives the recipe that
  * referenced it — so both leak on every abandoned edit. Idempotency records
  * accumulate the same way, and provider product metadata expires on its own
- * TTL. All four sweeps only ever touch rows nothing references; a referenced
+ * TTL. The sweeps only ever touch rows nothing references; a referenced
  * image or attachment is never a candidate, and a household's own barcode
- * links are never touched.
+ * links are never touched. Finished assistant jobs expire from memory here
+ * too, and the source file of a running one is kept.
  */
 async function sweep(): Promise<void> {
 	for (const [what, run] of [
 		['images', cleanupUnreferencedImages],
-		['attachments', cleanupUnreferencedAttachments],
+		['attachments', () => cleanupUnreferencedAttachments(undefined, pendingAttachmentIds())],
 		['operations', cleanupOperations],
-		['barcode records', cleanupBarcodeCache]
+		['barcode records', cleanupBarcodeCache],
+		['finished assistant jobs', async () => pruneAssistantJobs()]
 	] as const) {
 		try {
 			const n = await run();
