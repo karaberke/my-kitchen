@@ -11,9 +11,9 @@ import { parsePositiveAmount } from '$lib/shared/amount-parse';
 import {
 	LLM_CHAT_ANSWER_MAX_CHARS,
 	LLM_CHAT_MAX_TURNS,
-	LLM_QUESTION_MAX_CHARS,
-	SERVINGS_INPUT_MAX_CHARS
-} from '$lib/shared/recipe-input';
+	LLM_QUESTION_MAX_CHARS
+} from '$lib/shared/assistant-limits';
+import { SERVINGS_INPUT_MAX_CHARS } from '$lib/shared/recipe-input';
 
 /**
  * Ask the assistant a question about a recipe the caller can read, with the

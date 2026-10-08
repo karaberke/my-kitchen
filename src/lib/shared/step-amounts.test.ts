@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { Dec } from './decimal';
-import { findStepAmounts, scaleStepText, scaledStepLine } from './step-amounts';
+import {
+	findStepAmounts,
+	prepareStepIngredients,
+	scaleStepParts,
+	scaleStepText,
+	scaledStepLine
+} from './step-amounts';
 
 const ingredients = [
 	{ name: 'plain flour', amount: '200', unit: 'g' },
@@ -58,6 +64,29 @@ describe('findStepAmounts: amounts that link to an ingredient', () => {
 
 	it('links an amount with no name when one ingredient has exactly it', () => {
 		expect(linked('Add 125 g and stir.')).toEqual([7]);
+	});
+});
+
+describe('prepareStepIngredients', () => {
+	it('matches like the raw list, so a recipe can prepare it one time', () => {
+		const text = 'Add 200 g flour, 2 eggs and 1 tbsp sesame oil.';
+		expect(findStepAmounts(text, prepareStepIngredients(ingredients))).toEqual(
+			findStepAmounts(text, ingredients)
+		);
+	});
+
+	it('scales parts found one time to other servings', () => {
+		const parts = findStepAmounts('Add 200 g flour.', prepareStepIngredients(ingredients));
+		expect(scaleStepParts(parts, base, Dec.from('8')).map((p) => p.text)).toEqual([
+			'Add ',
+			'400 g',
+			' flour.'
+		]);
+		expect(scaleStepParts(parts, base, Dec.from('2')).map((p) => p.text)).toEqual([
+			'Add ',
+			'100 g',
+			' flour.'
+		]);
 	});
 });
 

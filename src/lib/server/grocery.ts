@@ -15,8 +15,13 @@ import {
 	stockLots,
 	type ListStatus
 } from '$lib/server/db/schema';
-import { assertMember, assertRecipeReadable, householdActor } from '$lib/server/access';
-import { AppError, ReviewConflict, notFound } from '$lib/server/errors';
+import {
+	assertMember,
+	assertRecipeReadable,
+	householdActor,
+	type ActorContext
+} from '$lib/server/access';
+import { AppError, ReviewConflict, notFound, type ReviewDetail } from '$lib/server/errors';
 import {
 	assertIngredientsVisible,
 	createCustomIngredient,
@@ -27,13 +32,16 @@ import { runOperation, withTransaction } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
 import {
 	computePlan,
+	planManualLine,
 	remainingTarget,
 	type PlanBatch,
 	type StockLotInput
 } from '$lib/shared/grocery-math';
 import { convertAmount, isUnitId, unitsCompatible, type Convention } from '$lib/shared/units';
-import type { ActorContext } from '$lib/server/pantry';
+import { validateDate } from '$lib/server/pantry';
 import { match as isUuid } from '../../params/uuid';
+import { LOCATION_MAX_CHARS, NOTE_MAX_CHARS, cleanText } from '$lib/shared/text';
+import { parseGroceryEntry } from '$lib/shared/ingredient-line';
 
 /* ------------------------------ reads ------------------------------ */
 
@@ -78,9 +86,12 @@ export async function listGroceryLists(
 }
 
 /** The household's current list: shopping first, then the newest draft. */
-export async function getCurrentListId(dbx: DbOrTx, householdId: string): Promise<string | null> {
+export async function getCurrentList(
+	dbx: DbOrTx,
+	householdId: string
+): Promise<{ id: string; name: string; status: ListStatus } | null> {
 	const [row] = await dbx
-		.select({ id: groceryLists.id })
+		.select({ id: groceryLists.id, name: groceryLists.name, status: groceryLists.status })
 		.from(groceryLists)
 		.where(
 			and(
@@ -94,7 +105,12 @@ export async function getCurrentListId(dbx: DbOrTx, householdId: string): Promis
 			desc(groceryLists.id)
 		)
 		.limit(1);
-	return row?.id ?? null;
+	return row ?? null;
+}
+
+/** The id of `getCurrentList`. */
+export async function getCurrentListId(dbx: DbOrTx, householdId: string): Promise<string | null> {
+	return (await getCurrentList(dbx, householdId))?.id ?? null;
 }
 
 export interface BatchView {
@@ -121,6 +137,9 @@ export interface BatchView {
 		include: boolean;
 	}[];
 }
+
+/** A grocery line without the recipe batches it came from. */
+export type LineFields = Omit<LineView, 'sources'>;
 
 export interface LineView {
 	id: string;
@@ -160,27 +179,39 @@ export interface ListDetail {
 	anyRecipeChanged: boolean;
 }
 
+/**
+ * One list with its batches and lines. Pass `knownPantryRevision` when the
+ * caller has just read the household row, so it is not read a second time.
+ */
 export async function getListDetail(
 	dbx: DbOrTx,
 	householdId: string,
-	listId: string
+	listId: string,
+	knownPantryRevision?: number
 ): Promise<ListDetail> {
-	const [list] = await dbx
-		.select({
-			id: groceryLists.id,
-			name: groceryLists.name,
-			status: groceryLists.status,
-			revision: groceryLists.revision,
-			pantryRevisionAtPreview: groceryLists.pantryRevisionAtPreview,
-			previewAt: groceryLists.previewAt,
-			startedAt: groceryLists.startedAt,
-			completedAt: groceryLists.completedAt,
-			currentPantryRevision: households.pantryRevision
-		})
-		.from(groceryLists)
-		.innerJoin(households, eq(households.id, groceryLists.householdId))
-		.where(and(eq(groceryLists.id, listId), eq(groceryLists.householdId, householdId)))
-		.limit(1);
+	const columns = {
+		id: groceryLists.id,
+		name: groceryLists.name,
+		status: groceryLists.status,
+		revision: groceryLists.revision,
+		pantryRevisionAtPreview: groceryLists.pantryRevisionAtPreview,
+		previewAt: groceryLists.previewAt,
+		startedAt: groceryLists.startedAt,
+		completedAt: groceryLists.completedAt
+	};
+	const ofHousehold = and(eq(groceryLists.id, listId), eq(groceryLists.householdId, householdId));
+	const [list] =
+		knownPantryRevision === undefined
+			? await dbx
+					.select({ ...columns, currentPantryRevision: households.pantryRevision })
+					.from(groceryLists)
+					.innerJoin(households, eq(households.id, groceryLists.householdId))
+					.where(ofHousehold)
+					.limit(1)
+			: (await dbx.select(columns).from(groceryLists).where(ofHousehold).limit(1)).map((r) => ({
+					...r,
+					currentPantryRevision: knownPantryRevision
+				}));
 	if (!list) throw notFound('Grocery list not found');
 
 	const [batchRows, lineRows] = await Promise.all([
@@ -200,16 +231,7 @@ export async function getListDetail(
 			.leftJoin(recipes, eq(recipes.id, groceryBatches.recipeId))
 			.where(eq(groceryBatches.listId, listId))
 			.orderBy(asc(groceryBatches.createdAt), asc(groceryBatches.id)),
-		dbx
-			.select()
-			.from(groceryLines)
-			.where(eq(groceryLines.listId, listId))
-			.orderBy(
-				asc(groceryLines.category),
-				asc(groceryLines.position),
-				asc(groceryLines.name),
-				asc(groceryLines.id)
-			)
+		selectLines(dbx, listId)
 	]);
 	const batchIds = batchRows.map((b) => b.id);
 	const lineIds = lineRows.map((l) => l.id);
@@ -279,31 +301,10 @@ export async function getListDetail(
 		status: b.status,
 		requirements: reqsByBatch.get(b.id) ?? []
 	}));
-	const lines: LineView[] = lineRows.map((l) => {
-		const target = l.targetAmount ? Dec.from(l.targetAmount) : null;
-		const purchased = Dec.from(l.purchasedAmount);
-		return {
-			id: l.id,
-			kind: l.kind,
-			ingredientId: l.ingredientId,
-			name: l.name,
-			category: l.category,
-			unit: l.unit,
-			demandAmount: l.demandAmount ? Dec.from(l.demandAmount).toString() : null,
-			stockConsidered: l.stockConsidered ? Dec.from(l.stockConsidered).toString() : null,
-			targetAmount: target ? target.toString() : null,
-			purchasedAmount: purchased.toString(),
-			remaining: remainingTarget(target, purchased)?.toString() ?? null,
-			status: l.status,
-			unresolvedReason: l.unresolvedReason,
-			otherStock: l.otherStock,
-			subtractPantry: l.subtractPantry,
-			note: l.note,
-			position: l.position,
-			revision: l.revision,
-			sources: sourcesByLine.get(l.id) ?? []
-		};
-	});
+	const lines: LineView[] = lineRows.map((l) => ({
+		...lineFields(l),
+		sources: sourcesByLine.get(l.id) ?? []
+	}));
 	return {
 		id: list.id,
 		name: list.name,
@@ -324,9 +325,68 @@ export async function getListDetail(
 	};
 }
 
+/** The lines of one list in display order, every column. */
+function selectLines(dbx: DbOrTx, listId: string) {
+	return dbx
+		.select()
+		.from(groceryLines)
+		.where(eq(groceryLines.listId, listId))
+		.orderBy(
+			asc(groceryLines.category),
+			asc(groceryLines.position),
+			asc(groceryLines.name),
+			asc(groceryLines.id)
+		);
+}
+
+function lineFields(l: typeof groceryLines.$inferSelect): LineFields {
+	const target = l.targetAmount ? Dec.from(l.targetAmount) : null;
+	const purchased = Dec.from(l.purchasedAmount);
+	return {
+		id: l.id,
+		kind: l.kind,
+		ingredientId: l.ingredientId,
+		name: l.name,
+		category: l.category,
+		unit: l.unit,
+		demandAmount: l.demandAmount ? Dec.from(l.demandAmount).toString() : null,
+		stockConsidered: l.stockConsidered ? Dec.from(l.stockConsidered).toString() : null,
+		targetAmount: target ? target.toString() : null,
+		purchasedAmount: purchased.toString(),
+		remaining: remainingTarget(target, purchased)?.toString() ?? null,
+		status: l.status,
+		unresolvedReason: l.unresolvedReason,
+		otherStock: l.otherStock,
+		subtractPantry: l.subtractPantry,
+		note: l.note,
+		position: l.position,
+		revision: l.revision
+	};
+}
+
+/**
+ * The status and lines of one household list, without its batches and line
+ * sources: for a reader of the lines alone. A 404 when the list is not there.
+ */
+export async function getListLines(
+	dbx: DbOrTx,
+	householdId: string,
+	listId: string
+): Promise<{ status: ListStatus; lines: LineFields[] }> {
+	const [list] = await dbx
+		.select({ status: groceryLists.status })
+		.from(groceryLists)
+		.where(and(eq(groceryLists.id, listId), eq(groceryLists.householdId, householdId)))
+		.limit(1);
+	if (!list) throw notFound('Grocery list not found');
+	const rows = await selectLines(dbx, listId);
+	return { status: list.status, lines: rows.map(lineFields) };
+}
+
 /* ------------------------------ helpers ------------------------------ */
 
-async function lockList(tx: Tx, householdId: string, listId: string) {
+/** Lock one list of the household (after `lockHousehold`); a 404 when it is not there. */
+export async function lockList(tx: Tx, householdId: string, listId: string) {
 	const [list] = await tx
 		.select({
 			id: groceryLists.id,
@@ -341,13 +401,50 @@ async function lockList(tx: Tx, householdId: string, listId: string) {
 	return list;
 }
 
-async function bumpList(tx: Tx, listId: string) {
+/** Bump a list's revision and `updated_at`; returns the new revision. */
+export async function bumpList(tx: Tx, listId: string) {
 	const [row] = await tx
 		.update(groceryLists)
 		.set({ revision: sql`${groceryLists.revision} + 1`, updatedAt: sql`now()` })
 		.where(eq(groceryLists.id, listId))
 		.returning({ revision: groceryLists.revision });
 	return row.revision;
+}
+
+/**
+ * What the planner needs to subtract stock for these ingredients: their
+ * metadata, the household's positive lots of them, and their densities.
+ */
+async function planStock(tx: Tx, householdId: string, ingredientIds: string[]) {
+	const [meta, lotRows] = await Promise.all([
+		getIngredientMeta(tx, ingredientIds),
+		ingredientIds.length
+			? tx
+					.select({
+						id: stockLots.id,
+						ingredientId: stockLots.ingredientId,
+						quantity: stockLots.quantity,
+						unit: stockLots.unit
+					})
+					.from(stockLots)
+					.where(
+						and(
+							eq(stockLots.householdId, householdId),
+							inArray(stockLots.ingredientId, ingredientIds),
+							sql`${stockLots.quantity} > 0`
+						)
+					)
+			: Promise.resolve([])
+	]);
+	const densities: Record<string, Dec> = {};
+	for (const [id, m] of meta) if (m.gramsPerMl) densities[id] = Dec.from(m.gramsPerMl);
+	const stock: StockLotInput[] = lotRows.map((l) => ({
+		lotId: l.id,
+		ingredientId: l.ingredientId,
+		quantity: Dec.from(l.quantity),
+		unit: l.unit
+	}));
+	return { meta, stock, densities };
 }
 
 /**
@@ -391,28 +488,13 @@ export async function recalculateDraft(
 			)
 		)
 	];
-	const [meta, lotRows] = await Promise.all([
-		getIngredientMeta(tx, ingredientIds),
-		ingredientIds.length
-			? tx
-					.select({
-						id: stockLots.id,
-						ingredientId: stockLots.ingredientId,
-						quantity: stockLots.quantity,
-						unit: stockLots.unit
-					})
-					.from(stockLots)
-					.where(
-						and(
-							eq(stockLots.householdId, householdId),
-							inArray(stockLots.ingredientId, ingredientIds),
-							sql`${stockLots.quantity} > 0`
-						)
-					)
-			: Promise.resolve([])
-	]);
-	const densities: Record<string, Dec> = {};
-	for (const [id, m] of meta) if (m.gramsPerMl) densities[id] = Dec.from(m.gramsPerMl);
+	const { meta, stock, densities } = await planStock(tx, householdId, ingredientIds);
+	const reqsByBatch = new Map<string, typeof reqRows>();
+	for (const r of reqRows) {
+		const group = reqsByBatch.get(r.batchId);
+		if (group) group.push(r);
+		else reqsByBatch.set(r.batchId, [r]);
+	}
 	const batches: PlanBatch[] = batchRows.map((b) => ({
 		batchId: b.id,
 		recipeTitle: b.recipeTitle,
@@ -420,22 +502,14 @@ export async function recalculateDraft(
 		servings: Dec.from(b.servings),
 		fulfilledServings: Dec.from(b.fulfilledServings),
 		convention: b.convention === 'us' ? 'us' : 'metric',
-		requirements: reqRows
-			.filter((r) => r.batchId === b.id)
-			.map((r) => ({
-				ingredientId: r.ingredientId,
-				name: r.name,
-				baseAmount: r.baseAmount ? Dec.from(r.baseAmount) : null,
-				unit: r.unit,
-				optional: r.optional,
-				include: r.include
-			}))
-	}));
-	const stock: StockLotInput[] = lotRows.map((l) => ({
-		lotId: l.id,
-		ingredientId: l.ingredientId,
-		quantity: Dec.from(l.quantity),
-		unit: l.unit
+		requirements: (reqsByBatch.get(b.id) ?? []).map((r) => ({
+			ingredientId: r.ingredientId,
+			name: r.name,
+			baseAmount: r.baseAmount ? Dec.from(r.baseAmount) : null,
+			unit: r.unit,
+			optional: r.optional,
+			include: r.include
+		}))
 	}));
 	const plan = computePlan(
 		batches,
@@ -587,100 +661,176 @@ export async function deleteDraftList(ctx: ActorContext, listId: string): Promis
 	});
 }
 
-/** Add a planned recipe batch. Same clientKey twice = one batch (idempotent). */
-export async function addBatch(
-	ctx: ActorContext,
-	input: {
-		listId: string;
-		recipeId: string;
-		servings: Dec;
-		clientKey: string;
-		includeOptional: number[];
-	}
-) {
+/** One recipe batch to plan. The same clientKey on the same list twice = one batch. */
+export interface BatchRequest {
+	recipeId: string;
+	servings: Dec;
+	clientKey: string;
+	includeOptional: number[];
+}
+
+function validateBatchRequest(input: BatchRequest) {
 	if (!input.servings.isPositive() || input.servings.gt(Dec.from(1000)))
 		throw new AppError(400, 'Servings must be a positive number');
 	if (!input.clientKey || input.clientKey.length > 100)
 		throw new AppError(400, 'Missing request key');
+}
+
+/** A recipe's ingredient rows as a batch snapshots them, in position order. */
+async function recipeRequirements(tx: Tx, recipeId: string) {
+	return tx
+		.select({
+			position: recipeIngredients.position,
+			ingredientId: recipeIngredients.ingredientId,
+			name: recipeIngredients.name,
+			amount: recipeIngredients.amount,
+			unit: recipeIngredients.unit,
+			preparation: recipeIngredients.preparation,
+			optional: recipeIngredients.optional
+		})
+		.from(recipeIngredients)
+		.where(eq(recipeIngredients.recipeId, recipeId))
+		.orderBy(asc(recipeIngredients.position));
+}
+
+/** Store a `recipeRequirements` snapshot for a batch; `include` decides each optional row. */
+async function insertRequirements(
+	tx: Tx,
+	batchId: string,
+	reqs: Awaited<ReturnType<typeof recipeRequirements>>,
+	include: (position: number) => boolean
+) {
+	if (!reqs.length) return;
+	await tx.insert(groceryBatchRequirements).values(
+		reqs.map((r) => ({
+			batchId,
+			position: r.position,
+			ingredientId: r.ingredientId,
+			name: r.name,
+			baseAmount: r.amount,
+			unit: r.unit,
+			preparation: r.preparation,
+			optional: r.optional,
+			include: r.optional ? include(r.position) : true
+		}))
+	);
+}
+
+/** Check that the user may plan this recipe, and read what its batch snapshots. */
+async function prepareBatch(tx: Tx, userId: string, input: BatchRequest) {
+	const recipe = await assertRecipeReadable(tx, input.recipeId, userId);
+	const baseServings = recipe.baseServings;
+	if (recipe.status !== 'active' || !baseServings)
+		throw new AppError(409, 'Finish this recipe (servings, ingredients, steps) before planning it');
+	const reqs = await recipeRequirements(tx, recipe.id);
+	if (!reqs.length) throw new AppError(409, 'This recipe has no ingredients to plan');
+	return { input, recipe: { ...recipe, baseServings }, reqs };
+}
+
+/**
+ * Insert a prepared batch into a draft list the caller has locked. A clientKey
+ * already on the list returns that batch as a duplicate and writes nothing.
+ */
+async function insertBatch(
+	tx: Tx,
+	listId: string,
+	{ input, recipe, reqs }: Awaited<ReturnType<typeof prepareBatch>>
+): Promise<{ batchId: string; duplicate: boolean }> {
+	const [inserted] = await tx
+		.insert(groceryBatches)
+		.values({
+			listId,
+			recipeId: recipe.id,
+			recipeTitle: recipe.title,
+			recipeRevision: recipe.revision,
+			convention: recipe.convention,
+			baseServings: Dec.from(recipe.baseServings).toDb(),
+			servings: input.servings.toDb(),
+			clientKey: input.clientKey
+		})
+		.onConflictDoNothing({ target: [groceryBatches.listId, groceryBatches.clientKey] })
+		.returning({ id: groceryBatches.id });
+	if (!inserted) {
+		const [existing] = await tx
+			.select({ id: groceryBatches.id })
+			.from(groceryBatches)
+			.where(and(eq(groceryBatches.listId, listId), eq(groceryBatches.clientKey, input.clientKey)));
+		return { batchId: existing.id, duplicate: true };
+	}
+	const include = new Set(input.includeOptional);
+	await insertRequirements(tx, inserted.id, reqs, (position) => include.has(position));
+	return { batchId: inserted.id, duplicate: false };
+}
+
+/** Add a planned recipe batch to this draft list. Same clientKey twice = one batch (idempotent). */
+export async function addBatch(ctx: ActorContext, input: BatchRequest & { listId: string }) {
+	validateBatchRequest(input);
 	return withTransaction(async (tx) => {
 		await assertMember(tx, ctx.householdId, ctx.userId);
-		const recipe = await assertRecipeReadable(tx, input.recipeId, ctx.userId);
-		const [full] = await tx
-			.select({
-				title: recipes.title,
-				baseServings: recipes.baseServings,
-				convention: recipes.convention,
-				status: recipes.status,
-				revision: recipes.revision
-			})
-			.from(recipes)
-			.where(eq(recipes.id, recipe.id));
-		if (full.status !== 'active' || !full.baseServings)
-			throw new AppError(
-				409,
-				'Finish this recipe (servings, ingredients, steps) before planning it'
-			);
-		const reqs = await tx
-			.select({
-				position: recipeIngredients.position,
-				ingredientId: recipeIngredients.ingredientId,
-				name: recipeIngredients.name,
-				amount: recipeIngredients.amount,
-				unit: recipeIngredients.unit,
-				preparation: recipeIngredients.preparation,
-				optional: recipeIngredients.optional
-			})
-			.from(recipeIngredients)
-			.where(eq(recipeIngredients.recipeId, recipe.id))
-			.orderBy(asc(recipeIngredients.position));
-		if (!reqs.length) throw new AppError(409, 'This recipe has no ingredients to plan');
+		const prepared = await prepareBatch(tx, ctx.userId, input);
 		const { pantryRevision } = await lockHousehold(tx, ctx.householdId, { grocery: true });
 		const list = await lockList(tx, ctx.householdId, input.listId);
 		if (list.status !== 'draft')
 			throw new AppError(409, 'Shopping already started. Plan more recipes in a new draft list.');
-		const [inserted] = await tx
-			.insert(groceryBatches)
-			.values({
-				listId: input.listId,
-				recipeId: recipe.id,
-				recipeTitle: full.title,
-				recipeRevision: full.revision,
-				convention: full.convention,
-				baseServings: Dec.from(full.baseServings).toDb(),
-				servings: input.servings.toDb(),
-				clientKey: input.clientKey
-			})
-			.onConflictDoNothing({ target: [groceryBatches.listId, groceryBatches.clientKey] })
-			.returning({ id: groceryBatches.id });
-		if (!inserted) {
-			const [existing] = await tx
-				.select({ id: groceryBatches.id })
-				.from(groceryBatches)
-				.where(
-					and(
-						eq(groceryBatches.listId, input.listId),
-						eq(groceryBatches.clientKey, input.clientKey)
-					)
-				);
-			return { batchId: existing.id, duplicate: true };
+		const result = await insertBatch(tx, input.listId, prepared);
+		if (!result.duplicate) {
+			await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
+			await bumpList(tx, input.listId);
 		}
-		const include = new Set(input.includeOptional);
-		await tx.insert(groceryBatchRequirements).values(
-			reqs.map((r) => ({
-				batchId: inserted.id,
-				position: r.position,
-				ingredientId: r.ingredientId,
-				name: r.name,
-				baseAmount: r.amount,
-				unit: r.unit,
-				preparation: r.preparation,
-				optional: r.optional,
-				include: r.optional ? include.has(r.position) : true
-			}))
-		);
-		await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
-		await bumpList(tx, input.listId);
-		return { batchId: inserted.id, duplicate: false };
+		return result;
+	});
+}
+
+/**
+ * Add recipe batches to a draft in one transaction with one recalculation.
+ * The target is `listId` when that is a draft of this household, else the
+ * newest draft, else a new list named `newListName`. A list that is being
+ * shopped is never the target. Every batch is added, or none is.
+ */
+export async function addBatchesToDraft(
+	ctx: ActorContext,
+	input: { listId: string | null; newListName: string; batches: BatchRequest[] }
+): Promise<{ listId: string; batches: { batchId: string; duplicate: boolean }[] }> {
+	if (input.listId !== null && !isUuid(input.listId)) throw notFound('Grocery list not found');
+	input.batches.forEach(validateBatchRequest);
+	return withTransaction(async (tx) => {
+		await assertMember(tx, ctx.householdId, ctx.userId);
+		const prepared = [];
+		for (const batch of input.batches) prepared.push(await prepareBatch(tx, ctx.userId, batch));
+		const { pantryRevision } = await lockHousehold(tx, ctx.householdId, { grocery: true });
+		let listId: string | null = null;
+		if (input.listId) {
+			const chosen = await lockList(tx, ctx.householdId, input.listId);
+			if (chosen.status === 'draft') listId = chosen.id;
+		}
+		if (!listId) {
+			const [draft] = await tx
+				.select({ id: groceryLists.id })
+				.from(groceryLists)
+				.where(and(eq(groceryLists.householdId, ctx.householdId), eq(groceryLists.status, 'draft')))
+				.orderBy(desc(groceryLists.updatedAt), desc(groceryLists.id))
+				.limit(1)
+				.for('update');
+			listId = draft?.id ?? null;
+		}
+		if (!listId) {
+			const [created] = await tx
+				.insert(groceryLists)
+				.values({
+					householdId: ctx.householdId,
+					name: input.newListName,
+					createdBy: ctx.userId
+				})
+				.returning({ id: groceryLists.id });
+			listId = created.id;
+		}
+		const batches: { batchId: string; duplicate: boolean }[] = [];
+		for (const p of prepared) batches.push(await insertBatch(tx, listId, p));
+		if (batches.some((b) => !b.duplicate)) {
+			await recalculateDraft(tx, ctx.householdId, listId, pantryRevision);
+			await bumpList(tx, listId);
+		}
+		return { listId, batches };
 	});
 }
 
@@ -755,11 +905,6 @@ export async function refreshDraft(ctx: ActorContext, listId: string) {
 /** The longest name a grocery line keeps. */
 export const GROCERY_LINE_NAME_MAX = 120;
 
-/** A typed line name on one line with single spaces, cut to `GROCERY_LINE_NAME_MAX`. Empty when blank. */
-export function cleanLineName(raw: string): string {
-	return raw.trim().replace(/\s+/g, ' ').slice(0, GROCERY_LINE_NAME_MAX);
-}
-
 export async function addManualLine(
 	ctx: ActorContext,
 	input: {
@@ -771,13 +916,27 @@ export async function addManualLine(
 		category: string;
 		subtractPantry: boolean;
 		note: string;
+		/**
+		 * The name was typed into a form: with no amount and no unit given,
+		 * "400 g chopped tomatoes" is read into amount, unit and name. Text that
+		 * is not that plain stays as typed.
+		 */
+		readTypedName?: boolean;
 	}
 ) {
-	const name = cleanLineName(input.name);
+	let amount = input.amount;
+	let unit = input.unit;
+	let typed = input.name;
+	if (input.readTypedName && amount === null && !unit) {
+		const entry = parseGroceryEntry(typed);
+		if (entry) ({ amount, unit, name: typed } = entry);
+	}
+	// A unit without an amount says nothing.
+	if (!amount) unit = null;
+	const name = cleanText(typed, GROCERY_LINE_NAME_MAX);
 	if (!name) throw new AppError(400, 'Name the item');
-	if (input.unit && !isUnitId(input.unit)) throw new AppError(400, 'Unknown unit');
-	if (input.amount && input.amount.isNegative())
-		throw new AppError(400, 'Amount cannot be negative');
+	if (unit && !isUnitId(unit)) throw new AppError(400, 'Unknown unit');
+	if (amount && amount.isNegative()) throw new AppError(400, 'Amount cannot be negative');
 	return withTransaction(async (tx) => {
 		await assertMember(tx, ctx.householdId, ctx.userId);
 		if (input.ingredientId) await assertIngredientsVisible(tx, ctx.userId, [input.ingredientId]);
@@ -798,41 +957,39 @@ export async function addManualLine(
 				ingredientId: input.ingredientId,
 				name,
 				category,
-				unit: input.unit,
-				demandAmount: input.amount ? input.amount.toDb() : null,
-				targetAmount: input.amount ? input.amount.toDb() : null,
+				unit,
+				demandAmount: amount ? amount.toDb() : null,
+				targetAmount: amount ? amount.toDb() : null,
 				subtractPantry: input.subtractPantry,
-				unresolvedReason: input.amount ? null : 'unknown_amount',
-				note: input.note.trim().slice(0, 300),
+				unresolvedReason: amount ? null : 'unknown_amount',
+				note: input.note.trim().slice(0, NOTE_MAX_CHARS),
 				position: max + 1
 			})
 			.returning({ id: groceryLines.id });
 		if (list.status === 'draft')
 			await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
-		else if (input.subtractPantry && input.ingredientId && input.amount && input.unit) {
-			// Shopping: explicit request to consider current stock once, now.
-			const lots = await tx
-				.select({ quantity: stockLots.quantity, unit: stockLots.unit })
-				.from(stockLots)
-				.where(
-					and(
-						eq(stockLots.householdId, ctx.householdId),
-						eq(stockLots.ingredientId, input.ingredientId),
-						sql`${stockLots.quantity} > 0`
-					)
-				);
-			let considered = Dec.zero;
-			for (const l of lots) {
-				if (!unitsCompatible(l.unit, input.unit)) continue;
-				considered = considered.add(
-					convertAmount(Dec.from(l.quantity), l.unit, input.unit, 'metric') ?? Dec.zero
-				);
-			}
+		else if (input.subtractPantry && input.ingredientId && amount && unit) {
+			// Shopping: explicit request to consider current stock once, now, by
+			// the same rule as a draft (densities included).
+			const { stock, densities } = await planStock(tx, ctx.householdId, [input.ingredientId]);
+			const plan = planManualLine(
+				{
+					lineId: created.id,
+					ingredientId: input.ingredientId,
+					name,
+					unit,
+					requested: amount,
+					subtractPantry: true
+				},
+				stock,
+				{ densities }
+			);
 			await tx
 				.update(groceryLines)
 				.set({
-					stockConsidered: considered.toDb(),
-					targetAmount: Dec.max(Dec.zero, input.amount.sub(considered)).toDb()
+					stockConsidered: plan.stockConsidered?.toDb() ?? null,
+					targetAmount: plan.suggested?.toDb() ?? null,
+					otherStock: plan.otherStock
 				})
 				.where(eq(groceryLines.id, created.id));
 		}
@@ -859,88 +1016,146 @@ export interface UpdateLineInput {
 }
 
 export async function updateLine(ctx: ActorContext, input: UpdateLineInput) {
-	const name = input.name === undefined ? undefined : cleanLineName(input.name);
-	if (name === '') throw new AppError(400, 'Name the item');
-	if (input.unit && !isUnitId(input.unit)) throw new AppError(400, 'Unknown unit');
+	checkLineInput(input);
 	return withTransaction(async (tx) => {
 		await assertMember(tx, ctx.householdId, ctx.userId);
 		const { pantryRevision } = await lockHousehold(tx, ctx.householdId, { grocery: true });
 		const list = await lockList(tx, ctx.householdId, input.listId);
 		if (list.status === 'completed') throw new AppError(409, 'This trip is completed');
-		const [line] = await tx
-			.select()
-			.from(groceryLines)
-			.where(and(eq(groceryLines.id, input.lineId), eq(groceryLines.listId, input.listId)))
-			.for('update');
-		if (!line) throw notFound('Line not found');
-		if (line.revision !== input.expectedRevision) {
-			throw new ReviewConflict(
-				'This line changed since you loaded it. Check the latest amount before editing.',
-				{
-					line: {
-						id: line.id,
-						revision: line.revision,
-						targetAmount: line.targetAmount,
-						purchasedAmount: line.purchasedAmount
-					}
-				}
-			);
-		}
-		const identityEdit =
-			name !== undefined || input.unit !== undefined || input.ingredientId !== undefined;
-		if (identityEdit && line.kind !== 'manual')
-			throw new AppError(409, 'Only items you added yourself can be renamed or relinked');
-		const unitChanged = input.unit !== undefined && input.unit !== line.unit;
-		const linkChanged =
-			input.ingredientId !== undefined && input.ingredientId !== line.ingredientId;
-		if ((unitChanged || linkChanged) && Dec.from(line.purchasedAmount).isPositive())
-			throw new AppError(
-				409,
-				'Part of this item is already bought; its unit and link stay as they are'
-			);
-		if (input.ingredientId) await assertIngredientsVisible(tx, ctx.userId, [input.ingredientId]);
-		const set: Partial<typeof groceryLines.$inferInsert> = {
-			revision: sql`${groceryLines.revision} + 1` as never,
-			updatedAt: sql`now()` as never
-		};
-		if (name !== undefined) set.name = name;
-		if (input.unit !== undefined) set.unit = input.unit;
-		if (input.ingredientId !== undefined) set.ingredientId = input.ingredientId;
-		// While shopping, stock counted in the old unit or for the old item no longer applies.
-		if ((unitChanged || linkChanged) && list.status !== 'draft') set.stockConsidered = null;
-		if (input.category !== undefined) set.category = input.category.trim().slice(0, 40) || 'Other';
-		if (input.note !== undefined) set.note = input.note.trim().slice(0, 300);
-		if (input.amount !== undefined) {
-			if (input.amount && input.amount.isNegative())
-				throw new AppError(400, 'Amount cannot be negative');
-			if (list.status === 'draft') {
-				if (line.kind !== 'manual')
-					throw new AppError(
-						409,
-						'Recipe amounts are recalculated from the recipes; adjust servings instead'
-					);
-				set.demandAmount = input.amount ? input.amount.toDb() : null;
-				set.targetAmount = input.amount ? input.amount.toDb() : null;
-				set.unresolvedReason = input.amount ? null : 'unknown_amount';
-			} else {
-				// remaining-target edit: total target = credited purchases + new remaining
-				const purchased = Dec.from(line.purchasedAmount);
-				const newTarget = input.amount ? purchased.add(input.amount) : null;
-				set.targetAmount = newTarget ? newTarget.toDb() : null;
-				set.unresolvedReason = newTarget ? null : 'unknown_amount';
-				if (newTarget && line.status === 'purchased' && input.amount!.isPositive())
-					set.status = 'pending';
-				if (newTarget && input.amount!.isZero() && line.status === 'pending')
-					set.status = 'purchased';
-			}
-		}
-		if (input.status !== undefined) set.status = input.status;
-		await tx.update(groceryLines).set(set).where(eq(groceryLines.id, line.id));
-		if (list.status === 'draft' && (input.amount !== undefined || unitChanged || linkChanged))
-			await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
+		const { recalculate } = await applyLineUpdate(tx, ctx, list.status, input);
+		if (recalculate) await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
 		const revision = await bumpList(tx, input.listId);
 		return { listRevision: revision };
 	});
+}
+
+/**
+ * Save the grocery tidy changes the user kept, in one transaction with one
+ * revision bump and at most one recalculation. A line changed since the
+ * proposal is skipped and reported in `conflicts`; any other error saves nothing.
+ */
+export async function applyTidyChanges(
+	ctx: ActorContext,
+	listId: string,
+	changes: Omit<UpdateLineInput, 'listId'>[]
+): Promise<{ applied: number; conflicts: string[] }> {
+	const inputs = changes.map((c) => ({ ...c, listId }));
+	inputs.forEach(checkLineInput);
+	return withTransaction(async (tx) => {
+		await assertMember(tx, ctx.householdId, ctx.userId);
+		const { pantryRevision } = await lockHousehold(tx, ctx.householdId, { grocery: true });
+		const list = await lockList(tx, ctx.householdId, listId);
+		if (list.status === 'completed') throw new AppError(409, 'This trip is completed');
+		const conflicts: string[] = [];
+		let applied = 0;
+		let recalculate = false;
+		for (const input of inputs) {
+			try {
+				// A ReviewConflict is thrown before this line is written, so the transaction stays usable.
+				recalculate =
+					(await applyLineUpdate(tx, ctx, list.status, input)).recalculate || recalculate;
+				applied++;
+			} catch (err) {
+				if (err instanceof ReviewConflict) conflicts.push(input.lineId);
+				else throw err;
+			}
+		}
+		if (recalculate) await recalculateDraft(tx, ctx.householdId, listId, pantryRevision);
+		if (applied) await bumpList(tx, listId);
+		return { applied, conflicts };
+	});
+}
+
+/** The checks on an `UpdateLineInput` that need no database. */
+function checkLineInput(input: UpdateLineInput) {
+	if (input.name !== undefined && cleanText(input.name, GROCERY_LINE_NAME_MAX) === '')
+		throw new AppError(400, 'Name the item');
+	if (input.unit && !isUnitId(input.unit)) throw new AppError(400, 'Unknown unit');
+}
+
+/**
+ * Write one line edit inside a transaction that holds the household and list
+ * locks. Returns whether the draft needs a recalculation.
+ */
+async function applyLineUpdate(
+	tx: Tx,
+	ctx: ActorContext,
+	listStatus: ListStatus,
+	input: UpdateLineInput
+): Promise<{ recalculate: boolean }> {
+	const name = input.name === undefined ? undefined : cleanText(input.name, GROCERY_LINE_NAME_MAX);
+	const [line] = await tx
+		.select()
+		.from(groceryLines)
+		.where(and(eq(groceryLines.id, input.lineId), eq(groceryLines.listId, input.listId)))
+		.for('update');
+	if (!line) throw notFound('Line not found');
+	if (line.revision !== input.expectedRevision) {
+		throw new ReviewConflict(
+			'This line changed since you loaded it. Check the latest amount before editing.',
+			{
+				line: {
+					id: line.id,
+					revision: line.revision,
+					targetAmount: line.targetAmount,
+					purchasedAmount: line.purchasedAmount
+				}
+			}
+		);
+	}
+	const identityEdit =
+		name !== undefined || input.unit !== undefined || input.ingredientId !== undefined;
+	if (identityEdit && line.kind !== 'manual')
+		throw new AppError(409, 'Only items you added yourself can be renamed or relinked');
+	const unitChanged = input.unit !== undefined && input.unit !== line.unit;
+	const linkChanged = input.ingredientId !== undefined && input.ingredientId !== line.ingredientId;
+	if ((unitChanged || linkChanged) && Dec.from(line.purchasedAmount).isPositive())
+		throw new AppError(
+			409,
+			'Part of this item is already bought; its unit and link stay as they are'
+		);
+	if (input.ingredientId) await assertIngredientsVisible(tx, ctx.userId, [input.ingredientId]);
+	const set: Partial<typeof groceryLines.$inferInsert> = {
+		revision: sql`${groceryLines.revision} + 1` as never,
+		updatedAt: sql`now()` as never
+	};
+	if (name !== undefined) set.name = name;
+	if (input.unit !== undefined) set.unit = input.unit;
+	if (input.ingredientId !== undefined) set.ingredientId = input.ingredientId;
+	// While shopping, stock counted in the old unit or for the old item no longer applies.
+	if ((unitChanged || linkChanged) && listStatus !== 'draft') set.stockConsidered = null;
+	if (input.category !== undefined) set.category = input.category.trim().slice(0, 40) || 'Other';
+	if (input.note !== undefined) set.note = input.note.trim().slice(0, NOTE_MAX_CHARS);
+	if (input.amount !== undefined) {
+		if (input.amount && input.amount.isNegative())
+			throw new AppError(400, 'Amount cannot be negative');
+		if (listStatus === 'draft') {
+			if (line.kind !== 'manual')
+				throw new AppError(
+					409,
+					'Recipe amounts are recalculated from the recipes; adjust servings instead'
+				);
+			set.demandAmount = input.amount ? input.amount.toDb() : null;
+			set.targetAmount = input.amount ? input.amount.toDb() : null;
+			set.unresolvedReason = input.amount ? null : 'unknown_amount';
+		} else {
+			// remaining-target edit: total target = credited purchases + new remaining
+			const purchased = Dec.from(line.purchasedAmount);
+			const newTarget = input.amount ? purchased.add(input.amount) : null;
+			set.targetAmount = newTarget ? newTarget.toDb() : null;
+			set.unresolvedReason = newTarget ? null : 'unknown_amount';
+			if (newTarget && line.status === 'purchased' && input.amount!.isPositive())
+				set.status = 'pending';
+			if (newTarget && input.amount!.isZero() && line.status === 'pending')
+				set.status = 'purchased';
+		}
+	}
+	if (input.status !== undefined) set.status = input.status;
+	await tx.update(groceryLines).set(set).where(eq(groceryLines.id, line.id));
+	return {
+		recalculate:
+			listStatus === 'draft' && (input.amount !== undefined || unitChanged || linkChanged)
+	};
 }
 
 export async function removeLine(ctx: ActorContext, input: { listId: string; lineId: string }) {
@@ -980,8 +1195,7 @@ export async function startShopping(
 	input: { listId: string; expectedRevision: number }
 ) {
 	type Outcome =
-		| { ok: true; revision: number }
-		| { ok: false; message: string; review: Record<string, unknown> };
+		{ ok: true; revision: number } | { ok: false; message: string; review: ReviewDetail };
 	const outcome = await withTransaction<Outcome>(async (tx) => {
 		await assertMember(tx, ctx.householdId, ctx.userId);
 		const { pantryRevision } = await lockHousehold(tx, ctx.householdId, { grocery: true });
@@ -1072,19 +1286,7 @@ async function refreshBatchFromRecipe(tx: Tx, batchId: string, recipeId: string)
 		.from(recipes)
 		.where(eq(recipes.id, recipeId));
 	if (!full || full.status !== 'active' || !full.baseServings) return;
-	const reqs = await tx
-		.select({
-			position: recipeIngredients.position,
-			ingredientId: recipeIngredients.ingredientId,
-			name: recipeIngredients.name,
-			amount: recipeIngredients.amount,
-			unit: recipeIngredients.unit,
-			preparation: recipeIngredients.preparation,
-			optional: recipeIngredients.optional
-		})
-		.from(recipeIngredients)
-		.where(eq(recipeIngredients.recipeId, recipeId))
-		.orderBy(asc(recipeIngredients.position));
+	const reqs = await recipeRequirements(tx, recipeId);
 	const previous = await tx
 		.select({
 			position: groceryBatchRequirements.position,
@@ -1094,21 +1296,7 @@ async function refreshBatchFromRecipe(tx: Tx, batchId: string, recipeId: string)
 		.where(eq(groceryBatchRequirements.batchId, batchId));
 	const includeByPos = new Map(previous.map((p) => [p.position, p.include]));
 	await tx.delete(groceryBatchRequirements).where(eq(groceryBatchRequirements.batchId, batchId));
-	if (reqs.length) {
-		await tx.insert(groceryBatchRequirements).values(
-			reqs.map((r) => ({
-				batchId,
-				position: r.position,
-				ingredientId: r.ingredientId,
-				name: r.name,
-				baseAmount: r.amount,
-				unit: r.unit,
-				preparation: r.preparation,
-				optional: r.optional,
-				include: r.optional ? (includeByPos.get(r.position) ?? false) : true
-			}))
-		);
-	}
+	await insertRequirements(tx, batchId, reqs, (position) => includeByPos.get(position) ?? false);
 	await tx
 		.update(groceryBatches)
 		.set({
@@ -1202,8 +1390,7 @@ export async function recordPurchase(ctx: ActorContext, input: PurchaseInput) {
 			throw new AppError(400, 'Enter the amount you actually bought');
 		if (!isUnitId(input.bought.unit)) throw new AppError(400, 'Unknown unit');
 	}
-	if (input.expiresOn && !/^\d{4}-\d{2}-\d{2}$/.test(input.expiresOn))
-		throw new AppError(400, 'Use a calendar date');
+	const expiresOn = validateDate(input.expiresOn);
 	const payload = {
 		...input,
 		bought: input.bought
@@ -1300,7 +1487,7 @@ export async function recordPurchase(ctx: ActorContext, input: PurchaseInput) {
 					credited: credited?.toString() ?? null,
 					lineUnit: line.unit,
 					location: input.location,
-					expiresOn: input.expiresOn
+					expiresOn
 				}
 			});
 			const lotId = await createLot(tx, {
@@ -1309,9 +1496,9 @@ export async function recordPurchase(ctx: ActorContext, input: PurchaseInput) {
 				ingredientId,
 				quantity: input.bought.quantity,
 				unit: input.bought.unit,
-				location: input.location.trim().slice(0, 60),
-				expiresOn: input.expiresOn,
-				note: input.note.trim().slice(0, 300)
+				location: input.location.trim().slice(0, LOCATION_MAX_CHARS),
+				expiresOn,
+				note: input.note.trim().slice(0, NOTE_MAX_CHARS)
 			});
 			await tx
 				.insert(purchaseAllocations)

@@ -61,8 +61,3 @@ export async function decodeFrame(image: ImageData): Promise<DecodedCode | null>
 	}
 	return null;
 }
-
-/** Forget the loaded module. Used by tests only. */
-export function resetDecoder(): void {
-	loading = null;
-}

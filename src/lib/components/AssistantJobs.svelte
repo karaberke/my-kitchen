@@ -8,9 +8,9 @@
 </script>
 
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
+	import { createPoller } from '$lib/client/poller';
 	import { assistantJobs, dismissAssistantJob } from '$lib/remote/recipes.remote';
 
 	type Jobs = Awaited<ReturnType<typeof dismissAssistantJob>>['jobs'];
@@ -40,46 +40,16 @@
 	// A new layout load (for example after an import starts) hands over fresh data.
 	$effect(() => adopt(initial));
 
-	let failures = 0;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	/** Bumped by each check and on cleanup, so an answer that arrives late is dropped. */
-	let latest = 0;
-
-	async function check() {
-		clearTimeout(timer);
-		if (!running) return;
-		if (document.hidden || !navigator.onLine) return schedule();
-		const mine = ++latest;
-		try {
-			const answer = await fetchFresh(assistantJobs());
-			if (mine !== latest) return;
-			failures = 0;
-			adopt(answer.jobs);
-		} catch {
-			if (mine !== latest) return;
-			failures++;
-		}
-		schedule();
-	}
-	function schedule() {
-		clearTimeout(timer);
-		if (!running) return;
-		timer = setTimeout(check, ASSISTANT_POLL_MS * (1 + Math.min(5, failures)));
-	}
+	const poller = createPoller({
+		intervalMs: () => ASSISTANT_POLL_MS,
+		poll: () => fetchFresh(assistantJobs()),
+		apply: (answer) => adopt(answer.jobs),
+		enabled: () => running
+	});
 	// Polls only while a job runs; the timer stops as soon as none does.
 	$effect(() => {
-		if (running) schedule();
-		return () => {
-			clearTimeout(timer);
-			latest++;
-		};
-	});
-	function onVisible() {
-		if (!document.hidden && running) check();
-	}
-	onMount(() => () => {
-		clearTimeout(timer);
-		latest++;
+		if (running) poller.start();
+		return () => poller.stop();
 	});
 
 	async function dismiss(id: string) {
@@ -93,9 +63,6 @@
 		}
 	}
 </script>
-
-<svelte:document onvisibilitychange={onVisible} />
-<svelte:window ononline={onVisible} onfocus={onVisible} />
 
 {#if jobs.length}
 	<!-- Top of the screen: the bottom is taken by the tab bar, the sticky save bar and the toasts. -->

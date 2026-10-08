@@ -1,5 +1,7 @@
 import type { RecipeFormInput, RecipeStepInput } from './recipe-input';
-import { emptyRecipeFormInput, splitIngredientLine } from './recipe-html';
+import { emptyRecipeFormInput } from './recipe-html';
+import { ingredientFromSplit, splitIngredientLine, type SplitIngredient } from './ingredient-line';
+import { collapseSpaces } from './text';
 
 /**
  * Best-effort reading of a recipe out of plain text — the shape you get from a
@@ -39,18 +41,26 @@ export interface TextImportResult {
 interface Line {
 	text: string;
 	page: number;
+	/** `splitIngredientLine(text)`, kept until `text` changes */
+	split?: SplitIngredient;
+}
+
+function splitOf(line: Line): SplitIngredient {
+	line.split ??= splitIngredientLine(line.text);
+	return line.split;
 }
 
 const NUMBERED = /^\d+[.)]\s+/;
 
 /** A line that plainly begins something new, so the one before it is finished. */
-function startsNewItem(text: string): boolean {
+function startsNewItem(line: Line): boolean {
+	const { text } = line;
 	return (
 		NUMBERED.test(text) ||
 		INGREDIENT_HEADING.test(text) ||
 		STEP_HEADING.test(text) ||
 		OTHER_HEADING.test(text) ||
-		!!splitIngredientLine(text).amount
+		!!splitOf(line).amount
 	);
 }
 
@@ -69,9 +79,10 @@ function joinWrapped(lines: Line[]): Line[] {
 			// short one is a title or a label that simply has no full stop.
 			prev.text.length >= 45 &&
 			!/[.!?:;]$/.test(prev.text) &&
-			!startsNewItem(line.text);
+			!startsNewItem(line);
 		if (wrapped) {
 			prev.text = `${prev.text} ${line.text}`;
+			prev.split = undefined;
 			continue;
 		}
 		out.push({ ...line });
@@ -84,7 +95,7 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 	const raw: Line[] = [];
 	pages.forEach((page, i) => {
 		for (const line of page.split('\n')) {
-			const text = line.replace(/\s+/g, ' ').trim();
+			const text = collapseSpaces(line);
 			if (text) raw.push({ text, page: i + 1 });
 		}
 	});
@@ -139,7 +150,7 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 		}
 		if (section === 'other') return;
 
-		const split = splitIngredientLine(text);
+		const split = splitOf(line);
 		const looksLikeIngredient = !!split.amount;
 		const inIngredients = section === 'ingredients';
 		const inSteps = section === 'steps';
@@ -150,16 +161,7 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 			return;
 		}
 		if (inIngredients || looksLikeIngredient) {
-			input.ingredients.push({
-				name: split.name,
-				ingredientId: null,
-				amount: split.amount,
-				unit: split.unit,
-				preparation: split.name === split.original ? '' : split.original,
-				group: '',
-				optional: false,
-				createIdentity: false
-			});
+			input.ingredients.push(ingredientFromSplit(split));
 			ingredientPages.push(line.page);
 			return;
 		}

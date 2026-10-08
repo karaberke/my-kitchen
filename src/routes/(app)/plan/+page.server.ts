@@ -2,12 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import {
-	assertMember,
-	householdActor,
-	loadHouseholdOrThrow,
-	requireHousehold
-} from '$lib/server/access';
+import { householdActor, memberHousehold, requireHousehold, revisionsOf } from '$lib/server/access';
 import {
 	addPlanEntry,
 	getWeekPlan,
@@ -21,12 +16,11 @@ import { todayIso } from '$lib/server/pantry';
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
 	event.depends('app:plan');
-	await assertMember(db, household.id, user.id);
+	const h = await memberHousehold(db, household.id, user.id);
 	const today = todayIso();
 	const start = mondayOf(today);
-	const [days, h, recipes] = await Promise.all([
+	const [days, recipes] = await Promise.all([
 		getWeekPlan(db, household.id, start),
-		loadHouseholdOrThrow(db, household.id),
 		// The picker in the "Add meal" sheet: the user's own and shared recipes.
 		listRecipeOptions(db, user.id)
 	]);
@@ -36,7 +30,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		start,
 		days,
 		recipes,
-		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision }
+		revisions: revisionsOf(h)
 	};
 };
 

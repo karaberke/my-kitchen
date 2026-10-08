@@ -3,19 +3,6 @@
  * name) so the data migration is reproducible. gramsPerMl is an explicit
  * density that enables volume<->mass conversions for that ingredient only.
  */
-export const CATEGORIES = [
-	'Produce',
-	'Meat & fish',
-	'Dairy & eggs',
-	'Bakery',
-	'Pantry',
-	'Spices',
-	'Frozen',
-	'Beverages',
-	'Household',
-	'Other'
-];
-
 // [name, category, gramsPerMl?, aliases[]]
 export const CATALOG = [
 	['onion', 'Produce', null, ['yellow onion', 'brown onion']],

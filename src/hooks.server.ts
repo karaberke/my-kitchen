@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { auth } from '$lib/server/auth';
 import { db } from '$lib/server/db';
-import { listMemberships } from '$lib/server/households';
+import { sessionMemberships } from '$lib/server/households';
 import { resolveActiveHousehold } from '$lib/server/access';
 import { applyResponsePolicy } from '$lib/server/http';
 import { ensureAdminAccount } from '$lib/server/bootstrap';
@@ -77,11 +77,13 @@ const handleSession: Handle = async ({ event, resolve }) => {
 		if (result) {
 			event.locals.session = result.session;
 			event.locals.user = result.user;
-			event.locals.memberships = await listMemberships(db, result.user.id);
+			const { memberships, preferredHouseholdId } = await sessionMemberships(db, result.user.id);
+			event.locals.memberships = memberships;
 			event.locals.household = await resolveActiveHousehold(
 				db,
 				result.user.id,
-				event.locals.memberships
+				memberships,
+				preferredHouseholdId
 			);
 		}
 	}

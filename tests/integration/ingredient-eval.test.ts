@@ -3,7 +3,7 @@ import { db } from '$lib/server/db';
 import { catalogIngredientId, createUser, resetDb } from './helpers';
 import { resolveIngredientName, proposeFromProductTitle } from '$lib/server/ingredient-match';
 import { createCustomIngredient, searchIngredients } from '$lib/server/ingredients';
-import { RESOLVE_CASES, SCAN_CASES, DROPDOWN_CASES } from '$lib/shared/ingredient-match-cases';
+import { RESOLVE_CASES, SCAN_CASES, DROPDOWN_CASES } from './ingredient-match-cases';
 
 describe('ingredient evaluation set', () => {
 	beforeEach(resetDb);

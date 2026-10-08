@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/recipe-input';
+	import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/assistant-limits';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -8,6 +8,7 @@
 	import IngredientLinkRow from '$lib/components/IngredientLinkRow.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { remoteErrorMessage } from '$lib/client/remote';
+	import { collapseSpaces } from '$lib/shared/text';
 	import { assistantIngredientMatch } from '$lib/remote/ingredients.remote';
 	import type { IngredientSuggestion } from '$lib/server/ingredients';
 
@@ -22,7 +23,6 @@
 	);
 
 	// Assistant suggestions, by group key. They only prefill rows; the Link button decides.
-	const cleanName = (name: string) => name.trim().replace(/\s+/g, ' ');
 	let asked = $state<Record<string, boolean>>({});
 	let suggestions = $state<Record<string, IngredientSuggestion>>({});
 	let suggesting = $state(false);
@@ -37,12 +37,12 @@
 		suggestNote = null;
 		try {
 			const { picks } = await assistantIngredientMatch({
-				names: batch.map((g) => cleanName(g.name))
+				names: batch.map((g) => collapseSpaces(g.name))
 			});
 			let found = 0;
 			for (const g of batch) {
 				asked[g.key] = true;
-				const pick = picks[cleanName(g.name)];
+				const pick = picks[collapseSpaces(g.name)];
 				if (pick) {
 					suggestions[g.key] = pick;
 					found++;

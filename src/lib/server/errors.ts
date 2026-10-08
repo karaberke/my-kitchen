@@ -12,11 +12,41 @@ export class AppError extends Error {
 	}
 }
 
+/**
+ * What a review conflict tells the client; each conflict fills the fields it
+ * has. One shape for all of them, so a page reads `form.review` from its typed
+ * `ActionData` without a cast.
+ */
+export interface ReviewDetail {
+	reason?: 'list_revision' | 'pantry_changed' | 'recipe_changed' | 'consumed';
+	/** the list revision to retry with */
+	revision?: number;
+	/** the recipe revision now stored */
+	currentRevision?: number;
+	changedRecipes?: string[];
+	/** a pantry lot as it is now */
+	lot?: { id: string; quantity: string; unit: string; revision: number };
+	/** a grocery line as it is now */
+	line?: { id: string; revision: number; targetAmount: string | null; purchasedAmount: string };
+	/** cooking: lots that changed since the preview */
+	stale?: { lotId: string; currentRevision: number; quantity: string; unit: string }[];
+	/** cooking: lots that no longer hold what the cook asked for */
+	insufficient?: { lotId: string; requested: string; available: string; unit: string }[];
+	/** undo: lots that no longer hold what the undo must take back */
+	conflicts?: {
+		lotId: string;
+		ingredientName: string;
+		needed: string;
+		available: string;
+		unit: string;
+	}[];
+}
+
 /** Review conflict: the client must look at fresh data before retrying. */
-export class ReviewConflict<T = unknown> extends AppError {
+export class ReviewConflict extends AppError {
 	constructor(
 		message: string,
-		public readonly review: T
+		public readonly review: ReviewDetail
 	) {
 		super(409, message, { review: true });
 		this.name = 'ReviewConflict';
@@ -44,7 +74,7 @@ export function pgError(err: unknown): postgres.PostgresError | null {
 	return cause instanceof postgres.PostgresError ? cause : null;
 }
 
-export function pgErrorCode(err: unknown): string | null {
+function pgErrorCode(err: unknown): string | null {
 	return pgError(err)?.code ?? null;
 }
 

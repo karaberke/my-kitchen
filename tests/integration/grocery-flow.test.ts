@@ -465,4 +465,110 @@ describe('grocery planning, shopping and purchases', () => {
 		});
 		expect(bought.result.remaining).toBe('0');
 	});
+
+	it('is a 400 for a purchase with a best-before date that does not exist, and stores nothing', async () => {
+		const alice = await createUser('Alice');
+		const roast = await makeChickenRecipe(alice, 'Roast', '500');
+		const listId = await createList(alice.ctx, 'Weekly');
+		await addBatch(alice.ctx, {
+			listId,
+			recipeId: roast,
+			servings: d(4),
+			clientKey: 'k1',
+			includeOptional: []
+		});
+		let detail = await getListDetail(db, alice.householdId, listId);
+		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
+		detail = await getListDetail(db, alice.householdId, listId);
+
+		await expect(
+			recordPurchase(alice.ctx, {
+				operationId: opId(),
+				listId,
+				lineId: detail.lines[0].id,
+				bought: { quantity: d(500), unit: 'g' },
+				ingredientId: null,
+				newIngredientName: null,
+				location: 'Fridge',
+				expiresOn: '2026-02-31',
+				note: ''
+			})
+		).rejects.toMatchObject({ status: 400 });
+		expect(await chickenStock(alice.householdId)).toBe('0');
+	});
+
+	it('subtracts stock in another dimension through the density for a line added while shopping', async () => {
+		const alice = await createUser('Alice');
+		const milk = await catalogIngredientId('milk'); // 1.03 g per ml
+		await addStock(alice.ctx, {
+			operationId: opId(),
+			ingredientId: milk,
+			newIngredientName: null,
+			quantity: d(1000),
+			unit: 'ml',
+			location: '',
+			expiresOn: null,
+			note: ''
+		});
+		const listId = await createList(alice.ctx, 'Shopping');
+		await addManualLine(alice.ctx, {
+			listId,
+			name: 'paper towels',
+			ingredientId: null,
+			amount: null,
+			unit: null,
+			category: '',
+			subtractPantry: false,
+			note: ''
+		});
+		const draft = await getListDetail(db, alice.householdId, listId);
+		await startShopping(alice.ctx, { listId, expectedRevision: draft.revision });
+
+		const { lineId } = await addManualLine(alice.ctx, {
+			listId,
+			name: 'milk',
+			ingredientId: milk,
+			amount: d(2000),
+			unit: 'g',
+			category: '',
+			subtractPantry: true,
+			note: ''
+		});
+		const line = (await getListDetail(db, alice.householdId, listId)).lines.find(
+			(l) => l.id === lineId
+		)!;
+		expect(line.stockConsidered).toBe('1030');
+		expect(line.targetAmount).toBe('970');
+		expect(line.otherStock).toEqual([]);
+	});
+
+	it('reads "400 g rice" typed into the name only when the caller asks for it', async () => {
+		const alice = await createUser('Alice');
+		const listId = await createList(alice.ctx, 'Typed');
+		const add = (readTypedName: boolean) =>
+			addManualLine(alice.ctx, {
+				listId,
+				name: '400 g rice',
+				ingredientId: null,
+				amount: null,
+				unit: null,
+				category: '',
+				subtractPantry: false,
+				note: '',
+				readTypedName
+			});
+		const typed = await add(true);
+		const kept = await add(false);
+		const lines = (await getListDetail(db, alice.householdId, listId)).lines;
+		expect(lines.find((l) => l.id === typed.lineId)).toMatchObject({
+			name: 'rice',
+			unit: 'g',
+			demandAmount: '400'
+		});
+		expect(lines.find((l) => l.id === kept.lineId)).toMatchObject({
+			name: '400 g rice',
+			unit: null,
+			demandAmount: null
+		});
+	});
 });

@@ -15,9 +15,9 @@
 	import {
 		LLM_CHAT_ANSWER_MAX_CHARS,
 		LLM_CHAT_MAX_TURNS,
-		LLM_QUESTION_MAX_CHARS,
-		type RecipeChatTurn
-	} from '$lib/shared/recipe-input';
+		LLM_QUESTION_MAX_CHARS
+	} from '$lib/shared/assistant-limits';
+	import type { RecipeChatTurn } from '$lib/shared/recipe-input';
 
 	/**
 	 * Chat with the assistant about one recipe. With `storageKey` the turns live in

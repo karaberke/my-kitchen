@@ -18,10 +18,17 @@
 
 import { z } from 'zod';
 import { Dec } from '$lib/shared/decimal';
-import { normalizeUnitInput, unitInfo } from '$lib/shared/units';
+import { normalizeUnitInput } from '$lib/shared/units';
 import { providerGtin, type BarcodeIdentity } from '$lib/shared/gtin';
-import { fetchJson, type FetchImpl } from './http';
-import type { NutritionBasis, ProductNutrient, ProviderAdapter, ProviderResult } from './types';
+import type { FetchImpl } from '$lib/server/fetch-capped';
+import { failedLookup, fetchJson } from './http';
+import {
+	nutritionBasisOf,
+	type NutritionBasis,
+	type ProductNutrient,
+	type ProviderAdapter,
+	type ProviderResult
+} from './types';
 
 const TIMEOUT_MS = 4000;
 const MAX_BYTES = 1_000_000;
@@ -63,15 +70,6 @@ function isoDate(raw: string | undefined): string | null {
 	if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
 	const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw.trim());
 	if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
-	return null;
-}
-
-/** The 100-unit basis USDA converted to, or null when it cannot be told. */
-function basisOf(servingSizeUnit: string | undefined): NutritionBasis | null {
-	const unit = servingSizeUnit ? normalizeUnitInput(servingSizeUnit) : null;
-	const dimension = unitInfo(unit)?.dimension;
-	if (dimension === 'mass') return 'per_100g';
-	if (dimension === 'volume') return 'per_100ml';
 	return null;
 }
 
@@ -134,13 +132,7 @@ export function usdaAdapter(config: UsdaConfig, fetchImpl?: FetchImpl): Provider
 				fetchImpl
 			});
 
-			if (!res.ok) {
-				if (res.kind === 'status' && (res.status === 429 || res.status === 403))
-					return { status: 'rate_limited', retryAfterSeconds: res.retryAfterSeconds };
-				// The key is in the query string, so nothing about the request is
-				// reported back; only the kind of failure.
-				return { status: 'unavailable', reason: `USDA ${res.kind}` };
-			}
+			if (!res.ok) return failedLookup(res, 'USDA');
 
 			const parsed = searchSchema.safeParse(res.body);
 			if (!parsed.success)
@@ -155,7 +147,7 @@ export function usdaAdapter(config: UsdaConfig, fetchImpl?: FetchImpl): Provider
 			if (matches.length === 0) return { status: 'missing' };
 
 			const food = matches.sort(newest)[0];
-			const basis = basisOf(food.servingSizeUnit);
+			const basis = nutritionBasisOf(food.servingSizeUnit);
 			const servingUnit = food.servingSizeUnit ? normalizeUnitInput(food.servingSizeUnit) : null;
 
 			return {

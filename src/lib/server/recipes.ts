@@ -3,6 +3,7 @@ import { db, type DbOrTx, type Tx } from '$lib/server/db';
 import {
 	householdMembers,
 	images,
+	ingredients as catalogIngredients,
 	recipeFavorites,
 	recipeIngredients,
 	recipeShares,
@@ -21,8 +22,8 @@ import { Dec } from '$lib/shared/decimal';
 import { UNITS, convertAmount, unitsCompatible, type Convention } from '$lib/shared/units';
 import { ingredientLine } from '$lib/shared/ingredient-line';
 import { scaleAmount } from '$lib/shared/scaling';
-import { scaledStepLine } from '$lib/shared/step-amounts';
-import type { ValidRecipe } from '$lib/shared/recipe-input';
+import { prepareStepIngredients, scaledStepLine } from '$lib/shared/step-amounts';
+import type { RecipeFormInput, ValidRecipe } from '$lib/shared/recipe-input';
 import { withTransaction } from '$lib/server/operations';
 import { CATEGORIES_PER_HOUSEHOLD_MAX } from '$lib/server/recipe-categories';
 import { match as isUuid } from '../../params/uuid';
@@ -282,6 +283,39 @@ export interface RecipeDetail {
 	cookable: boolean;
 }
 
+/** A stored recipe as the edit form's input, ready to save back unchanged. */
+export function recipeToFormInput(recipe: RecipeDetail): RecipeFormInput {
+	return {
+		title: recipe.title,
+		description: recipe.description,
+		baseServings: recipe.baseServings ? Dec.from(recipe.baseServings).toHuman() : '',
+		yieldNote: recipe.yieldNote,
+		prepMinutes: recipe.prepMinutes?.toString() ?? '',
+		cookMinutes: recipe.cookMinutes?.toString() ?? '',
+		source: recipe.source,
+		notes: recipe.notes,
+		tags: recipe.tags.join(', '),
+		convention: recipe.convention,
+		ingredients: recipe.ingredients.map((i) => ({
+			name: i.name,
+			ingredientId: i.ingredientId,
+			amount: i.amount ? Dec.from(i.amount).toString() : '',
+			unit: i.unit ?? '',
+			preparation: i.preparation,
+			group: i.groupName,
+			optional: i.optional,
+			createIdentity: false
+		})),
+		steps: recipe.steps.map((s) => ({ section: s.sectionTitle, text: s.text })),
+		intent: 'save',
+		expectedRevision: recipe.revision,
+		removeImage: false,
+		// Always empty: the picture the recipe has is shown as a picture, not as a
+		// link, and a link left here would be downloaded again on every save.
+		imageUrl: ''
+	};
+}
+
 export async function getRecipeDetail(
 	dbx: DbOrTx,
 	userId: string,
@@ -324,7 +358,7 @@ export async function getRecipeDetail(
 	if (!row) throw notFound('Recipe not found');
 	const isOwner = row.ownerUserId === userId;
 
-	const [ingRows, stepRows, favRows, shareRows] = await Promise.all([
+	const [ingRows, stepRows, favRows, shareRows, lots] = await Promise.all([
 		dbx
 			.select({
 				id: recipeIngredients.id,
@@ -335,9 +369,12 @@ export async function getRecipeDetail(
 				amount: recipeIngredients.amount,
 				unit: recipeIngredients.unit,
 				preparation: recipeIngredients.preparation,
-				optional: recipeIngredients.optional
+				optional: recipeIngredients.optional,
+				category: catalogIngredients.category,
+				gramsPerMl: catalogIngredients.gramsPerMl
 			})
 			.from(recipeIngredients)
+			.leftJoin(catalogIngredients, eq(catalogIngredients.id, recipeIngredients.ingredientId))
 			.where(eq(recipeIngredients.recipeId, recipeId))
 			.orderBy(asc(recipeIngredients.position)),
 		dbx
@@ -371,13 +408,9 @@ export async function getRecipeDetail(
 					.where(eq(householdMembers.userId, userId))
 			: Promise.resolve(
 					[] as { householdId: string; name: string; shared: boolean; memberCount: number }[]
-				)
-	]);
-
-	const ingredientIds = ingRows.map((r) => r.ingredientId).filter((x): x is string => !!x);
-	const [meta, lots] = await Promise.all([
-		getIngredientMeta(dbx, ingredientIds),
-		householdId && ingredientIds.length
+				),
+		// The household's stock of this recipe's ingredients, in the same round trip.
+		householdId
 			? dbx
 					.select({
 						ingredientId: stockLots.ingredientId,
@@ -388,26 +421,36 @@ export async function getRecipeDetail(
 					.where(
 						and(
 							eq(stockLots.householdId, householdId),
-							inArray(stockLots.ingredientId, ingredientIds),
+							inArray(
+								stockLots.ingredientId,
+								dbx
+									.select({ id: recipeIngredients.ingredientId })
+									.from(recipeIngredients)
+									.where(eq(recipeIngredients.recipeId, recipeId))
+							),
 							sql`${stockLots.quantity} > 0`
 						)
 					)
 			: Promise.resolve([] as { ingredientId: string; quantity: string; unit: string }[])
 	]);
+	const lotsByIngredient = new Map<string, typeof lots>();
+	for (const lot of lots) {
+		const held = lotsByIngredient.get(lot.ingredientId);
+		if (held) held.push(lot);
+		else lotsByIngredient.set(lot.ingredientId, [lot]);
+	}
 
 	const convention: Convention = row.convention === 'us' ? 'us' : 'metric';
 	const ingredients: RecipeIngredientView[] = ingRows.map((r) => {
-		const m = r.ingredientId ? meta.get(r.ingredientId) : undefined;
 		let stockAvailable: string | null = null;
 		const stockOther: { quantity: string; unit: string }[] = [];
 		if (r.ingredientId) {
 			let sum = Dec.zero;
 			let any = false;
-			for (const lot of lots) {
-				if (lot.ingredientId !== r.ingredientId) continue;
+			for (const lot of lotsByIngredient.get(r.ingredientId) ?? []) {
 				const q = Dec.from(lot.quantity);
 				if (r.unit) {
-					const density = m?.gramsPerMl ? Dec.from(m.gramsPerMl) : null;
+					const density = r.gramsPerMl ? Dec.from(r.gramsPerMl) : null;
 					const conv = unitsCompatible(lot.unit, r.unit)
 						? convertAmount(q, lot.unit, r.unit, convention)
 						: convertAmount(q, lot.unit, r.unit, convention, { gramsPerMl: density });
@@ -431,7 +474,7 @@ export async function getRecipeDetail(
 			unit: r.unit,
 			preparation: r.preparation,
 			optional: r.optional,
-			ingredientCategory: m?.category ?? null,
+			ingredientCategory: r.category,
 			stockAvailable,
 			stockOther
 		};
@@ -888,7 +931,67 @@ export async function exportRecipes(
 	};
 }
 
-/** Plain printable text for one recipe. */
+/** A recipe ready to print as plain text: every amount is already the text to show. */
+interface PlainRecipe {
+	title: string;
+	description: string;
+	/** The servings to show, or empty when the recipe has none. */
+	servings: string;
+	yieldNote: string;
+	prepMinutes: string;
+	cookMinutes: string;
+	ingredients: {
+		quantity: string;
+		name: string;
+		preparation: string;
+		group: string;
+		optional: boolean;
+	}[];
+	steps: { section: string; text: string }[];
+	notes: string;
+	source: string;
+	sourceAttribution: string;
+}
+
+/** The text of a `PlainRecipe`, with the title in capitals as a printed heading. */
+function renderPlainRecipe(r: PlainRecipe): string {
+	const lines: string[] = [r.title.toUpperCase(), ''];
+	if (r.description) lines.push(r.description, '');
+	const meta: string[] = [];
+	if (r.servings) meta.push(`Serves ${r.servings}${r.yieldNote ? ` (${r.yieldNote})` : ''}`);
+	else if (r.yieldNote) meta.push(`Makes ${r.yieldNote}`);
+	if (r.prepMinutes) meta.push(`Prep ${r.prepMinutes} min`);
+	if (r.cookMinutes) meta.push(`Cook ${r.cookMinutes} min`);
+	if (meta.length) lines.push(meta.join(' · '), '');
+	lines.push('INGREDIENTS');
+	let group = '';
+	for (const i of r.ingredients) {
+		if (i.group && i.group !== group) {
+			group = i.group;
+			lines.push(`  ${group}:`);
+		}
+		const line = ingredientLine({
+			quantity: i.quantity,
+			name: i.name,
+			preparation: i.preparation
+		});
+		lines.push(`  - ${line}${i.optional ? ' (optional)' : ''}`);
+	}
+	lines.push('', 'STEPS');
+	let section = '';
+	r.steps.forEach((s, idx) => {
+		if (s.section && s.section !== section) {
+			section = s.section;
+			lines.push(`  ${section}:`);
+		}
+		lines.push(`  ${idx + 1}. ${s.text}`);
+	});
+	if (r.notes) lines.push('', 'NOTES', r.notes);
+	if (r.source) lines.push('', `Source: ${r.source}`);
+	if (r.sourceAttribution) lines.push(r.sourceAttribution);
+	return lines.join('\n') + '\n';
+}
+
 /**
  * The recipe as plain text. With `servings` (positive) and a recipe that has
  * base servings, the amounts are scaled in code to those servings and the text
@@ -897,39 +1000,35 @@ export async function exportRecipes(
 export function recipeToPlainText(r: RecipeDetail, servings?: Dec): string {
 	const base = r.baseServings ? Dec.from(r.baseServings) : null;
 	const target = base?.isPositive() && servings?.isPositive() ? servings : null;
-	const lines: string[] = [r.title.toUpperCase(), ''];
-	if (r.description) lines.push(r.description, '');
-	const meta: string[] = [];
-	if (base)
-		meta.push(`Serves ${(target ?? base).toHuman()}${r.yieldNote ? ` (${r.yieldNote})` : ''}`);
-	if (r.prepMinutes) meta.push(`Prep ${r.prepMinutes} min`);
-	if (r.cookMinutes) meta.push(`Cook ${r.cookMinutes} min`);
-	if (meta.length) lines.push(meta.join(' · '), '');
-	lines.push('INGREDIENTS');
-	let group = '';
-	for (const i of r.ingredients) {
-		if (i.groupName && i.groupName !== group) {
-			group = i.groupName;
-			lines.push(`  ${group}:`);
-		}
-		const amount = i.amount ? Dec.from(i.amount) : null;
-		const shown = base && target ? scaleAmount(amount, base, target) : amount;
-		const amt = shown ? `${shown.toHuman()}${i.unit ? ' ' + i.unit : ''}` : '';
-		const line = ingredientLine({ quantity: amt, name: i.name, preparation: i.preparation });
-		lines.push(`  - ${line}${i.optional ? ' (optional)' : ''}`);
-	}
-	lines.push('', 'STEPS');
-	let section = '';
-	r.steps.forEach((s, idx) => {
-		if (s.sectionTitle && s.sectionTitle !== section) {
-			section = s.sectionTitle;
-			lines.push(`  ${section}:`);
-		}
-		const text = base && target ? scaledStepLine(s.text, r.ingredients, base, target) : s.text;
-		lines.push(`  ${idx + 1}. ${text}`);
+	const stepIngredients = base && target ? prepareStepIngredients(r.ingredients) : null;
+	return renderPlainRecipe({
+		title: r.title,
+		description: r.description,
+		servings: base ? (target ?? base).toHuman() : '',
+		// Shown only beside the servings, as before.
+		yieldNote: base ? r.yieldNote : '',
+		prepMinutes: r.prepMinutes ? String(r.prepMinutes) : '',
+		cookMinutes: r.cookMinutes ? String(r.cookMinutes) : '',
+		ingredients: r.ingredients.map((i) => {
+			const amount = i.amount ? Dec.from(i.amount) : null;
+			const shown = base && target ? scaleAmount(amount, base, target) : amount;
+			return {
+				quantity: shown ? `${shown.toHuman()}${i.unit ? ' ' + i.unit : ''}` : '',
+				name: i.name,
+				preparation: i.preparation,
+				group: i.groupName,
+				optional: i.optional
+			};
+		}),
+		steps: r.steps.map((s) => ({
+			section: s.sectionTitle,
+			text:
+				base && target && stepIngredients
+					? scaledStepLine(s.text, stepIngredients, base, target)
+					: s.text
+		})),
+		notes: r.notes,
+		source: r.source,
+		sourceAttribution: r.sourceAttribution
 	});
-	if (r.notes) lines.push('', 'NOTES', r.notes);
-	if (r.source) lines.push('', `Source: ${r.source}`);
-	if (r.sourceAttribution) lines.push(r.sourceAttribution);
-	return lines.join('\n') + '\n';
 }

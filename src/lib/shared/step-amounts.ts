@@ -1,10 +1,10 @@
 import { Dec } from './decimal';
 import { parseAmount } from './amount-parse';
 import { singular } from './ingredient-name';
-import { QUANTITY_PATTERN } from './recipe-html';
+import { QUANTITY_PATTERN, RANGE_SEPARATOR } from './ingredient-line';
 import { scaleAmount } from './scaling';
 import { normalizeName } from './text';
-import { formatQuantity, normalizeUnitInput, unitsCompatible } from './units';
+import { formatQuantity, readUnitToken, unitsCompatible } from './units';
 
 /**
  * Amounts in the step text that belong to an ingredient, so they scale with
@@ -104,21 +104,11 @@ function readAfter(rest: string): { unit: string | null; length: number; names: 
 		at += m[0].length;
 		tokens.push({ word: m[1], end: at });
 	}
-	// "fl oz" is two words; try the longer one first, as `splitIngredientLine` does.
-	for (const n of [2, 1]) {
-		if (tokens.length < n) continue;
-		const found = normalizeUnitInput(
-			tokens
-				.slice(0, n)
-				.map((t) => t.word)
-				.join(' ')
-		);
-		if (found) {
-			unit = found;
-			length = tokens[n - 1].end;
-			tokens.splice(0, n);
-			break;
-		}
+	const token = readUnitToken(tokens.map((t) => t.word));
+	if (token) {
+		unit = token.unit;
+		length = tokens[token.words - 1].end;
+		tokens.splice(0, token.words);
 	}
 	const names = tokens.flatMap((t) => words(t.word));
 	while (names.length && LINK_WORDS.has(names[0])) names.shift();
@@ -130,7 +120,7 @@ function linkFor(
 	amount: Dec,
 	unit: string | null,
 	names: string[],
-	ingredients: { words: string[]; amount: Dec | null; unit: string | null }[]
+	ingredients: PreparedStepIngredients['prepared']
 ): number {
 	let best = 0;
 	let found: number[] = [];
@@ -151,29 +141,50 @@ function linkFor(
 	return same.length === 1 ? same[0] : -1;
 }
 
+/**
+ * A recipe's ingredients read one time for `findStepAmounts`: name words,
+ * parsed amount and unit. Prepare once per recipe and pass the result for
+ * each step, so a step does not parse every ingredient again.
+ */
+export interface PreparedStepIngredients {
+	readonly prepared: readonly { words: string[]; amount: Dec | null; unit: string | null }[];
+}
+
+export function prepareStepIngredients(ingredients: StepIngredient[]): PreparedStepIngredients {
+	return {
+		prepared: ingredients.map((ing) => {
+			const amount = ing.amount ? parseAmount(ing.amount) : null;
+			// "flour, sifted" and "eggs (large)" are named by what comes before.
+			const name = ing.name.replace(/\([^)]*\)/g, ' ').split(',')[0];
+			return {
+				words: words(name),
+				amount: amount?.ok ? amount.value : null,
+				unit: ing.unit || null
+			};
+		})
+	};
+}
+
+type StepIngredients = StepIngredient[] | PreparedStepIngredients;
+
+function prepared(ingredients: StepIngredients): PreparedStepIngredients {
+	return Array.isArray(ingredients) ? prepareStepIngredients(ingredients) : ingredients;
+}
+
 /** Split a step into plain text and the amounts that link to an ingredient. */
-export function findStepAmounts(text: string, ingredients: StepIngredient[]): StepPart[] {
-	const known = ingredients.map((ing) => {
-		const amount = ing.amount ? parseAmount(ing.amount) : null;
-		// "flour, sifted" and "eggs (large)" are named by what comes before.
-		const name = ing.name.replace(/\([^)]*\)/g, ' ').split(',')[0];
-		return {
-			words: words(name),
-			amount: amount?.ok ? amount.value : null,
-			unit: ing.unit || null
-		};
-	});
+export function findStepAmounts(text: string, ingredients: StepIngredients): StepPart[] {
+	const known = prepared(ingredients);
 	const parts: StepPart[] = [];
 	let from = 0;
 	for (const m of text.matchAll(STEP_QUANTITY)) {
 		const start = m.index;
 		if (start < from) continue;
-		const [lowRaw, highRaw] = m[1].split(/\s*[-–—]\s*/);
+		const [lowRaw, highRaw] = m[1].split(RANGE_SEPARATOR);
 		const low = parseAmount(lowRaw);
 		const high = highRaw ? parseAmount(highRaw) : null;
 		if (!low.ok || !low.value || (high && (!high.ok || !high.value))) continue;
 		const after = readAfter(text.slice(start + m[0].length));
-		const ingredient = linkFor(low.value, after.unit, after.names, known);
+		const ingredient = linkFor(low.value, after.unit, after.names, known.prepared);
 		if (ingredient < 0) continue;
 		const end = start + m[0].length + after.length;
 		if (start > from) parts.push({ text: text.slice(from, start) });
@@ -205,19 +216,35 @@ export interface ScaledStepPart {
  */
 export function scaleStepText(
 	text: string,
-	ingredients: StepIngredient[],
+	ingredients: StepIngredients,
 	base: Dec,
 	target: Dec,
-	format: (amount: Dec, unit: string | null) => string = formatQuantity
+	format: AmountFormat = formatQuantity
+): ScaledStepPart[] {
+	return scaleStepParts(findStepAmounts(text, ingredients), base, target, format);
+}
+
+/** Writes one amount in its unit. */
+export type AmountFormat = (amount: Dec, unit: string | null) => string;
+
+/**
+ * `scaleStepText` for parts that `findStepAmounts` already found, so a caller
+ * that keeps the parts can scale again without matching the text again.
+ */
+export function scaleStepParts(
+	parts: StepPart[],
+	base: Dec,
+	target: Dec,
+	format: AmountFormat = formatQuantity
 ): ScaledStepPart[] {
 	const same = base.eq(target);
-	return findStepAmounts(text, ingredients).map((part) => {
+	return parts.map((part) => {
 		if (!('amount' in part)) return { text: part.text, original: null };
 		const scale = (v: Dec) => (same ? v : (scaleAmount(v, base, target) ?? v));
 		const low = scale(part.amount);
-		if (same && format(low, part.unit) === formatQuantity(low, part.unit))
-			return { text: part.text, original: null };
 		let written = format(low, part.unit);
+		if (same && written === formatQuantity(low, part.unit))
+			return { text: part.text, original: null };
 		if (part.amountHigh) {
 			const high = format(scale(part.amountHigh), part.unit);
 			// "2–3 tbsp" rather than "2 tbsp–3 tbsp" when both ends share the unit.
@@ -233,7 +260,7 @@ export function scaleStepText(
 /** The step as one string with its amounts scaled; for the plain-text recipe. */
 export function scaledStepLine(
 	text: string,
-	ingredients: StepIngredient[],
+	ingredients: StepIngredients,
 	base: Dec,
 	target: Dec
 ): string {

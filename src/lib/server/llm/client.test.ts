@@ -467,6 +467,40 @@ describe('queue', () => {
 		expect(stub.texts.at(-1)).toBe('background');
 	});
 
+	it('drops a waiting call whose caller went away, so it never reaches the server', async () => {
+		const stub = gatedStub();
+		const first = completeText(SYSTEM, 'running', { maxTokens: 50 });
+		await vi.waitFor(() => expect(stub.started()).toBe(1));
+		const gone = new AbortController();
+		const cancelled = completeText(SYSTEM, 'cancelled', { maxTokens: 50, signal: gone.signal });
+		const after = completeText(SYSTEM, 'after', { maxTokens: 50 });
+		gone.abort();
+		await expect(cancelled).rejects.toMatchObject({ status: 499 });
+		stub.gates[0]();
+		await vi.waitFor(() => expect(stub.started()).toBe(2));
+		stub.gates[1]();
+		await expect(Promise.all([first, after])).resolves.toEqual(['answer', 'answer']);
+		expect(stub.texts).toEqual(['running', 'after']);
+	});
+
+	it('stops a running call when its caller goes away', async () => {
+		let started = 0;
+		const fetchStub = ((_url: unknown, init?: RequestInit) => {
+			started++;
+			return new Promise<Response>((_resolve, reject) =>
+				init?.signal?.addEventListener('abort', () =>
+					reject(new DOMException('aborted', 'AbortError'))
+				)
+			);
+		}) as typeof fetch;
+		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
+		const gone = new AbortController();
+		const running = completeText(SYSTEM, 'q', { maxTokens: 50, signal: gone.signal });
+		await vi.waitFor(() => expect(started).toBe(1));
+		gone.abort();
+		await expect(running).rejects.toMatchObject({ status: 499 });
+	});
+
 	it('keeps serving after a call failed', async () => {
 		stubLlm([new TypeError('fetch failed'), 'fine']);
 		const first = completeText(SYSTEM, 'a', { maxTokens: 50 }).catch((e) => e);

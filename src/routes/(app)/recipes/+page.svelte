@@ -13,8 +13,7 @@
 
 	let { data, form } = $props();
 	let q = $derived(data.params.q);
-	type LooseForm = { ok?: boolean; message?: string } | null | undefined;
-	const f = $derived(form as LooseForm);
+	const f = $derived(form);
 
 	/** The current URL with one repeated `key=value` pair removed, and `page` dropped. */
 	function withoutHref(key: string, value: string) {

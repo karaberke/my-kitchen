@@ -3,18 +3,19 @@ import { LLM_LIMITS, resetRateLimits } from '$lib/server/ratelimit';
 import { emptyRecipeFormInput } from '$lib/shared/recipe-html';
 import type { RecipeFormInput } from '$lib/shared/recipe-input';
 import { stubLlm, unstubLlm } from '../../../../tests/llm-stub';
-import { setLlmForTests } from './client';
+import { claimLlmCall, setLlmForTests } from './client';
 import {
-	LLM_MAX_INPUT_CHARS,
-	assistImport,
 	assistWanted,
 	cleanSourceText,
 	formInputToPlainText,
 	llmParseRecipe,
+	planAssist,
 	recipeFromModel,
+	runAssist,
 	type ModelRecipe
 } from './recipe';
 import { SCRIPT_DATA_HEADING } from './prompts';
+import { LLM_MAX_INPUT_CHARS } from '$lib/shared/assistant-limits';
 
 const model = (over: Partial<ModelRecipe> = {}): ModelRecipe => ({
 	title: 'Red lentil dal',
@@ -145,6 +146,37 @@ describe('formInputToPlainText', () => {
 		expect(text).not.toContain('5');
 		expect(text).not.toContain('2.');
 	});
+
+	it('keeps the layout the model was tested with', () => {
+		const input = {
+			...fullInput(),
+			description: 'Thin ones.',
+			baseServings: '4',
+			yieldNote: '12 pancakes',
+			prepMinutes: '10',
+			cookMinutes: '20',
+			notes: 'Rest the batter.'
+		};
+		input.ingredients[0].preparation = 'sifted';
+		expect(formInputToPlainText(input)).toBe(
+			[
+				'Pancakes',
+				'',
+				'Thin ones.',
+				'',
+				'Serves 4. Makes 12 pancakes. Prep 10 minutes. Cook 20 minutes',
+				'',
+				'Ingredients:',
+				'- 200 g flour, sifted',
+				'',
+				'Steps:',
+				'1. Mix and fry.',
+				'',
+				'Notes:',
+				'Rest the batter.'
+			].join('\n')
+		);
+	});
 });
 
 describe('recipeFromModel', () => {
@@ -265,17 +297,60 @@ describe('assistWanted', () => {
 	});
 });
 
-describe('assistImport', () => {
-	it('does not call the model for a full recipe that was not forced', async () => {
-		const { requests } = stubLlm([modelReply()]);
-		const input = fullInput();
-		const out = await assistImport(USER, { input, forced: false, sourceText });
-		expect(requests).toHaveLength(0);
+/*
+ * The import job's assistant path (`startImportJob` in jobs.ts): `planAssist`,
+ * then `claimLlmCall`, then `runAssist`.
+ */
+describe('planAssist', () => {
+	// The assistant is on; no test here reaches the model.
+	beforeEach(() => stubLlm([]));
+
+	it('plans nothing and reads nothing for a full recipe that was not forced', async () => {
+		expect(await planAssist({ input: fullInput(), forced: false, sourceText })).toEqual({
+			skip: null
+		});
 		expect(sourceText).not.toHaveBeenCalled();
-		expect(out).toEqual({ input, assisted: false, assistantError: null });
 	});
 
-	it('reads the source text with the model when the parse found nothing', async () => {
+	it('plans to read the cleaned source when the parse found nothing', async () => {
+		const out = await planAssist({ input: emptyRecipeFormInput(), forced: false, sourceText });
+		expect('plan' in out && out.plan.source).toContain('Some page about dal.');
+	});
+
+	it('treats a parse with only blank rows or notes as empty', async () => {
+		const input = { ...emptyRecipeFormInput(), notes: 'A whole page of text' };
+		const out = await planAssist({ input, forced: false, sourceText });
+		expect('plan' in out && out.plan.source).toContain('Some page about dal.');
+	});
+
+	it('plans to tidy a full recipe when forced, without reading the page again', async () => {
+		const input = fullInput();
+		expect(await planAssist({ input, forced: true, sourceText })).toEqual({
+			plan: { base: input, source: null }
+		});
+		expect(sourceText).not.toHaveBeenCalled();
+	});
+
+	it('plans nothing and says nothing when the assistant is off', async () => {
+		setLlmForTests({ config: null });
+		for (const forced of [false, true])
+			expect(await planAssist({ input: emptyRecipeFormInput(), forced, sourceText })).toEqual({
+				skip: null
+			});
+		expect(sourceText).not.toHaveBeenCalled();
+	});
+
+	it('explains when forced on a page that has no readable text, and stays quiet when not forced', async () => {
+		const blank = async () => '<script>x()</script>';
+		const input = emptyRecipeFormInput();
+		expect(await planAssist({ input, forced: false, sourceText: blank })).toEqual({ skip: null });
+		const forced = await planAssist({ input, forced: true, sourceText: blank });
+		expect('skip' in forced && forced.skip).toEqual(expect.any(String));
+	});
+});
+
+describe('runAssist', () => {
+	it('reads the source text with the model', async () => {
 		const { requests } = stubLlm([
 			modelReply({
 				title: 'Red lentil dal',
@@ -283,10 +358,9 @@ describe('assistImport', () => {
 				steps: ['Simmer for 20 minutes.']
 			})
 		]);
-		const out = await assistImport(USER, {
-			input: emptyRecipeFormInput(),
-			forced: false,
-			sourceText
+		const out = await runAssist({
+			base: emptyRecipeFormInput(),
+			source: 'Some page about dal.'
 		});
 		expect(requests).toHaveLength(1);
 		expect(requests[0].messages.at(-1)!.content).toContain('Some page about dal.');
@@ -297,23 +371,13 @@ describe('assistImport', () => {
 		expect(out.input.steps.map((s) => s.text)).toEqual(['Simmer for 20 minutes.']);
 	});
 
-	it('treats a parse with only blank rows or notes as empty', async () => {
-		const { requests } = stubLlm([modelReply({ ingredients: ['1 egg'] })]);
-		const input = { ...emptyRecipeFormInput(), notes: 'A whole page of text' };
-		const out = await assistImport(USER, { input, forced: false, sourceText });
-		expect(requests).toHaveLength(1);
-		expect(out.assisted).toBe(true);
-	});
-
-	it('tidies a full recipe when forced, sending the recipe as read', async () => {
+	it('tidies the recipe as read when there is no source', async () => {
 		const { requests } = stubLlm([modelReply({ ingredients: ['200 g flour'], steps: ['Mix.'] })]);
-		const out = await assistImport(USER, { input: fullInput(), forced: true, sourceText });
+		const out = await runAssist({ base: fullInput(), source: null });
 		expect(requests).toHaveLength(1);
 		const sent = requests[0].messages.at(-1)!.content;
 		expect(sent).toContain('Pancakes');
 		expect(sent).toContain('Mix and fry.');
-		// The page is not read again: the app's own reading is what gets tidied.
-		expect(sourceText).not.toHaveBeenCalled();
 		expect(out.assisted).toBe(true);
 		expect(out.input.steps.map((s) => s.text)).toEqual(['Mix.']);
 		expect(out.input.ingredients[0].ingredientId).toBe('ing-1');
@@ -321,54 +385,27 @@ describe('assistImport', () => {
 
 	it('returns the original input and a message when the model fails', async () => {
 		stubLlm([new TypeError('fetch failed')]);
-		const input = emptyRecipeFormInput();
-		const out = await assistImport(USER, { input, forced: false, sourceText });
+		const base = emptyRecipeFormInput();
+		const out = await runAssist({ base, source: 'Some page about dal.' });
 		expect(out.assisted).toBe(false);
-		expect(out.input).toBe(input);
+		expect(out.input).toBe(base);
 		expect(typeof out.assistantError).toBe('string');
 		expect(out.assistantError).not.toBe('');
 	});
 
 	it('returns the original input and a message when the reply is unreadable twice', async () => {
 		stubLlm(['nonsense', 'still nonsense']);
-		const input = fullInput();
-		const out = await assistImport(USER, { input, forced: true, sourceText });
-		expect(out).toMatchObject({ input, assisted: false });
+		const base = fullInput();
+		const out = await runAssist({ base, source: null });
+		expect(out).toMatchObject({ input: base, assisted: false });
 		expect(out.assistantError).toEqual(expect.any(String));
 	});
+});
 
-	it('does nothing and says nothing when the assistant is off', async () => {
-		setLlmForTests({ config: null });
-		const input = emptyRecipeFormInput();
-		for (const forced of [false, true]) {
-			const out = await assistImport(USER, { input, forced, sourceText });
-			expect(out).toEqual({ input, assisted: false, assistantError: null });
-		}
-		expect(sourceText).not.toHaveBeenCalled();
-	});
-
-	it('explains when forced on a page that has no readable text, and stays quiet when not forced', async () => {
-		const { requests } = stubLlm([modelReply()]);
-		const blank = async () => '<script>x()</script>';
-		const input = emptyRecipeFormInput();
-		const quiet = await assistImport(USER, { input, forced: false, sourceText: blank });
-		expect(quiet).toEqual({ input, assisted: false, assistantError: null });
-		const forced = await assistImport(USER, { input, forced: true, sourceText: blank });
-		expect(forced.assisted).toBe(false);
-		expect(forced.assistantError).toEqual(expect.any(String));
-		expect(requests).toHaveLength(0);
-	});
-
-	it('keeps the import working and reports the limit when the user is out of calls', async () => {
-		const { requests } = stubLlm([modelReply({ ingredients: ['1 egg'] })]);
-		const input = emptyRecipeFormInput();
-		for (let i = 0; i < LLM_LIMITS.user.max; i++)
-			await assistImport(USER, { input, forced: false, sourceText });
-		expect(requests).toHaveLength(LLM_LIMITS.user.max);
-		const out = await assistImport(USER, { input, forced: false, sourceText });
-		expect(requests).toHaveLength(LLM_LIMITS.user.max);
-		expect(out.assisted).toBe(false);
-		expect(out.assistantError).toMatch(/too many/i);
-		expect(out.input).toBe(input);
+describe('claimLlmCall before an import job', () => {
+	it('refuses with a message once the user is out of calls', () => {
+		stubLlm([]);
+		for (let i = 0; i < LLM_LIMITS.user.max; i++) claimLlmCall(USER);
+		expect(() => claimLlmCall(USER)).toThrow(/too many/i);
 	});
 });

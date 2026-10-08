@@ -6,7 +6,7 @@ import { AppError, pgError } from '$lib/server/errors';
 import { isRfcUuid } from '$lib/shared/text';
 
 /** Stable JSON (sorted keys) so equal payloads produce equal fingerprints. */
-export function stableStringify(value: unknown): string {
+function stableStringify(value: unknown): string {
 	if (value === null || typeof value !== 'object') return JSON.stringify(value);
 	if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
 	const obj = value as Record<string, unknown>;
@@ -16,7 +16,7 @@ export function stableStringify(value: unknown): string {
 	return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
 }
 
-export function fingerprint(kind: string, payload: unknown): string {
+function fingerprint(kind: string, payload: unknown): string {
 	return createHash('sha256')
 		.update(kind)
 		.update('\n')
@@ -63,7 +63,7 @@ export interface OperationContext {
 	payload: unknown;
 }
 
-export function isOperationId(value: unknown): value is string {
+function isOperationId(value: unknown): value is string {
 	return isRfcUuid(value);
 }
 
@@ -94,6 +94,8 @@ export async function runOperation<T extends Record<string, unknown>>(
 	if (!isOperationId(ctx.operationId)) throw new AppError(400, 'A valid operation id is required');
 	const fp = fingerprint(ctx.kind, ctx.payload);
 
+	// No read before the transaction: claiming the primary key is the check, and
+	// a duplicate id lands in the catch below, which replays or rejects it.
 	const checkExisting = async (): Promise<{ result: T; replayed: true } | null> => {
 		const rows = await db
 			.select({
@@ -112,9 +114,6 @@ export async function runOperation<T extends Record<string, unknown>>(
 			throw new AppError(409, 'This operation id was already used with a different request');
 		return { result: existing.result as T, replayed: true };
 	};
-
-	const prior = await checkExisting();
-	if (prior) return prior;
 
 	try {
 		const result = await withTransaction(async (tx) => {

@@ -9,9 +9,7 @@
 	import { fmtDateTime, fmtQty } from '$lib/client/format';
 
 	let { data, form } = $props();
-	type LooseForm =
-		{ ok?: boolean; message?: string; review?: { reason?: string } } | null | undefined;
-	const f = $derived(form as LooseForm);
+	const f = $derived(form);
 	let opId: string = $derived(data.operationId);
 	const dot: Record<string, string> = {
 		purchase: 'bg-leaf',

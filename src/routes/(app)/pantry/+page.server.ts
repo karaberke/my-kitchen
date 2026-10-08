@@ -3,50 +3,43 @@ import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import {
-	assertMember,
-	householdActor,
-	loadHouseholdOrThrow,
-	requireHousehold
-} from '$lib/server/access';
+import { householdActor, memberHousehold, requireHousehold, revisionsOf } from '$lib/server/access';
 import {
 	addStock,
 	correctLot,
 	getPantryOverview,
+	scanNewIngredientName,
+	scanOrigin,
 	updateLotMetadata,
 	wasteLot
 } from '$lib/server/pantry';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { identifyAs, identifyManual, SYMBOLOGIES, type Symbology } from '$lib/shared/gtin';
 import { pantryAmount } from '$lib/shared/package-size';
-import type { LinkOrigin } from '$lib/server/db/schema';
 import { operationIdFrom } from '$lib/server/operations';
-import { GROCERY_CATEGORIES } from '$lib/shared/grocery-categories';
 import { llmEnabled } from '$lib/server/llm/client';
+import { LOCATION_MAX_CHARS } from '$lib/shared/text';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
 	event.depends('app:pantry');
-	await assertMember(db, household.id, user.id);
+	const h = await memberHousehold(db, household.id, user.id);
 	const filterRaw = event.url.searchParams.get('filter');
 	const filters = {
 		q: (event.url.searchParams.get('q') ?? '').trim().slice(0, 60),
-		location: (event.url.searchParams.get('location') ?? '').trim().slice(0, 60) || null,
+		location:
+			(event.url.searchParams.get('location') ?? '').trim().slice(0, LOCATION_MAX_CHARS) || null,
 		filter: (filterRaw === 'use_soon' || filterRaw === 'undated' || filterRaw === 'dated'
 			? filterRaw
 			: 'all') as 'all' | 'use_soon' | 'undated' | 'dated'
 	};
-	const [overview, h] = await Promise.all([
-		getPantryOverview(db, household.id, filters),
-		loadHouseholdOrThrow(db, household.id)
-	]);
+	const overview = await getPantryOverview(db, household.id, filters);
 	return {
 		title: 'Pantry',
 		overview,
 		filters,
-		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision },
+		revisions: revisionsOf(h),
 		operationId: randomUUID(),
-		categories: GROCERY_CATEGORIES,
 		aiEnabled: llmEnabled()
 	};
 };
@@ -111,21 +104,16 @@ export const actions: Actions = {
 
 			const ingredientId = String(fd.get('ingredientId') ?? '') || null;
 			const newName = String(fd.get('name') ?? '').trim();
-			const rawOrigin = String(fd.get('origin') ?? 'manual');
-			const origin: LinkOrigin = ['usda', 'off'].includes(rawOrigin)
-				? (rawOrigin as LinkOrigin)
-				: 'manual';
 
 			const out = await addStock(ctx, {
 				operationId: operationIdFrom(fd),
 				ingredientId,
-				// The untouched product title is not a choice: a scan makes a new identity
-				// only from a typed name or the explicit "new ingredient" option.
-				newIngredientName:
-					ingredientId ||
-					(fd.get('createIdentity') !== '1' && newName === String(fd.get('providerTitle') ?? ''))
-						? null
-						: newName,
+				newIngredientName: scanNewIngredientName({
+					ingredientId,
+					name: newName,
+					providerTitle: String(fd.get('providerTitle') ?? ''),
+					createIdentity: fd.get('createIdentity') === '1'
+				}),
 				category: String(fd.get('category') ?? 'Other'),
 				quantity: total.quantity,
 				unit: total.unit,
@@ -140,7 +128,7 @@ export const actions: Actions = {
 					packageUnit: unit,
 					packageCount,
 					packageLabelText: String(fd.get('labelText') ?? ''),
-					origin
+					origin: scanOrigin(String(fd.get('origin') ?? ''))
 				}
 			});
 			return {

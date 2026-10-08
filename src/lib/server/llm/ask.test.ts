@@ -3,28 +3,16 @@ import {
 	LLM_CHAT_ANSWER_MAX_CHARS,
 	LLM_CHAT_HISTORY_MAX_CHARS,
 	LLM_CHAT_MAX_TURNS,
-	LLM_QUESTION_MAX_CHARS,
-	type RecipeChatTurn
-} from '$lib/shared/recipe-input';
-import { buildRecipeChatMessages, cleanChatText, stepNote, trimChatHistory } from './ask';
+	LLM_QUESTION_MAX_CHARS
+} from '$lib/shared/assistant-limits';
+import type { RecipeChatTurn } from '$lib/shared/recipe-input';
+import { buildRecipeChatMessages, stepNote, trimChatHistory } from './ask';
 
 const turn = (n: number, q = `question ${n}`, a = `answer ${n}`): RecipeChatTurn => ({
 	question: q,
 	answer: a
 });
 const turns = (count: number) => Array.from({ length: count }, (_, i) => turn(i + 1));
-
-describe('cleanChatText', () => {
-	it('removes control characters and joins the lines', () => {
-		expect(cleanChatText('a\u0000b\u0007c\nd\te‮f', 100)).toBe('a b c d e f');
-		expect(cleanChatText('  one \r\n\r\n two  ', 100)).toBe('one two');
-	});
-
-	it('cuts to the limit and gives an empty string for blank text', () => {
-		expect(cleanChatText('x'.repeat(50), 10)).toBe('x'.repeat(10));
-		expect(cleanChatText(' \n\t\u0000 ', 10)).toBe('');
-	});
-});
 
 describe('trimChatHistory', () => {
 	it('keeps a short history as it is', () => {
