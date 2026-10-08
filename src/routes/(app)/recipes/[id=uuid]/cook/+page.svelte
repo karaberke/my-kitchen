@@ -6,7 +6,7 @@
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
-	import RecipeChat from '$lib/components/RecipeChat.svelte';
+	import RecipeChat, { type ChatStatus } from '$lib/components/RecipeChat.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { fmtNum, fmtQty, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
@@ -16,9 +16,11 @@
 	import StepText from '$lib/components/StepText.svelte';
 	import {
 		WAKE_PHRASE,
+		listen,
 		listenForWakePhrase,
 		speechInputAvailable,
 		speechLang,
+		type Dictation,
 		type WakeListener,
 		type WakeState
 	} from '$lib/client/speech';
@@ -68,12 +70,12 @@
 	let wakeError = $state('');
 	/** A question heard after the wake phrase, for the chat to send. */
 	let chatAsk = $state<string | null>(null);
-	let chatBusy = false;
+	let chatStatus = $state<ChatStatus>('idle');
 	let wake: WakeListener | null = null;
 
 	function syncWake() {
 		if (!wake) return;
-		if (chatBusy || document.hidden) wake.pause();
+		if (chatStatus !== 'idle' || document.hidden) wake.pause();
 		else wake.resume();
 	}
 	function setWake(on: boolean) {
@@ -90,8 +92,8 @@
 		wakeError = '';
 		wake = listenForWakePhrase({
 			lang: speechLang(),
+			// Answered by voice; the cook opens the chat to read it.
 			onCommand: (text) => {
-				chatOpen = true;
 				if (text) chatAsk = text;
 			},
 			onState: (state) => (wakeState = state),
@@ -102,8 +104,21 @@
 		});
 		syncWake();
 	}
-	function onChatBusy(busy: boolean) {
-		chatBusy = busy;
+	const askLabel = $derived(
+		chatStatus === 'thinking'
+			? 'Thinking…'
+			: chatStatus === 'speaking'
+				? 'Speaking…'
+				: wakeState === 'awake'
+					? 'Yes?'
+					: 'Ask'
+	);
+	/** The Speak button's dictation goes through the running wake listener, not a second recognition. */
+	function dictateWithWake(): Dictation {
+		return wake ? wake.dictate() : listen({ lang: speechLang() });
+	}
+	function onChatStatus(status: ChatStatus) {
+		chatStatus = status;
 		syncWake();
 	}
 	onMount(() => {
@@ -532,14 +547,18 @@
 				aria-hidden="true"
 				><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"></path></svg
 			>
-			{wakeState === 'awake' ? 'Yes?' : 'Ask'}
+			{askLabel}
 		</button>
 		<p class="sr-only" aria-live="polite">
-			{wakeState === 'awake'
-				? 'Listening for your question.'
-				: wakeState === 'listening'
-					? `Listening for '${WAKE_PHRASE}'.`
-					: ''}
+			{chatStatus === 'thinking'
+				? 'The assistant is thinking.'
+				: chatStatus === 'speaking'
+					? 'The assistant is answering.'
+					: wakeState === 'awake'
+						? 'Listening for your question.'
+						: wakeState === 'listening'
+							? `Listening for '${WAKE_PHRASE}'.`
+							: ''}
 		</p>
 		<Sheet
 			bind:open={chatOpen}
@@ -578,7 +597,8 @@
 				voice
 				ask={chatAsk}
 				onasked={() => (chatAsk = null)}
-				onbusy={onChatBusy}
+				onstatus={onChatStatus}
+				dictate={wakeOn ? dictateWithWake : undefined}
 			/>
 		</Sheet>
 	{/if}

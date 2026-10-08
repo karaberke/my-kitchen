@@ -67,13 +67,25 @@ export function speechInputAvailable(): boolean {
 	return recognitionConstructor() !== null;
 }
 
+/** One spoken question being heard; the chat's Speak button uses it. */
+export interface Dictation {
+	/** The text heard, or an `Error` whose message is fit to show. */
+	result: Promise<string>;
+	/** End early: what was heard so far still resolves, silence rejects. */
+	stop(): void;
+}
+
+/** How long `stop()` waits for the browser to end before it gives up on it. */
+export const LISTEN_STOP_GRACE_MS = 1_500;
+
 /**
- * Listens for one utterance. `result` resolves with the text, or rejects with
- * an `Error` whose message is fit to show. `stop()` ends the listening early:
- * a partial result still resolves, and silence rejects as no speech.
+ * Listens for one utterance. Interim results are kept too, because iOS often
+ * gives nothing else, and `stop()` never hangs: when the browser does not end
+ * the session after `LISTEN_STOP_GRACE_MS`, it is aborted and settled here.
  */
-export function listen({ lang }: { lang: string }): { result: Promise<string>; stop(): void } {
+export function listen({ lang }: { lang: string }): Dictation {
 	let recognition: Recognition | null = null;
+	let finish: () => void = () => {};
 	const result = new Promise<string>((resolve, reject) => {
 		const Ctor = recognitionConstructor();
 		if (!Ctor) {
@@ -82,11 +94,18 @@ export function listen({ lang }: { lang: string }): { result: Promise<string>; s
 		}
 		let text = '';
 		let failure = '';
+		let done = false;
+		finish = () => {
+			if (done) return;
+			done = true;
+			if (text) resolve(text);
+			else reject(new Error(failure || RECOGNITION_ERRORS['no-speech']));
+		};
 		try {
 			recognition = new Ctor();
 			recognition.lang = lang;
 			recognition.continuous = false;
-			recognition.interimResults = false;
+			recognition.interimResults = true;
 			recognition.maxAlternatives = 1;
 			recognition.onresult = (e) => {
 				text = Array.from(e.results)
@@ -95,14 +114,12 @@ export function listen({ lang }: { lang: string }): { result: Promise<string>; s
 					.trim();
 			};
 			recognition.onerror = (e) => {
-				failure = RECOGNITION_ERRORS[e.error] ?? RECOGNITION_FALLBACK;
+				if (e.error !== 'aborted') failure = RECOGNITION_ERRORS[e.error] ?? RECOGNITION_FALLBACK;
 			};
-			recognition.onend = () => {
-				if (text) resolve(text);
-				else reject(new Error(failure || RECOGNITION_ERRORS['no-speech']));
-			};
+			recognition.onend = finish;
 			recognition.start();
 		} catch {
+			done = true;
 			reject(new Error(RECOGNITION_FALLBACK));
 		}
 	});
@@ -114,6 +131,14 @@ export function listen({ lang }: { lang: string }): { result: Promise<string>; s
 			} catch {
 				// already stopped
 			}
+			setTimeout(() => {
+				try {
+					recognition?.abort();
+				} catch {
+					// already ended
+				}
+				finish();
+			}, LISTEN_STOP_GRACE_MS);
 		}
 	};
 }
@@ -289,6 +314,11 @@ export interface WakeListener {
 	/** Release the microphone for a while, for example while an answer is read aloud. */
 	pause(): void;
 	resume(): void;
+	/**
+	 * Take the next thing heard as dictation for the chat box, through the
+	 * recognition already running, so the microphone is never handed over.
+	 */
+	dictate(): Dictation;
 }
 
 /**
@@ -313,6 +343,8 @@ export function listenForWakePhrase(handlers: {
 	let restartTimer: ReturnType<typeof setTimeout> | undefined;
 	let awakeTimer: ReturnType<typeof setTimeout> | undefined;
 	let state: WakeState = 'off';
+	/** Set while the Speak button waits: the next thing heard goes here instead. */
+	let dictation: { resolve: (text: string) => void; end: (message?: string) => void } | null = null;
 
 	const show = () => {
 		const next: WakeState = stopped ? 'off' : paused ? 'paused' : awake ? 'awake' : 'listening';
@@ -359,6 +391,11 @@ export function listenForWakePhrase(handlers: {
 				const heard = result.isFinal ? (result[0]?.transcript ?? '').trim() : '';
 				if (!heard) continue;
 				const command = wakeCommand(heard);
+				if (dictation) {
+					const text = command ?? heard;
+					if (text) dictation.resolve(text);
+					continue;
+				}
 				if (command === '') {
 					setAwake(true);
 					handlers.onCommand('');
@@ -391,7 +428,34 @@ export function listenForWakePhrase(handlers: {
 	}
 
 	const listener: WakeListener = {
+		dictate() {
+			dictation?.end();
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const result = new Promise<string>((resolve, reject) => {
+				const release = () => {
+					clearTimeout(timer);
+					if (dictation === mine) dictation = null;
+				};
+				const mine = {
+					resolve: (text: string) => {
+						release();
+						resolve(text);
+					},
+					end: (message = RECOGNITION_ERRORS['no-speech']) => {
+						release();
+						reject(new Error(message));
+					}
+				};
+				dictation = mine;
+				if (stopped) return mine.end('Speech input is off.');
+				timer = setTimeout(() => mine.end(), WAKE_ANSWER_WINDOW_MS);
+				setAwake(false);
+				listener.resume();
+			});
+			return { result, stop: () => dictation?.end() };
+		},
 		stop() {
+			dictation?.end();
 			stopped = true;
 			clearTimeout(awakeTimer);
 			awake = false;
