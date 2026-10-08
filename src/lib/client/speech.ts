@@ -129,6 +129,27 @@ function synth(): SpeechSynthesis | null {
 	}
 }
 
+let primed = false;
+
+/**
+ * iOS speaks only when the first `speak()` happens during a tap; an answer
+ * arrives seconds later, outside it. Call this from a tap handler: a silent
+ * utterance there lets the later answers speak.
+ */
+export function primeSpeech(): void {
+	if (primed) return;
+	try {
+		const s = synth();
+		if (!s) return;
+		const utterance = new SpeechSynthesisUtterance(' ');
+		utterance.volume = 0;
+		s.speak(utterance);
+		primed = true;
+	} catch {
+		// read-aloud stays off until a later tap
+	}
+}
+
 export function speechOutputAvailable(): boolean {
 	const s = synth();
 	// Chrome fills the voice list some time after the page loads; asking early starts that.
@@ -245,6 +266,21 @@ export function wakeCommand(transcript: string): string | null {
 	return m ? transcript.slice(m.index + m[0].length).trim() : null;
 }
 
+/**
+ * iPhone and iPad Safari give no final result in continuous mode, so there each
+ * session hears one thing and the restart below starts the next one.
+ */
+function continuousWorks(): boolean {
+	try {
+		const n = navigator;
+		const appleTouch =
+			/iPhone|iPad|iPod/.test(n.userAgent) || (n.platform === 'MacIntel' && n.maxTouchPoints > 1);
+		return !appleTouch;
+	} catch {
+		return true;
+	}
+}
+
 export type WakeState = 'listening' | 'awake' | 'paused' | 'off';
 
 export interface WakeListener {
@@ -310,7 +346,7 @@ export function listenForWakePhrase(handlers: {
 		try {
 			r = new Ctor();
 			r.lang = handlers.lang;
-			r.continuous = true;
+			r.continuous = continuousWorks();
 			r.interimResults = false;
 			r.maxAlternatives = 1;
 		} catch {

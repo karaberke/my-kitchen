@@ -4,6 +4,7 @@
 	import { remoteErrorMessage } from '$lib/client/remote';
 	import {
 		listen,
+		primeSpeech,
 		speak,
 		speechInputAvailable,
 		speechLang,
@@ -126,6 +127,9 @@
 
 	onMount(() => {
 		turns = loadTurns();
+		// Any tap on the page lets the answers speak later on iOS, including
+		// answers to "Hey Chef" questions, which come with no tap at all.
+		if (voice) document.addEventListener('pointerdown', primeSpeech, { capture: true, once: true });
 		if (voice) {
 			canListen = speechInputAvailable();
 			canSpeak = speechOutputAvailable();
@@ -137,6 +141,7 @@
 		}
 		scrollToNewest();
 		return () => {
+			document.removeEventListener('pointerdown', primeSpeech, { capture: true });
 			recognition?.stop();
 			quiet();
 		};
@@ -148,6 +153,7 @@
 		if (pending || !question) return;
 		recognition?.stop();
 		quiet();
+		if (voice) primeSpeech();
 		const mine = epoch;
 		pending = true;
 		error = '';

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WAKE_ANSWER_WINDOW_MS, bestVoice, listenForWakePhrase, wakeCommand } from './speech';
+import {
+	WAKE_ANSWER_WINDOW_MS,
+	bestVoice,
+	listenForWakePhrase,
+	primeSpeech,
+	wakeCommand
+} from './speech';
 
 const voice = (name: string, lang: string, localService = true) => ({ name, lang, localService });
 
@@ -115,6 +121,19 @@ describe('listenForWakePhrase', () => {
 		expect(states).toEqual(['listening']);
 	});
 
+	it('hears one thing per session on an iPhone, where continuous mode gives no result', () => {
+		vi.stubGlobal('navigator', {
+			userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X)'
+		});
+		listen();
+		expect(latest().continuous).toBe(false);
+		latest().hear('hey chef');
+		latest().onend?.();
+		vi.advanceTimersByTime(1_000);
+		latest().hear('how much flour');
+		expect(commands).toEqual(['', 'how much flour']);
+	});
+
 	it('passes on a question said with the phrase', () => {
 		listen();
 		latest().hear('hey chef how much flour');
@@ -186,5 +205,27 @@ describe('listenForWakePhrase', () => {
 		wake.resume();
 		expect(FakeRecognition.instances).toHaveLength(1);
 		expect(states.at(-1)).toBe('off');
+	});
+});
+
+describe('primeSpeech', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('speaks one silent utterance, once, so iOS lets later answers speak', () => {
+		const spoken: { text: string; volume: number }[] = [];
+		vi.stubGlobal(
+			'SpeechSynthesisUtterance',
+			class {
+				volume = 1;
+				constructor(public text: string) {}
+			}
+		);
+		vi.stubGlobal('window', {
+			speechSynthesis: { speak: (u: { text: string; volume: number }) => spoken.push(u) }
+		});
+		primeSpeech();
+		primeSpeech();
+		expect(spoken).toHaveLength(1);
+		expect(spoken[0].volume).toBe(0);
 	});
 });
