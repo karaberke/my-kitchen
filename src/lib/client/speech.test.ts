@@ -6,6 +6,7 @@ import {
 	listen as listenOnce,
 	listenForWakePhrase,
 	primeSpeech,
+	speak,
 	wakeCommand
 } from './speech';
 
@@ -303,5 +304,38 @@ describe('primeSpeech', () => {
 		primeSpeech();
 		expect(spoken).toHaveLength(1);
 		expect(spoken[0].volume).toBe(0);
+	});
+});
+
+describe('speak', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('asks for playback while speaking and gives the session back after', () => {
+		const audioSession = { type: 'auto' };
+		const seen: string[] = [];
+		let utterance: { onend?: () => void } = {};
+		vi.stubGlobal('navigator', { audioSession });
+		vi.stubGlobal(
+			'SpeechSynthesisUtterance',
+			class {
+				constructor(public text: string) {}
+			}
+		);
+		vi.stubGlobal('window', {
+			speechSynthesis: {
+				cancel: () => {},
+				getVoices: () => [],
+				speak: (u: { onend?: () => void }) => {
+					seen.push(audioSession.type);
+					utterance = u;
+				}
+			}
+		});
+		let ended = false;
+		speak('Use 400 g flour.', 'en-US', () => (ended = true));
+		expect(seen).toEqual(['playback']);
+		utterance.onend?.();
+		expect(audioSession.type).toBe('auto');
+		expect(ended).toBe(true);
 	});
 });

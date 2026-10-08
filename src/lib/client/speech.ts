@@ -154,6 +154,23 @@ function synth(): SpeechSynthesis | null {
 	}
 }
 
+type AudioSessionType = 'auto' | 'playback';
+
+/**
+ * After the microphone was used, iOS keeps the page's audio in recording mode,
+ * where speech that no tap started plays silently (a "Hey Chef" answer). Asking
+ * for playback before speaking, and for `auto` after, so the microphone works
+ * again, fixes that. Browsers without `navigator.audioSession` ignore it.
+ */
+function setAudioSession(type: AudioSessionType): void {
+	try {
+		const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+		if (session && session.type !== type) session.type = type;
+	} catch {
+		// the browser chooses
+	}
+}
+
 let primed = false;
 
 /**
@@ -231,6 +248,7 @@ export function speak(text: string, lang: string, onEnd?: () => void): void {
 	const end = () => {
 		if (ended) return;
 		ended = true;
+		setAudioSession('auto');
 		onEnd?.();
 	};
 	try {
@@ -246,6 +264,7 @@ export function speak(text: string, lang: string, onEnd?: () => void): void {
 		}
 		utterance.onend = end;
 		utterance.onerror = end;
+		setAudioSession('playback');
 		s.speak(utterance);
 	} catch {
 		// speech is optional; the text stays on screen
