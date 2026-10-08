@@ -139,20 +139,23 @@ function jsonLdBlocks(html: string): unknown[] {
 const VULGAR_CLASS = '[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞]';
 
 /**
- * Leading quantity: "200", "1.5", "1,5", "1/2", "1 1/2", "½", "1½", "2-3".
- * Longest forms first, so "1½" is not read as a bare "1".
+ * One quantity: "200", "1.5", "1,5", "1/2", "1 1/2", "½", "1½", "2-3".
+ * Longest forms first, so "1½" is not read as a bare "1". Not anchored; the
+ * steps (`step-amounts.ts`) look for it anywhere in a sentence.
  */
-const QUANTITY = new RegExp(
-	'^(' +
-		[
-			`\\d+\\s*${VULGAR_CLASS}`, // 1½
-			'\\d+\\s+\\d+/\\d+', // 1 1/2
-			'\\d+/\\d+', // 1/2
-			VULGAR_CLASS, // ½
-			'\\d+(?:[.,]\\d+)?(?:\\s*[-–—]\\s*\\d+(?:[.,]\\d+)?)?' // 200, 1.5, 2-3
-		].join('|') +
-		')\\s*'
-);
+export const QUANTITY_PATTERN =
+	'(' +
+	[
+		`\\d+\\s*${VULGAR_CLASS}`, // 1½
+		'\\d+\\s+\\d+/\\d+', // 1 1/2
+		'\\d+/\\d+', // 1/2
+		VULGAR_CLASS, // ½
+		'\\d+(?:[.,]\\d+)?(?:\\s*[-–—]\\s*\\d+(?:[.,]\\d+)?)?' // 200, 1.5, 2-3
+	].join('|') +
+	')';
+
+/** A leading quantity and the space after it. */
+const QUANTITY = new RegExp(`^${QUANTITY_PATTERN}\\s*`);
 
 /** Map a free-text unit token to a canonical unit id, or null. */
 function normalizeUnit(raw: string): string | null {

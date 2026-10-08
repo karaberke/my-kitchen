@@ -62,13 +62,14 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 };
 
 export const actions: Actions = {
-	default: async (event) => {
+	// Named, not `default`: SvelteKit refuses every POST to a page that mixes the two.
+	save: async (event) => {
 		requireUser(event);
 		return handleRecipeSubmit(event, event.params.id);
 	},
 	/**
 	 * The assistant's tidy copy of the form as posted. It refills the form and
-	 * saves nothing: the user reads it and saves through `default`, with the
+	 * saves nothing: the user reads it and saves through `save`, with the
 	 * revision the form already carries.
 	 */
 	aiFix: async (event) => {

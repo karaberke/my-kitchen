@@ -16,6 +16,7 @@
 {#key form?.input}
 	<RecipeForm
 		mode="edit"
+		action="?/save"
 		initial={form?.input ?? data.initial}
 		identityLabels={data.identityLabels}
 		errors={form?.errors ?? {}}

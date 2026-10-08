@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { goto, invalidate } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -12,6 +13,15 @@
 	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
 	import { pantryLots } from '$lib/remote/pantry.remote';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
+	import StepText from '$lib/components/StepText.svelte';
+	import {
+		WAKE_PHRASE,
+		listenForWakePhrase,
+		speechInputAvailable,
+		speechLang,
+		type WakeListener,
+		type WakeState
+	} from '$lib/client/speech';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import {
 		COOK_MODES,
@@ -48,6 +58,68 @@
 	let settingsOpen = $state(false);
 	let slideIndex = $state(0);
 	let chatOpen = $state(false);
+
+	// "Hey Chef": off by default, remembered on this device, and only here,
+	// because only the cook page may use the microphone.
+	const WAKE_KEY = 'my-kitchen:cook-wake-phrase';
+	let canWake = $state(false);
+	let wakeOn = $state(false);
+	let wakeState = $state<WakeState>('off');
+	let wakeError = $state('');
+	/** A question heard after the wake phrase, for the chat to send. */
+	let chatAsk = $state<string | null>(null);
+	let chatBusy = false;
+	let wake: WakeListener | null = null;
+
+	function syncWake() {
+		if (!wake) return;
+		if (chatBusy || document.hidden) wake.pause();
+		else wake.resume();
+	}
+	function setWake(on: boolean) {
+		wakeOn = on;
+		try {
+			localStorage.setItem(WAKE_KEY, on ? '1' : '0');
+		} catch {
+			// the choice lasts for this visit only
+		}
+		wake?.stop();
+		wake = null;
+		wakeState = 'off';
+		if (!on) return;
+		wakeError = '';
+		wake = listenForWakePhrase({
+			lang: speechLang(),
+			onCommand: (text) => {
+				chatOpen = true;
+				if (text) chatAsk = text;
+			},
+			onState: (state) => (wakeState = state),
+			onError: (message) => {
+				wakeError = message;
+				setWake(false);
+			}
+		});
+		syncWake();
+	}
+	function onChatBusy(busy: boolean) {
+		chatBusy = busy;
+		syncWake();
+	}
+	onMount(() => {
+		canWake = data.aiEnabled && speechInputAvailable();
+		let saved = false;
+		try {
+			saved = localStorage.getItem(WAKE_KEY) === '1';
+		} catch {
+			// storage blocked: listening stays off
+		}
+		if (canWake && saved) setWake(true);
+		return () => {
+			wake?.stop();
+			wake = null;
+		};
+	});
 	const sizes = $derived(cookTextSizes(cookView.textStep));
 	const slide = $derived(Math.min(slideIndex, Math.max(0, r.steps.length - 1)));
 	const stepLabel = (i: number) =>
@@ -158,6 +230,8 @@
 		})
 	);
 </script>
+
+<svelte:document onvisibilitychange={syncWake} />
 
 <PageHeader
 	title="Cooking"
@@ -349,7 +423,13 @@
 						<span class="tracking-normal">{slide + 1} / {r.steps.length}</span>
 					</div>
 					<p class="font-serif leading-relaxed text-pretty" style:font-size={sizes.slide}>
-						{r.steps[slide].text}
+						<StepText
+							text={r.steps[slide].text}
+							ingredients={r.ingredients}
+							{base}
+							servings={Dec.from(servings)}
+							convention={r.convention}
+						/>
 					</p>
 				</div>
 				<div class="mb-2.5 flex items-center justify-between gap-2.5">
@@ -405,7 +485,13 @@
 							class="leading-relaxed {doneSteps[step.id] ? 'text-sage' : 'text-ink'}"
 							style:font-size={sizes.step}
 						>
-							{step.text}
+							<StepText
+								text={step.text}
+								ingredients={r.ingredients}
+								{base}
+								servings={Dec.from(servings)}
+								convention={r.convention}
+							/>
 						</p>
 					</button>
 				{/each}
@@ -427,6 +513,13 @@
 			aria-haspopup="dialog"
 			onclick={() => (chatOpen = true)}
 		>
+			{#if wakeState === 'listening' || wakeState === 'awake'}
+				<span
+					class="h-2 w-2 rounded-full bg-cream {wakeState === 'awake' ? 'animate-pulse' : ''}"
+					title="Listening for '{WAKE_PHRASE}'"
+					aria-hidden="true"
+				></span>
+			{/if}
 			<svg
 				width="18"
 				height="18"
@@ -439,8 +532,15 @@
 				aria-hidden="true"
 				><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"></path></svg
 			>
-			Ask
+			{wakeState === 'awake' ? 'Yes?' : 'Ask'}
 		</button>
+		<p class="sr-only" aria-live="polite">
+			{wakeState === 'awake'
+				? 'Listening for your question.'
+				: wakeState === 'listening'
+					? `Listening for '${WAKE_PHRASE}'.`
+					: ''}
+		</p>
 		<Sheet
 			bind:open={chatOpen}
 			title="Ask the assistant"
@@ -448,12 +548,37 @@
 				servings
 			)} servings."
 		>
+			{#if canWake}
+				<div class="mb-3 flex flex-col gap-2">
+					<label class="flex min-h-11 cursor-pointer items-center gap-2.5 text-[13px] text-moss">
+						<input
+							type="checkbox"
+							class="h-5 w-5 accent-leaf"
+							checked={wakeOn}
+							onchange={(e) => setWake(e.currentTarget.checked)}
+						/>
+						Listen for “{WAKE_PHRASE}”
+					</label>
+					{#if wakeState === 'awake'}
+						<p class="text-[12.5px] text-leaf-dark">Yes? Ask your question.</p>
+					{:else if wakeOn}
+						<p class="text-[11.5px] text-sage-soft">
+							Say “{WAKE_PHRASE}, how much flour?” The answer is read aloud. The microphone stays on
+							while this page is open.
+						</p>
+					{/if}
+					{#if wakeError}<Alert kind="warn">{wakeError}</Alert>{/if}
+				</div>
+			{/if}
 			<RecipeChat
 				recipeId={r.id}
 				step={chatStep}
 				servings={String(servings)}
 				storageKey="recipe-chat:{r.id}"
 				voice
+				ask={chatAsk}
+				onasked={() => (chatAsk = null)}
+				onbusy={onChatBusy}
 			/>
 		</Sheet>
 	{/if}
