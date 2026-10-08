@@ -3,23 +3,21 @@
 	import { invalidate } from '$app/navigation';
 	import type { ActionResult, SubmitFunction } from '@sveltejs/kit';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PollRevisions from '$lib/components/PollRevisions.svelte';
-	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
-	import StockFields from '$lib/components/StockFields.svelte';
+	import GroceryAddSheet from '$lib/components/GroceryAddSheet.svelte';
+	import GroceryPurchaseSheet from '$lib/components/GroceryPurchaseSheet.svelte';
+	import GroceryBatchSheet from '$lib/components/GroceryBatchSheet.svelte';
+	import GroceryLineSheet from '$lib/components/GroceryLineSheet.svelte';
+	import GroceryTidySheet from '$lib/components/GroceryTidySheet.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
 	import { createUndo } from '$lib/client/undo';
-	import { reopenList, tidyGroceryList } from '$lib/remote/grocery.remote';
-	import { remoteErrorMessage } from '$lib/client/remote';
+	import { reopenList } from '$lib/remote/grocery.remote';
 	import { fmtDateTime, fmtNum, fmtQty } from '$lib/client/format';
-	import { UNITS } from '$lib/shared/units';
-	import { GROCERY_CATEGORIES, compareAisles } from '$lib/shared/grocery-categories';
-	import { NOTE_MAX_CHARS } from '$lib/shared/text';
+	import { compareAisles } from '$lib/shared/grocery-categories';
 	import type { LineView, BatchView } from '$lib/server/grocery';
-	import type { TidyProposal, TidyValues } from '$lib/server/llm/grocery';
 
 	let { data, form } = $props();
 	const list = $derived(data.list);
@@ -32,36 +30,11 @@
 	let opId = $derived<string>(data.operationId);
 	const dirty = () => addOpen || !!purchase || !!editBatch || !!editLine || tidyOpen;
 
-	// tidy with the assistant: ask, review, then apply only the checked changes
+	// tidy with the assistant: the sheet owns the flow, the page shows its status
+	let tidy = $state<ReturnType<typeof GroceryTidySheet>>();
 	let tidyOpen = $state(false);
 	let tidyPending = $state(false);
-	let tidyApplying = $state(false);
 	let tidyError = $state<string | null>(null);
-	let tidyConflict = $state<{ message: string; applied: number } | null>(null);
-	let tidySent = $state<number | null>(null);
-	let proposals = $state<TidyProposal[]>([]);
-	let kept = $state<Record<string, boolean>>({});
-	const keptProposals = $derived(proposals.filter((p) => kept[p.lineId]));
-
-	// add-line form state
-	let addName = $state('');
-	let addIngredientId = $state<string | null>(null);
-	let addLabel = $state<string | null>(null);
-	let addCreate = $state(false);
-	// purchase form
-	let buyUnit = $state('g');
-	let buyName = $state('');
-	let buyIngredientId = $state<string | null>(null);
-	let buyLabel = $state<string | null>(null);
-	let buyCreate = $state(false);
-	function openPurchase(line: LineView) {
-		purchase = line;
-		buyUnit = line.unit ?? 'piece';
-		buyName = line.name;
-		buyIngredientId = line.ingredientId;
-		buyLabel = line.ingredientId ? line.name : null;
-		buyCreate = false;
-	}
 
 	const visibleLines = $derived(
 		list.lines.filter(
@@ -156,27 +129,6 @@
 			if (result.type === 'success') onSuccess?.();
 			else if (result.type === 'failure' && reloadOnFailure) await invalidate('app:grocery');
 		};
-	async function startTidy() {
-		if (tidyPending) return;
-		tidyPending = true;
-		tidyError = null;
-		tidyConflict = null;
-		try {
-			const res = await tidyGroceryList({ listId: list.id });
-			proposals = res.proposals;
-			tidySent = res.sent;
-			kept = Object.fromEntries(res.proposals.map((p) => [p.lineId, true]));
-			tidyOpen = true;
-		} catch (err) {
-			tidyError = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
-		} finally {
-			tidyPending = false;
-		}
-	}
-	/** One side of a proposal as text; amount and unit read as one quantity. */
-	function tidyQty(v: TidyValues): string {
-		return v.amount === null ? (v.unit ?? 'no amount') : fmtQty(v.amount, v.unit);
-	}
 	const undoNow = createUndo({
 		depends: 'app:grocery',
 		done: 'Purchase undone: pantry and list credit reversed.',
@@ -325,7 +277,7 @@
 								? 'border-leaf bg-leaf'
 								: 'border-[#c6c2a6] bg-card'}"
 							aria-label={l.status === 'pending' ? `Buy ${l.name}` : `${l.name} done`}
-							onclick={() => l.status === 'pending' && openPurchase(l)}
+							onclick={() => l.status === 'pending' && (purchase = l)}
 							disabled={l.status !== 'pending'}>{l.status !== 'pending' ? '✓' : ''}</button
 						>
 					{:else}
@@ -386,7 +338,7 @@
 		{#if data.aiEnabled && list.lines.length > 0}
 			<button
 				class="btn-secondary"
-				onclick={startTidy}
+				onclick={() => tidy?.start()}
 				disabled={tidyPending}
 				aria-busy={tidyPending}
 			>
@@ -416,372 +368,35 @@
 	<a href="/grocery/lists" class="btn-ghost">All lists</a>
 </div>
 
-<Sheet
+<GroceryAddSheet
 	bind:open={addOpen}
-	title="Add an item"
-	description={list.status === 'draft'
-		? 'Manual items keep their own amount; the pantry is only subtracted if you ask for it.'
-		: 'Added to the trip in progress.'}
->
-	{#if f?.message && f?.form === 'addLine'}<div class="mb-3">
-			<Alert kind="error">{f.message}</Alert>
-		</div>{/if}
-	<form
-		method="post"
-		action="?/addLine"
-		class="flex flex-col gap-3.5"
-		use:enhance={mutate({
-			onSuccess() {
-				addName = '';
-				addIngredientId = null;
-				addLabel = null;
-				addCreate = false;
-				pushToast('Item added.', { kind: 'success' });
-			}
-		})}
-	>
-		<div>
-			<label class="label" for="line-name">Item</label>
-			<IngredientAutocomplete
-				inputId="line-name"
-				fieldName="name"
-				bind:name={addName}
-				bind:ingredientId={addIngredientId}
-				bind:identityLabel={addLabel}
-				bind:createIdentity={addCreate}
-				placeholder="e.g. paper towels, rolled oats"
-			/>
-		</div>
-		<div class="grid grid-cols-2 gap-3">
-			<div>
-				<label class="label" for="line-amount"
-					>Amount <span class="font-normal text-sage">(optional)</span></label
-				>
-				<input class="field" id="line-amount" name="amount" inputmode="decimal" placeholder="500" />
-			</div>
-			<div>
-				<label class="label" for="line-unit">Unit</label>
-				<select class="field" id="line-unit" name="unit"
-					><option value="">—</option>{#each UNITS as u (u.id)}<option value={u.id}
-							>{u.singular}</option
-						>{/each}</select
-				>
-			</div>
-			<div>
-				<label class="label" for="line-category">Category</label>
-				<select class="field" id="line-category" name="category"
-					><option value="">Auto</option>{#each GROCERY_CATEGORIES as c (c)}<option value={c}
-							>{c}</option
-						>{/each}</select
-				>
-			</div>
-			<div>
-				<label class="label" for="line-note">Note</label>
-				<input class="field" id="line-note" name="note" maxlength={NOTE_MAX_CHARS} />
-			</div>
-		</div>
-		<label class="flex min-h-10 items-center gap-2.5 text-[13px]"
-			><input type="checkbox" name="subtractPantry" class="h-5 w-5 accent-leaf" /> Subtract what the pantry
-			already has</label
-		>
-		<button class="btn-primary w-full">Add to list</button>
-	</form>
-</Sheet>
+	listStatus={list.status}
+	error={f?.form === 'addLine' ? f.message : ''}
+	{mutate}
+/>
 
-<Sheet
-	open={!!purchase}
+<GroceryPurchaseSheet
+	line={purchase}
+	{lineAmount}
+	operationId={opId}
+	error={f?.form === 'purchase' ? f.message : ''}
+	{mutate}
 	onclose={() => (purchase = null)}
-	title="Confirm what you bought"
-	description={purchase
-		? `${purchase.name} · list asks for ${lineAmount(purchase)}. Packages rarely match, so enter the real amount; all of it goes into the pantry.`
-		: ''}
->
-	{#if purchase}
-		{#if f?.message && f?.form === 'purchase'}<div class="mb-3">
-				<Alert kind="error">{f.message}</Alert>
-			</div>{/if}
-		<form method="post" action="?/purchase" class="flex flex-col gap-3.5" use:enhance={mutate()}>
-			<input type="hidden" name="operationId" value={opId} />
-			<input type="hidden" name="lineId" value={purchase.id} />
-			<StockFields
-				idPrefix="buy"
-				bind:unit={buyUnit}
-				quantityLabel="Amount bought"
-				quantityPlaceholder="e.g. 1000 for a 1 kg bag"
-				locationLabel="Where it goes"
-				locationPlaceholder="Fridge, Cupboard"
-			/>
-			{#if !purchase.ingredientId}
-				<div>
-					<label class="label" for="buy-ing">Track it as</label>
-					<IngredientAutocomplete
-						inputId="buy-ing"
-						fieldName="newIngredientName"
-						bind:name={buyName}
-						bind:ingredientId={buyIngredientId}
-						bind:identityLabel={buyLabel}
-						bind:createIdentity={buyCreate}
-					/>
-					<p class="hint">Without a pantry ingredient the item can only be marked handled.</p>
-				</div>
-			{/if}
-			{#if purchase.unit && buyUnit && purchase.unit !== buyUnit}
-				<p class="text-[12px] text-honey-dark">
-					Different unit from the list ({purchase.unit}). It is credited when convertible; otherwise
-					the line is marked handled and the pantry still gets the full amount.
-				</p>
-			{/if}
-			<div class="flex gap-2.5">
-				<button class="btn-primary flex-[1.4]">Bought it</button>
-				<button class="btn-secondary flex-1" name="handledOnly" value="1" formnovalidate
-					>Mark handled, no stock</button
-				>
-			</div>
-		</form>
-	{/if}
-</Sheet>
+/>
 
-<Sheet
-	open={!!editBatch}
-	onclose={() => (editBatch = null)}
-	title="Planned batch"
-	description={editBatch
-		? `${editBatch.recipeTitle} · base ${fmtNum(editBatch.baseServings)} servings`
-		: ''}
->
-	{#if editBatch}
-		<form method="post" action="?/batch" class="flex flex-col gap-3.5" use:enhance={mutate()}>
-			<input type="hidden" name="batchId" value={editBatch.id} />
-			<div>
-				<label class="label" for="batch-servings">Servings</label>
-				<input
-					class="field"
-					id="batch-servings"
-					name="servings"
-					inputmode="decimal"
-					value={editBatch.servings}
-				/>
-			</div>
-			{#if editBatch.requirements.some((r) => r.optional)}
-				<fieldset>
-					<legend class="label">Optional ingredients to include</legend>
-					{#each editBatch.requirements.filter((r) => r.optional) as r (r.id)}
-						<label class="flex min-h-9 items-center gap-2.5 text-[13px]"
-							><input
-								type="checkbox"
-								name="includeOptional"
-								value={r.position}
-								checked={r.include}
-								class="h-5 w-5 accent-leaf"
-							/>
-							{r.name}</label
-						>
-					{/each}
-				</fieldset>
-			{/if}
-			<div class="flex gap-2.5">
-				<button class="btn-primary flex-1">Save</button>
-				<button class="btn-danger flex-1" name="remove" value="1">Remove from plan</button>
-			</div>
-		</form>
-	{/if}
-</Sheet>
+<GroceryBatchSheet batch={editBatch} {mutate} onclose={() => (editBatch = null)} />
 
-<Sheet
-	open={!!editLine}
+<GroceryLineSheet
+	line={editLine}
+	listStatus={list.status}
+	{mutate}
 	onclose={() => (editLine = null)}
-	title="Edit line"
-	description={editLine
-		? list.status === 'draft'
-			? editLine.kind === 'manual'
-				? 'Change the requested amount, category or note.'
-				: 'Recipe amounts come from the plan; change servings on the batch instead. You can change category and note.'
-			: 'Editing the remaining target keeps the credited purchases; the total target is adjusted consistently.'
-		: ''}
->
-	{#if editLine}
-		<form
-			method="post"
-			action="?/line"
-			class="flex flex-col gap-3.5"
-			use:enhance={mutate({ reloadOnFailure: true })}
-		>
-			<input type="hidden" name="lineId" value={editLine.id} />
-			<input type="hidden" name="expectedRevision" value={editLine.revision} />
-			{#if list.status === 'shopping' || editLine.kind === 'manual'}
-				<div>
-					<label class="label" for="edit-amount"
-						>{list.status === 'draft' ? 'Requested amount' : 'Remaining to buy'}
-						{editLine.unit ? `(${editLine.unit})` : ''}</label
-					>
-					<input
-						class="field"
-						id="edit-amount"
-						name="amount"
-						inputmode="decimal"
-						value={list.status === 'draft'
-							? (editLine.demandAmount ?? '')
-							: (editLine.remaining ?? '')}
-					/>
-					{#if list.status === 'shopping' && editLine.kind === 'recipe'}<p class="hint">
-							Recipe-derived targets are never recalculated automatically; this is a deliberate
-							override.
-						</p>{/if}
-				</div>
-			{/if}
-			<div class="grid grid-cols-2 gap-3">
-				<div>
-					<label class="label" for="edit-category">Category</label>
-					<select class="field" id="edit-category" name="category" value={editLine.category}
-						>{#each GROCERY_CATEGORIES as c (c)}<option value={c}>{c}</option>{/each}</select
-					>
-				</div>
-				<div>
-					<label class="label" for="edit-note">Note</label>
-					<input
-						class="field"
-						id="edit-note"
-						name="note"
-						value={editLine.note}
-						maxlength={NOTE_MAX_CHARS}
-					/>
-				</div>
-			</div>
-			<div class="flex flex-wrap gap-2.5">
-				<button class="btn-primary flex-1">Save</button>
-				{#if list.status === 'shopping' && editLine.status === 'pending'}
-					<button class="btn-secondary" name="status" value="handled">Mark handled</button>
-				{:else if list.status === 'shopping' && editLine.status === 'handled'}
-					<button class="btn-secondary" name="status" value="pending">Back to pending</button>
-				{/if}
-				{#if editLine.kind === 'manual' && editLine.purchasedAmount === '0'}
-					<button class="btn-danger" name="remove" value="1">Remove</button>
-				{/if}
-			</div>
-		</form>
-	{/if}
-</Sheet>
+/>
 
-<Sheet
+<GroceryTidySheet
+	bind:this={tidy}
+	listId={list.id}
 	bind:open={tidyOpen}
-	title="Tidy the list"
-	description="Suggestions from the assistant. Check them before you apply."
->
-	{#if tidyConflict}
-		<div class="mb-3">
-			<Alert kind="warn"
-				>{tidyConflict.message}
-				{tidyConflict.applied
-					? `${tidyConflict.applied} ${tidyConflict.applied === 1 ? 'change was' : 'changes were'} saved. `
-					: 'No other change was saved. '}Close this and ask the assistant again.</Alert
-			>
-		</div>
-		<button class="btn-secondary w-full" type="button" onclick={() => (tidyOpen = false)}
-			>Close</button
-		>
-	{:else if proposals.length === 0}
-		<p class="mb-3 text-[13px] text-sage">
-			{tidySent === 0 ? 'Nothing to tidy.' : 'The assistant found nothing to change.'}
-		</p>
-		<button class="btn-secondary w-full" type="button" onclick={() => (tidyOpen = false)}
-			>Close</button
-		>
-	{:else}
-		{#if tidyError}<div class="mb-3"><Alert kind="error">{tidyError}</Alert></div>{/if}
-		<form
-			method="post"
-			action="?/applyTidy"
-			class="flex flex-col gap-3.5"
-			use:enhance={() => {
-				tidyApplying = true;
-				tidyError = null;
-				return async ({ result, update }) => {
-					tidyApplying = false;
-					if (result.type === 'success') {
-						await update({ reset: false });
-						const applied = (result.data?.applied as number | undefined) ?? 0;
-						tidyOpen = false;
-						pushToast(`${applied} ${applied === 1 ? 'item' : 'items'} tidied.`, {
-							kind: 'success'
-						});
-						return;
-					}
-					const d = (result.type === 'failure' ? result.data : null) as {
-						message?: string;
-						applied?: number;
-						conflicts?: string[];
-					} | null;
-					if (d?.conflicts?.length) {
-						tidyConflict = { message: d.message ?? '', applied: d.applied ?? 0 };
-						proposals = [];
-					} else {
-						tidyError = d?.message ?? 'Could not save the changes. Try again.';
-					}
-					await invalidate('app:grocery');
-				};
-			}}
-		>
-			<ul class="card overflow-hidden">
-				{#each proposals as p (p.lineId)}
-					<li class="divider-row px-3.5 py-3">
-						<label class="flex min-h-10 items-start gap-2.5">
-							<input
-								type="checkbox"
-								class="mt-0.5 h-5 w-5 flex-none accent-leaf"
-								bind:checked={kept[p.lineId]}
-							/>
-							<span class="min-w-0 flex-1 text-[13px]">
-								<span class="block font-semibold">{p.before.name}</span>
-								{#if p.changed.includes('name')}
-									<span class="block text-sage">
-										Name: {p.before.name} → <strong class="text-ink">{p.after.name}</strong>
-									</span>
-								{/if}
-								{#if p.changed.includes('amount') || p.changed.includes('unit')}
-									<span class="block text-sage">
-										Amount: {tidyQty(p.before)} →
-										<strong class="text-ink">{tidyQty(p.after)}</strong>
-									</span>
-								{/if}
-								{#if p.changed.includes('category')}
-									<span class="block text-sage">
-										Aisle: {p.before.category} →
-										<strong class="text-ink">{p.after.category}</strong>
-									</span>
-								{/if}
-							</span>
-						</label>
-					</li>
-				{/each}
-			</ul>
-			{#each keptProposals as p, i (p.lineId)}
-				<input type="hidden" name="change.{i}.lineId" value={p.lineId} />
-				<input type="hidden" name="change.{i}.expectedRevision" value={p.revision} />
-				{#if p.changed.includes('name')}
-					<input type="hidden" name="change.{i}.name" value={p.after.name} />
-				{/if}
-				{#if p.changed.includes('amount') || p.changed.includes('unit')}
-					<input type="hidden" name="change.{i}.amount" value={p.after.amount ?? ''} />
-					<input type="hidden" name="change.{i}.unit" value={p.after.unit ?? ''} />
-				{/if}
-				{#if p.changed.includes('category')}
-					<input type="hidden" name="change.{i}.category" value={p.after.category} />
-				{/if}
-			{/each}
-			<div class="flex gap-2.5">
-				<button
-					class="btn-primary flex-[1.4]"
-					disabled={keptProposals.length === 0 || tidyApplying}
-					aria-busy={tidyApplying}
-				>
-					{tidyApplying
-						? 'Applying…'
-						: `Apply ${keptProposals.length} ${keptProposals.length === 1 ? 'change' : 'changes'}`}
-				</button>
-				<button class="btn-secondary flex-1" type="button" onclick={() => (tidyOpen = false)}
-					>Cancel</button
-				>
-			</div>
-		</form>
-	{/if}
-</Sheet>
+	bind:pending={tidyPending}
+	bind:error={tidyError}
+/>

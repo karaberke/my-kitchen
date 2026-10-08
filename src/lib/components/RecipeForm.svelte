@@ -1,11 +1,14 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { beforeNavigate } from '$app/navigation';
-	import IngredientAutocomplete from './IngredientAutocomplete.svelte';
 	import Alert from './Alert.svelte';
-	import { parseAmount } from '$lib/shared/amount-parse';
-	import { UNITS, normalizeUnitInput } from '$lib/shared/units';
+	import RecipeImagePicker from './RecipeImagePicker.svelte';
+	import RecipeIngredientRows, {
+		blankIngredient,
+		rowFrom,
+		type IngredientRow
+	} from './RecipeIngredientRows.svelte';
+	import { focusRow, move } from '$lib/client/rows';
 	import { resizeForUpload } from '$lib/client/image-resize';
 	import {
 		parseRecipeForm,
@@ -14,19 +17,6 @@
 		type RecipeFormInput
 	} from '$lib/shared/recipe-input';
 
-	interface IngredientRow {
-		key: number;
-		name: string;
-		ingredientId: string | null;
-		identityLabel: string | null;
-		createIdentity: boolean;
-		proposed: boolean;
-		amount: string;
-		unit: string;
-		preparation: string;
-		group: string;
-		optional: boolean;
-	}
 	interface StepRow {
 		key: number;
 		section: string;
@@ -64,34 +54,6 @@
 	const AI_FIX_ACTION = '?/aiFix';
 
 	let seq = 0;
-	const rowFrom = (
-		i: RecipeFormInput['ingredients'][number] & { createIdentity?: boolean }
-	): IngredientRow => ({
-		key: ++seq,
-		name: i.name,
-		ingredientId: i.ingredientId,
-		identityLabel: i.ingredientId ? (identityLabels[i.ingredientId] ?? i.name) : null,
-		createIdentity: !!i.createIdentity,
-		proposed: !!i.proposed,
-		amount: i.amount,
-		unit: i.unit,
-		preparation: i.preparation,
-		group: i.group,
-		optional: i.optional
-	});
-	const blankIng = (group = ''): IngredientRow => ({
-		key: ++seq,
-		name: '',
-		ingredientId: null,
-		identityLabel: null,
-		createIdentity: false,
-		proposed: false,
-		amount: '',
-		unit: '',
-		preparation: '',
-		group,
-		optional: false
-	});
 	const blankStep = (section = ''): StepRow => ({ key: ++seq, section, text: '' });
 
 	/* The form owns its state after mount; parents remount it with {#key} when initial changes. */
@@ -107,7 +69,9 @@
 	let tags = $state(initial.tags);
 	let convention = $state(initial.convention || 'metric');
 	let ingredients = $state<IngredientRow[]>(
-		initial.ingredients.length ? initial.ingredients.map(rowFrom) : [blankIng()]
+		initial.ingredients.length
+			? initial.ingredients.map((i) => rowFrom(i, identityLabels))
+			: [blankIngredient()]
 	);
 	let steps = $state<StepRow[]>(
 		initial.steps.length ? initial.steps.map((s) => ({ key: ++seq, ...s })) : [blankStep()]
@@ -124,10 +88,8 @@
 	let removeImage = $state(false);
 	/* svelte-ignore state_referenced_locally */
 	let imageUrl = $state(initial.imageUrl);
-	let imagePreview = $state<string | null>(null);
 	let submitting = $state(false);
 	let tidying = $state(false);
-	let amountErrors = $state<Record<number, string>>({});
 
 	const snapshot = () =>
 		JSON.stringify({
@@ -169,33 +131,6 @@
 	function onBeforeUnload(e: BeforeUnloadEvent) {
 		if (differs() && !submitting) e.preventDefault();
 	}
-	onDestroy(() => {
-		if (imagePreview) URL.revokeObjectURL(imagePreview);
-	});
-
-	function move<T>(list: T[], from: number, to: number): T[] {
-		if (to < 0 || to >= list.length || from === to) return list;
-		const copy = [...list];
-		const [item] = copy.splice(from, 1);
-		copy.splice(to, 0, item);
-		return copy;
-	}
-	function focusRow(prefix: string, index: number, field: string) {
-		queueMicrotask(() => document.getElementById(`${prefix}-${index}-${field}`)?.focus());
-	}
-	function addIngredient(after?: number) {
-		const idx = after === undefined ? ingredients.length : after + 1;
-		const group = ingredients[after ?? ingredients.length - 1]?.group ?? '';
-		ingredients = [...ingredients.slice(0, idx), blankIng(group), ...ingredients.slice(idx)];
-		focusRow('ing', idx, 'amount');
-		settle();
-	}
-	function removeIngredient(i: number) {
-		ingredients = ingredients.filter((_, idx) => idx !== i);
-		if (!ingredients.length) ingredients = [blankIng()];
-		focusRow('ing', Math.max(0, i - 1), 'name');
-		settle();
-	}
 	function addStep(after?: number) {
 		const idx = after === undefined ? steps.length : after + 1;
 		steps = [
@@ -211,52 +146,18 @@
 		if (!steps.length) steps = [blankStep()];
 		settle();
 	}
-	function checkAmount(i: number) {
-		const r = parseAmount(ingredients[i].amount);
-		amountErrors[i] = r.ok ? '' : r.error;
-	}
-	function normaliseUnit(i: number) {
-		const raw = ingredients[i].unit.trim();
-		if (!raw) return;
-		const norm = normalizeUnitInput(raw);
-		if (norm) ingredients[i].unit = norm;
-	}
-
-	function moveIngredient(from: number, to: number) {
-		ingredients = move(ingredients, from, to);
-		settle();
-	}
 	function moveStep(from: number, to: number) {
 		steps = move(steps, from, to);
 		settle();
 	}
 
 	// Drag & drop (pointer) — keyboard users have the up/down buttons.
-	let dragging = $state<{ list: 'ing' | 'step'; index: number } | null>(null);
-	function onDrop(list: 'ing' | 'step', index: number) {
-		if (!dragging || dragging.list !== list) return;
-		if (list === 'ing') moveIngredient(dragging.index, index);
-		else moveStep(dragging.index, index);
+	let dragging = $state<number | null>(null);
+	function onDrop(index: number) {
+		if (dragging === null) return;
+		moveStep(dragging, index);
 		dragging = null;
 	}
-	function onFile(e: Event) {
-		const file = (e.target as HTMLInputElement).files?.[0];
-		if (imagePreview) URL.revokeObjectURL(imagePreview);
-		imagePreview = file ? URL.createObjectURL(file) : null;
-		// The server uses the file and ignores the link, so clear the link here too:
-		// the form must show what is going to happen.
-		if (file) {
-			removeImage = false;
-			imageUrl = '';
-		}
-	}
-	function onImageUrl() {
-		if (imageUrl.trim()) removeImage = false;
-	}
-	const unitOptions = UNITS.map((u) => ({
-		id: u.id,
-		label: u.plural === u.singular ? u.singular : `${u.singular} / ${u.plural}`
-	}));
 </script>
 
 <svelte:window onbeforeunload={onBeforeUnload} />
@@ -432,223 +333,11 @@
 					maxlength="500"
 				/>
 			</div>
-			<div class="sm:col-span-2">
-				<label class="label" for="image"
-					>Photo <span class="font-normal text-sage">(optional, JPEG/PNG/WebP up to 5 MB)</span
-					></label
-				>
-				<div class="flex items-center gap-3">
-					{#if imagePreview}
-						<img src={imagePreview} alt="" class="h-16 w-16 rounded-[12px] object-cover" />
-					{:else if image && !removeImage}
-						<img
-							src="/media/{image.id}/thumb?v={image.version}"
-							alt=""
-							class="h-16 w-16 rounded-[12px] object-cover"
-						/>
-					{/if}
-					<input
-						class="block text-[13px] file:mr-3 file:rounded-[11px] file:border-0 file:bg-linen file:px-3 file:py-2 file:font-bold"
-						id="image"
-						name="image"
-						type="file"
-						accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
-						onchange={onFile}
-					/>
-				</div>
-				<label class="label mt-3" for="imageUrl"
-					>…or a link to a picture <span class="font-normal text-sage">(optional)</span></label
-				>
-				<input
-					class="field"
-					id="imageUrl"
-					name="imageUrl"
-					type="url"
-					inputmode="url"
-					bind:value={imageUrl}
-					oninput={onImageUrl}
-					placeholder="https://example.com/dal.jpg"
-					maxlength="2000"
-				/>
-				<p class="mt-1 text-[13px] text-sage">
-					The picture is downloaded and kept with the recipe, so it stays when the other site
-					changes. A chosen file is used instead of a link.
-				</p>
-				{#if errors.image}<p class="error-text">{errors.image}</p>{/if}
-				{#if image}
-					<label class="mt-2 flex items-center gap-2 text-[13px]"
-						><input
-							type="checkbox"
-							name="removeImage"
-							bind:checked={removeImage}
-							class="h-4 w-4 accent-leaf"
-						/> Remove current photo</label
-					>
-				{/if}
-			</div>
+			<RecipeImagePicker {image} bind:removeImage bind:imageUrl error={errors.image} />
 		</div>
 	</section>
 
-	<section>
-		<div class="mb-2 flex items-end justify-between">
-			<h2 class="text-[17px]">Ingredients</h2>
-			<span class="text-[11.5px] text-sage"
-				>Amounts like 2, 1.5, 1/2 or 1 ½ · leave empty for “to taste”</span
-			>
-		</div>
-		{#if errors.ingredients}<div class="mb-2">
-				<Alert kind="error">{errors.ingredients}</Alert>
-			</div>{/if}
-		<ol class="flex flex-col gap-2.5">
-			{#each ingredients as row, i (row.key)}
-				<li
-					class="card p-3 {dragging?.list === 'ing' && dragging.index === i ? 'opacity-50' : ''}"
-					ondragover={(e) => {
-						if (dragging?.list === 'ing') e.preventDefault();
-					}}
-					ondrop={(e) => {
-						e.preventDefault();
-						onDrop('ing', i);
-					}}
-				>
-					<div class="flex items-start gap-2">
-						<button
-							type="button"
-							class="icon-btn mt-6 cursor-grab touch-none"
-							draggable="true"
-							ondragstart={() => (dragging = { list: 'ing', index: i })}
-							ondragend={() => (dragging = null)}
-							aria-label="Drag to reorder ingredient {i + 1}"
-							title="Drag to reorder">⋮⋮</button
-						>
-						<div class="grid min-w-0 flex-1 gap-2 sm:grid-cols-[1fr_1fr_1.6fr]">
-							<div>
-								<label class="label" for="ing-{i}-amount">Amount</label>
-								<input
-									class="field {errors[`ing.${i}.amount`] || amountErrors[i] ? 'field-error' : ''}"
-									id="ing-{i}-amount"
-									name="ing.{i}.amount"
-									bind:value={row.amount}
-									inputmode="decimal"
-									placeholder="500"
-									onblur={() => checkAmount(i)}
-									aria-invalid={!!(errors[`ing.${i}.amount`] || amountErrors[i])}
-								/>
-								{#if errors[`ing.${i}.amount`] || amountErrors[i]}<p class="error-text">
-										{errors[`ing.${i}.amount`] ?? amountErrors[i]}
-									</p>{/if}
-							</div>
-							<div>
-								<label class="label" for="ing-{i}-unit">Unit</label>
-								<input
-									class="field {errors[`ing.${i}.unit`] ? 'field-error' : ''}"
-									id="ing-{i}-unit"
-									name="ing.{i}.unit"
-									bind:value={row.unit}
-									list="unit-options"
-									placeholder="g"
-									onblur={() => normaliseUnit(i)}
-									aria-invalid={!!errors[`ing.${i}.unit`]}
-								/>
-								{#if errors[`ing.${i}.unit`]}<p class="error-text">
-										{errors[`ing.${i}.unit`]}
-									</p>{/if}
-							</div>
-							<div>
-								<label class="label" for="ing-{i}-name">Ingredient</label>
-								<IngredientAutocomplete
-									inputId="ing-{i}-name"
-									fieldName="ing.{i}.name"
-									bind:name={row.name}
-									bind:ingredientId={row.ingredientId}
-									bind:identityLabel={row.identityLabel}
-									bind:createIdentity={row.createIdentity}
-									bind:proposed={row.proposed}
-									propose
-									onenter={() => focusRow('ing', i, 'preparation')}
-								/>
-								{#if errors[`ing.${i}.name`]}<p class="error-text">
-										{errors[`ing.${i}.name`]}
-									</p>{/if}
-							</div>
-							<div class="sm:col-span-2">
-								<label class="label" for="ing-{i}-preparation">Preparation / original wording</label
-								>
-								<input
-									class="field"
-									id="ing-{i}-preparation"
-									name="ing.{i}.preparation"
-									bind:value={row.preparation}
-									placeholder="diced, or “1 can (400 ml)”"
-									onkeydown={(e) => {
-										if (e.key === 'Enter') {
-											e.preventDefault();
-											addIngredient(i);
-										}
-									}}
-								/>
-							</div>
-							<div class="flex flex-col gap-1">
-								<label class="label" for="ing-{i}-group"
-									>Group <span class="font-normal text-sage">(optional)</span></label
-								>
-								<input
-									class="field"
-									id="ing-{i}-group"
-									name="ing.{i}.group"
-									bind:value={row.group}
-									placeholder="Dough, Topping…"
-									list="group-options"
-								/>
-							</div>
-						</div>
-					</div>
-					<div class="mt-2 flex flex-wrap items-center gap-2 pl-11">
-						<label class="flex min-h-9 items-center gap-2 text-[12.5px]"
-							><input
-								type="checkbox"
-								name="ing.{i}.optional"
-								bind:checked={row.optional}
-								class="h-4 w-4 accent-leaf"
-							/> Optional</label
-						>
-						<span class="flex-1"></span>
-						<button
-							type="button"
-							class="icon-btn"
-							onclick={() => moveIngredient(i, i - 1)}
-							disabled={i === 0}
-							aria-label="Move ingredient {i + 1} up">↑</button
-						>
-						<button
-							type="button"
-							class="icon-btn"
-							onclick={() => moveIngredient(i, i + 1)}
-							disabled={i === ingredients.length - 1}
-							aria-label="Move ingredient {i + 1} down">↓</button
-						>
-						<button
-							type="button"
-							class="icon-btn text-brick-dark"
-							onclick={() => removeIngredient(i)}
-							aria-label="Remove ingredient {i + 1}">✕</button
-						>
-					</div>
-				</li>
-			{/each}
-		</ol>
-		<button type="button" class="btn-secondary btn-sm mt-2.5" onclick={() => addIngredient()}
-			>+ Add ingredient</button
-		>
-		<datalist id="unit-options"
-			>{#each unitOptions as u (u.id)}<option value={u.id}>{u.label}</option>{/each}</datalist
-		>
-		<datalist id="group-options"
-			>{#each [...new Set(ingredients.map((r) => r.group).filter(Boolean))] as g (g)}<option
-					value={g}
-				></option>{/each}</datalist
-		>
-	</section>
+	<RecipeIngredientRows bind:rows={ingredients} {errors} onsettle={settle} />
 
 	<section>
 		<div class="mb-2 flex items-end justify-between">
@@ -661,13 +350,13 @@
 		<ol class="flex flex-col gap-2.5">
 			{#each steps as step, i (step.key)}
 				<li
-					class="card p-3 {dragging?.list === 'step' && dragging.index === i ? 'opacity-50' : ''}"
+					class="card p-3 {dragging === i ? 'opacity-50' : ''}"
 					ondragover={(e) => {
-						if (dragging?.list === 'step') e.preventDefault();
+						if (dragging !== null) e.preventDefault();
 					}}
 					ondrop={(e) => {
 						e.preventDefault();
-						onDrop('step', i);
+						onDrop(i);
 					}}
 				>
 					<div class="flex items-start gap-2">
@@ -675,7 +364,7 @@
 							type="button"
 							class="icon-btn mt-6 cursor-grab touch-none"
 							draggable="true"
-							ondragstart={() => (dragging = { list: 'step', index: i })}
+							ondragstart={() => (dragging = i)}
 							ondragend={() => (dragging = null)}
 							aria-label="Drag to reorder step {i + 1}"
 							title="Drag to reorder">⋮⋮</button
