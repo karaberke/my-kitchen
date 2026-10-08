@@ -550,6 +550,7 @@
 <ScanConfirm
 	{scan}
 	categories={data.categories}
+	aiEnabled={data.aiEnabled}
 	operationId={scanOpId}
 	form={f}
 	onclose={() => (scan = null)}

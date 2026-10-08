@@ -10,10 +10,13 @@
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { newOperationId } from '$lib/client/ids';
 	import { undo } from '$lib/remote/pantry.remote';
-	import { reopenList } from '$lib/remote/grocery.remote';
+	import { reopenList, tidyGroceryList } from '$lib/remote/grocery.remote';
+	import { remoteErrorMessage } from '$lib/client/remote';
 	import { fmtDateTime, fmtNum, fmtQty } from '$lib/client/format';
 	import { UNITS } from '$lib/shared/units';
+	import { compareAisles } from '$lib/shared/grocery-categories';
 	import type { LineView, BatchView } from '$lib/server/grocery';
+	import type { TidyProposal, TidyValues } from '$lib/server/llm/grocery';
 
 	let { data, form } = $props();
 	const list = $derived(data.list);
@@ -38,7 +41,18 @@
 	let editLine = $state<LineView | null>(null);
 	let opId = $derived<string>(data.operationId);
 	let undoOp = $state(newOperationId());
-	const dirty = () => addOpen || !!purchase || !!editBatch || !!editLine;
+	const dirty = () => addOpen || !!purchase || !!editBatch || !!editLine || tidyOpen;
+
+	// tidy with the assistant: ask, review, then apply only the checked changes
+	let tidyOpen = $state(false);
+	let tidyPending = $state(false);
+	let tidyApplying = $state(false);
+	let tidyError = $state<string | null>(null);
+	let tidyConflict = $state<{ message: string; applied: number } | null>(null);
+	let tidySent = $state<number | null>(null);
+	let proposals = $state<TidyProposal[]>([]);
+	let kept = $state<Record<string, boolean>>({});
+	const keptProposals = $derived(proposals.filter((p) => kept[p.lineId]));
 
 	// add-line form state
 	let addName = $state('');
@@ -69,7 +83,7 @@
 	const sections = $derived.by(() => {
 		const groups: Record<string, LineView[]> = {};
 		for (const l of visibleLines) (groups[l.category] ??= []).push(l);
-		return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+		return Object.entries(groups).sort((a, b) => compareAisles(a[0], b[0]));
 	});
 	const pendingCount = $derived(list.lines.filter((l) => l.status === 'pending').length);
 	const doneCount = $derived(list.lines.length - pendingCount);
@@ -134,6 +148,27 @@
 			pushToast('Trip reopened. You can shop again.', { kind: 'success' });
 		else if (d.action === 'refresh')
 			pushToast('Preview recalculated from current pantry.', { kind: 'success' });
+	}
+	async function startTidy() {
+		if (tidyPending) return;
+		tidyPending = true;
+		tidyError = null;
+		tidyConflict = null;
+		try {
+			const res = await tidyGroceryList({ listId: list.id });
+			proposals = res.proposals;
+			tidySent = res.sent;
+			kept = Object.fromEntries(res.proposals.map((p) => [p.lineId, true]));
+			tidyOpen = true;
+		} catch (err) {
+			tidyError = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
+		} finally {
+			tidyPending = false;
+		}
+	}
+	/** One side of a proposal as text; amount and unit read as one quantity. */
+	function tidyQty(v: TidyValues): string {
+		return v.amount === null ? (v.unit ?? 'no amount') : fmtQty(v.amount, v.unit);
 	}
 	async function undoNow(eventId: string) {
 		try {
@@ -341,9 +376,30 @@
 	</section>
 {/each}
 
+{#if data.aiEnabled && list.status !== 'completed' && list.lines.length > 0}
+	<div class="no-print mt-4" aria-live="polite">
+		{#if tidyPending}
+			<p class="mb-2 text-[12.5px] text-sage">
+				Reading your list with the assistant… this can take a minute.
+			</p>
+		{/if}
+		{#if tidyError}<div class="mb-2"><Alert kind="error">{tidyError}</Alert></div>{/if}
+	</div>
+{/if}
+
 <div class="no-print mt-6 flex flex-wrap gap-2.5">
 	{#if list.status !== 'completed'}
 		<button class="btn-secondary" onclick={() => (addOpen = true)}>Add item</button>
+		{#if data.aiEnabled && list.lines.length > 0}
+			<button
+				class="btn-secondary"
+				onclick={startTidy}
+				disabled={tidyPending}
+				aria-busy={tidyPending}
+			>
+				{tidyPending ? 'Reading the list…' : 'Tidy with assistant'}
+			</button>
+		{/if}
 	{/if}
 	{#if list.status === 'draft'}
 		<form
@@ -680,6 +736,130 @@
 				{#if editLine.kind === 'manual' && editLine.purchasedAmount === '0'}
 					<button class="btn-danger" name="remove" value="1">Remove</button>
 				{/if}
+			</div>
+		</form>
+	{/if}
+</Sheet>
+
+<Sheet
+	bind:open={tidyOpen}
+	title="Tidy the list"
+	description="Suggestions from the assistant. Check them before you apply."
+>
+	{#if tidyConflict}
+		<div class="mb-3">
+			<Alert kind="warn"
+				>{tidyConflict.message}
+				{tidyConflict.applied
+					? `${tidyConflict.applied} ${tidyConflict.applied === 1 ? 'change was' : 'changes were'} saved. `
+					: 'No other change was saved. '}Close this and ask the assistant again.</Alert
+			>
+		</div>
+		<button class="btn-secondary w-full" type="button" onclick={() => (tidyOpen = false)}
+			>Close</button
+		>
+	{:else if proposals.length === 0}
+		<p class="mb-3 text-[13px] text-sage">
+			{tidySent === 0 ? 'Nothing to tidy.' : 'The assistant found nothing to change.'}
+		</p>
+		<button class="btn-secondary w-full" type="button" onclick={() => (tidyOpen = false)}
+			>Close</button
+		>
+	{:else}
+		{#if tidyError}<div class="mb-3"><Alert kind="error">{tidyError}</Alert></div>{/if}
+		<form
+			method="post"
+			action="?/applyTidy"
+			class="flex flex-col gap-3.5"
+			use:enhance={() => {
+				tidyApplying = true;
+				tidyError = null;
+				return async ({ result, update }) => {
+					tidyApplying = false;
+					if (result.type === 'success') {
+						await update({ reset: false });
+						const applied = (result.data?.applied as number | undefined) ?? 0;
+						tidyOpen = false;
+						pushToast(`${applied} ${applied === 1 ? 'item' : 'items'} tidied.`, {
+							kind: 'success'
+						});
+						return;
+					}
+					const d = (result.type === 'failure' ? result.data : null) as {
+						message?: string;
+						applied?: number;
+						conflicts?: string[];
+					} | null;
+					if (d?.conflicts?.length) {
+						tidyConflict = { message: d.message ?? '', applied: d.applied ?? 0 };
+						proposals = [];
+					} else {
+						tidyError = d?.message ?? 'Could not save the changes. Try again.';
+					}
+					await invalidate('app:grocery');
+				};
+			}}
+		>
+			<ul class="card overflow-hidden">
+				{#each proposals as p (p.lineId)}
+					<li class="divider-row px-3.5 py-3">
+						<label class="flex min-h-10 items-start gap-2.5">
+							<input
+								type="checkbox"
+								class="mt-0.5 h-5 w-5 flex-none accent-leaf"
+								bind:checked={kept[p.lineId]}
+							/>
+							<span class="min-w-0 flex-1 text-[13px]">
+								<span class="block font-semibold">{p.before.name}</span>
+								{#if p.changed.includes('name')}
+									<span class="block text-sage">
+										Name: {p.before.name} → <strong class="text-ink">{p.after.name}</strong>
+									</span>
+								{/if}
+								{#if p.changed.includes('amount') || p.changed.includes('unit')}
+									<span class="block text-sage">
+										Amount: {tidyQty(p.before)} →
+										<strong class="text-ink">{tidyQty(p.after)}</strong>
+									</span>
+								{/if}
+								{#if p.changed.includes('category')}
+									<span class="block text-sage">
+										Aisle: {p.before.category} →
+										<strong class="text-ink">{p.after.category}</strong>
+									</span>
+								{/if}
+							</span>
+						</label>
+					</li>
+				{/each}
+			</ul>
+			{#each keptProposals as p, i (p.lineId)}
+				<input type="hidden" name="change.{i}.lineId" value={p.lineId} />
+				<input type="hidden" name="change.{i}.expectedRevision" value={p.revision} />
+				{#if p.changed.includes('name')}
+					<input type="hidden" name="change.{i}.name" value={p.after.name} />
+				{/if}
+				{#if p.changed.includes('amount') || p.changed.includes('unit')}
+					<input type="hidden" name="change.{i}.amount" value={p.after.amount ?? ''} />
+					<input type="hidden" name="change.{i}.unit" value={p.after.unit ?? ''} />
+				{/if}
+				{#if p.changed.includes('category')}
+					<input type="hidden" name="change.{i}.category" value={p.after.category} />
+				{/if}
+			{/each}
+			<div class="flex gap-2.5">
+				<button
+					class="btn-primary flex-[1.4]"
+					disabled={keptProposals.length === 0 || tidyApplying}
+					aria-busy={tidyApplying}
+				>
+					{tidyApplying
+						? 'Applying…'
+						: `Apply ${keptProposals.length} ${keptProposals.length === 1 ? 'change' : 'changes'}`}
+				</button>
+				<button class="btn-secondary flex-1" type="button" onclick={() => (tidyOpen = false)}
+					>Cancel</button
+				>
 			</div>
 		</form>
 	{/if}

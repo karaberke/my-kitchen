@@ -21,12 +21,18 @@ import {
 	removeLine,
 	startShopping,
 	updateBatch,
-	updateLine
+	updateLine,
+	type UpdateLineInput
 } from '$lib/server/grocery';
+import { ReviewConflict } from '$lib/server/errors';
+import { llmEnabled } from '$lib/server/llm/client';
+import { GROCERY_TIDY_MAX_LINES } from '$lib/server/llm/grocery';
+import { match as isUuid } from '../../../../params/uuid';
 import { parseAmount } from '$lib/shared/amount-parse';
 import { operationIdFrom } from '$lib/server/operations';
-import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
+import { GROCERY_CATEGORIES, isGroceryCategory } from '$lib/shared/grocery-categories';
 import { isUnitId } from '$lib/shared/units';
+import { parseGroceryEntry } from '$lib/shared/recipe-html';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -41,11 +47,65 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		list,
 		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision },
 		operationId: randomUUID(),
-		categories: GROCERY_CATEGORIES
+		categories: GROCERY_CATEGORIES,
+		aiEnabled: llmEnabled()
 	};
 };
 
 const num = (v: FormDataEntryValue | null) => Number(v ?? -1);
+
+/**
+ * The changes `applyTidy` posts, one group per line: `change.<i>.lineId` and
+ * `change.<i>.expectedRevision`, then only the fields to change:
+ * `change.<i>.name`, `change.<i>.amount` with `change.<i>.unit` (blank clears
+ * it), `change.<i>.category`, `change.<i>.ingredientId` (blank unlinks).
+ */
+function parseTidyChanges(
+	listId: string,
+	fd: FormData
+): { ok: true; changes: UpdateLineInput[] } | { ok: false; message: string } {
+	const indexes = new Set<number>();
+	for (const key of fd.keys()) {
+		const m = /^change\.(\d+)\./.exec(key);
+		if (m) indexes.add(Number(m[1]));
+	}
+	if (!indexes.size) return { ok: false, message: 'Choose at least one change' };
+	if (indexes.size > GROCERY_TIDY_MAX_LINES) return { ok: false, message: 'Too many changes' };
+	const changes: UpdateLineInput[] = [];
+	for (const i of [...indexes].sort((a, b) => a - b)) {
+		const field = (name: string) => {
+			const v = fd.get(`change.${i}.${name}`);
+			return v === null ? undefined : String(v);
+		};
+		const lineId = field('lineId') ?? '';
+		const expectedRevision = Number(field('expectedRevision'));
+		if (!isUuid(lineId) || !Number.isInteger(expectedRevision))
+			return { ok: false, message: 'The changes could not be read' };
+		const change: UpdateLineInput = { listId, lineId, expectedRevision };
+		const name = field('name');
+		if (name !== undefined) change.name = name;
+		const amountRaw = field('amount');
+		if (amountRaw !== undefined) {
+			const amount = parseAmount(amountRaw);
+			if (!amount.ok) return { ok: false, message: amount.error };
+			change.amount = amount.value;
+			change.unit = field('unit') || null;
+		}
+		const category = field('category');
+		if (category !== undefined) {
+			if (!isGroceryCategory(category)) return { ok: false, message: 'Unknown aisle' };
+			change.category = category;
+		}
+		const ingredientId = field('ingredientId');
+		if (ingredientId !== undefined) {
+			if (ingredientId && !isUuid(ingredientId))
+				return { ok: false, message: 'The changes could not be read' };
+			change.ingredientId = ingredientId || null;
+		}
+		changes.push(change);
+	}
+	return { ok: true, changes };
+}
 
 export const actions: Actions = {
 	refresh: async (event) => {
@@ -136,16 +196,24 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const amount = parseAmount(String(fd.get('amount') ?? ''));
+			const amountRaw = String(fd.get('amount') ?? '');
+			const amount = parseAmount(amountRaw);
 			if (!amount.ok) return fail(400, { message: amount.error, form: 'addLine' });
-			const unit = String(fd.get('unit') ?? '') || null;
+			let unit = String(fd.get('unit') ?? '') || null;
 			if (unit && !isUnitId(unit)) return fail(400, { message: 'Unknown unit', form: 'addLine' });
+			let name = String(fd.get('name') ?? '');
+			let amountValue = amount.value;
+			// "400 g chopped tomatoes" typed into the name alone: split it, or keep it as typed.
+			if (!amountRaw.trim() && !unit) {
+				const entry = parseGroceryEntry(name);
+				if (entry) ({ amount: amountValue, unit, name } = entry);
+			}
 			await addManualLine(ctx, {
 				listId: event.params.listId,
-				name: String(fd.get('name') ?? ''),
+				name,
 				ingredientId: String(fd.get('ingredientId') ?? '') || null,
-				amount: amount.value,
-				unit: amount.value ? unit : null,
+				amount: amountValue,
+				unit: amountValue ? unit : null,
 				category: String(fd.get('category') ?? ''),
 				subtractPantry: fd.get('subtractPantry') === 'on',
 				note: String(fd.get('note') ?? '')
@@ -183,6 +251,31 @@ export const actions: Actions = {
 		} catch (err) {
 			return actionError(err);
 		}
+	},
+	/** Save the tidy proposals the user kept; see `parseTidyChanges` for the fields. */
+	applyTidy: async (event) => {
+		const ctx = householdActor(event);
+		const parsed = parseTidyChanges(event.params.listId, await event.request.formData());
+		if (!parsed.ok) return fail(400, { message: parsed.message, form: 'applyTidy' });
+		const conflicts: string[] = [];
+		let applied = 0;
+		for (const change of parsed.changes) {
+			try {
+				await updateLine(ctx, change);
+				applied++;
+			} catch (err) {
+				if (err instanceof ReviewConflict) conflicts.push(change.lineId);
+				else return actionError(err);
+			}
+		}
+		if (conflicts.length)
+			return fail(409, {
+				message: 'Some items changed since the assistant read them. Check them and try again.',
+				form: 'applyTidy',
+				applied,
+				conflicts
+			});
+		return { ok: true, action: 'applyTidy', applied };
 	},
 	purchase: async (event) => {
 		const ctx = householdActor(event);

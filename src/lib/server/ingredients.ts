@@ -6,19 +6,10 @@ import { barcodeLinks, ingredientAliases, ingredients, stockLots } from '$lib/se
 import { matchCandidates } from '$lib/shared/ingredient-name';
 import { normalizeName } from '$lib/shared/text';
 import { AppError } from '$lib/server/errors';
+import { OTHER_CATEGORY, isGroceryCategory } from '$lib/shared/grocery-categories';
 
-export const GROCERY_CATEGORIES = [
-	'Produce',
-	'Meat & fish',
-	'Dairy & eggs',
-	'Bakery',
-	'Pantry',
-	'Spices',
-	'Frozen',
-	'Beverages',
-	'Household',
-	'Other'
-] as const;
+/** Re-exported for older imports; the list lives in `$lib/shared/grocery-categories`. */
+export { GROCERY_CATEGORIES } from '$lib/shared/grocery-categories';
 
 /** The longest ingredient name a user may type. */
 export const INGREDIENT_NAME_MAX = 80;
@@ -155,7 +146,7 @@ export async function createCustomIngredient(
 		throw new AppError(400, `Ingredient name must be 1-${INGREDIENT_NAME_MAX} characters`);
 	const normalized = normalizeName(clean);
 	if (!normalized) throw new AppError(400, 'Ingredient name must contain letters or numbers');
-	const cat = (GROCERY_CATEGORIES as readonly string[]).includes(category) ? category : 'Other';
+	const cat = isGroceryCategory(category) ? category : OTHER_CATEGORY;
 	const [existing] = await db
 		.select({ id: ingredients.id, name: ingredients.name, category: ingredients.category })
 		.from(ingredients)

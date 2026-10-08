@@ -5,12 +5,13 @@ import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { linkIngredientNames, listUnlinkedIngredients } from '$lib/server/ingredient-links';
 import { createCustomIngredient } from '$lib/server/ingredients';
+import { llmEnabled } from '$lib/server/llm/client';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:ingredient-links');
 	const groups = await listUnlinkedIngredients(db, user.id);
-	return { title: 'Pantry links', groups };
+	return { title: 'Pantry links', groups, aiEnabled: llmEnabled() };
 };
 
 /** Reads the rows the page posted: link.<i>.name plus the combobox fields. */

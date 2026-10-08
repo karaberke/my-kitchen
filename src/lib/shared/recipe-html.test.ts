@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { importRecipeHtml, isoDurationToMinutes, splitIngredientLine } from './recipe-html';
+import {
+	importRecipeHtml,
+	isoDurationToMinutes,
+	parseGroceryEntry,
+	splitIngredientLine
+} from './recipe-html';
 
 const wrap = (jsonld: unknown, body = '') =>
 	`<!DOCTYPE html><html><head><title>Page title</title>
@@ -339,5 +344,38 @@ describe('importRecipeHtml: the picture', () => {
 
 	it('leaves the field empty when the page names no picture', () => {
 		expect(importRecipeHtml(wrap(RECIPE)).input.imageUrl).toBe('');
+	});
+});
+
+describe('parseGroceryEntry', () => {
+	const read = (text: string) => {
+		const e = parseGroceryEntry(text);
+		return e && { amount: e.amount.toString(), unit: e.unit, name: e.name };
+	};
+
+	it('splits a plain amount, unit and name', () => {
+		expect(read('400 g chopped tomatoes')).toEqual({
+			amount: '400',
+			unit: 'g',
+			name: 'chopped tomatoes'
+		});
+		expect(read('400g rice')).toEqual({ amount: '400', unit: 'g', name: 'rice' });
+		expect(read('1 1/2 l milk')).toEqual({ amount: '1.5', unit: 'l', name: 'milk' });
+		expect(read('2 eggs')).toEqual({ amount: '2', unit: null, name: 'eggs' });
+	});
+
+	it('keeps a multiplier or a second number as typed', () => {
+		expect(read('2x tins chopped tomatoes 400g')).toBeNull();
+		expect(read('2 x eggs')).toBeNull();
+		expect(read('3 × 400 g beans')).toBeNull();
+		expect(read('2 tins tomatoes 400g')).toBeNull();
+	});
+
+	it('keeps text without a plain amount as typed', () => {
+		expect(read('tomatoes')).toBeNull();
+		expect(read('7up')).toBeNull();
+		expect(read('0 eggs')).toBeNull();
+		expect(read('400 g')).toBeNull();
+		expect(read('')).toBeNull();
 	});
 });

@@ -1,3 +1,5 @@
+import { GROCERY_CATEGORIES, OTHER_CATEGORY } from '$lib/shared/grocery-categories';
+
 /**
  * Fixed prompts for the assistant.
  *
@@ -47,3 +49,33 @@ Rules:
 
 /** Start of the user message for a question; the recipe follows, and the question comes last. */
 export const RECIPE_ASK_TASK = 'Recipe:\n';
+
+/**
+ * Tidy a grocery list. The aisle names come from the fixed `GROCERY_CATEGORIES`
+ * constant, so the prompt is still the same bytes on every call; the schema's
+ * enum holds the model to the same list.
+ */
+export const GROCERY_TIDY_SYSTEM = `You tidy items on a grocery list for a home cook.
+Each input line is "number: item text". Return one entry for each line, with the same number as "id".
+Rules:
+- "name": the item in a few plain words, short and generic, for example "chopped tomatoes", "bananas" or "olive oil". No amounts, sizes, counts or brands.
+- "amount" and "unit": the quantity to buy, copied exactly as written in the item text, for example "400" and "g", or "2" and "tins". Never convert, multiply, add up, round or invent an amount. If the text gives no amount, or you are not sure, return "" for both.
+- "aisle": the shop aisle, one of ${GROCERY_CATEGORIES.join(', ')}. Use ${OTHER_CATEGORY} only when no aisle fits.
+- If an item is already tidy, return it unchanged.`;
+
+/** Start of the user message for a grocery tidy; the numbered lines follow. */
+export const GROCERY_TIDY_TASK = 'Task: tidy these grocery items.\n\nItems:\n';
+
+/** Pick the catalog ingredient that is the same food as a written name, or none. */
+export const INGREDIENT_PICK_SYSTEM = `You match ingredient names to a food catalog for a pantry app.
+Each name comes with numbered catalog candidates. For each name, return "pick": the number of the candidate that is the same food, or null.
+Rules:
+- Pick only the same food. A plural, a spelling variant or a different word order is the same food.
+- A variety or a kind of it is not the same food: "cherry tomatoes" is not "tomatoes".
+- A product made from it is not the same food: "almond milk" is not "milk", "tomato sauce" is not "tomatoes".
+- A different form is not the same food: "milk powder" is not "milk", "garlic powder" is not "garlic".
+- If you are not sure, return null. A wrong pick is worse than no pick.
+- Copy each name exactly as given in "name".`;
+
+/** Start of the user message for a catalog pick; the names and candidates follow. */
+export const INGREDIENT_PICK_TASK = 'Task: pick the matching candidate for each name.\n\n';

@@ -5,14 +5,18 @@
 	 */
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import type { UnlinkedGroup } from '$lib/server/ingredient-links';
+	import type { IngredientSuggestion } from '$lib/server/ingredients';
 
 	let {
 		group,
 		index,
+		suggestion = null,
 		onchoice
 	}: {
 		group: UnlinkedGroup;
 		index: number;
+		/** the assistant's pick; it prefills an empty row and still waits for the Link button */
+		suggestion?: IngredientSuggestion | null;
 		onchoice: (key: string, picked: boolean) => void;
 	} = $props();
 
@@ -25,6 +29,15 @@
 	let createIdentity = $state(false);
 	/* svelte-ignore state_referenced_locally */
 	let search = $state(group.name);
+
+	// Only an empty row takes the assistant's pick; a choice of the user stays.
+	let suggested = $state(false);
+	$effect(() => {
+		if (!suggestion || ingredientId || createIdentity) return;
+		ingredientId = suggestion.id;
+		identityLabel = suggestion.name;
+		suggested = true;
+	});
 
 	$effect(() => {
 		onchoice(group.key, !!ingredientId || createIdentity);
@@ -45,6 +58,11 @@
 			Proposed: <strong>{group.proposal.name}</strong>
 			{#if group.proposal.matchedOn === 'alias'}· through the other name “{group.proposal
 					.matchedText}”{/if}
+		</p>
+	{/if}
+	{#if suggested && suggestion && ingredientId === suggestion.id}
+		<p class="mt-1 text-[11.5px] text-sage">
+			Suggested by the assistant: <strong>{suggestion.name}</strong>
 		</p>
 	{/if}
 	<div class="mt-2">

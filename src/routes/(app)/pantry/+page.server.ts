@@ -21,7 +21,8 @@ import { identifyAs, identifyManual, SYMBOLOGIES, type Symbology } from '$lib/sh
 import { pantryAmount } from '$lib/shared/package-size';
 import type { LinkOrigin } from '$lib/server/db/schema';
 import { operationIdFrom } from '$lib/server/operations';
-import { GROCERY_CATEGORIES } from '$lib/server/ingredients';
+import { GROCERY_CATEGORIES } from '$lib/shared/grocery-categories';
+import { llmEnabled } from '$lib/server/llm/client';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const { user, household } = requireHousehold(event);
@@ -45,7 +46,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		filters,
 		revisions: { pantry: h.pantryRevision, grocery: h.groceryRevision, plan: h.planRevision },
 		operationId: randomUUID(),
-		categories: GROCERY_CATEGORIES
+		categories: GROCERY_CATEGORIES,
+		aiEnabled: llmEnabled()
 	};
 };
 
