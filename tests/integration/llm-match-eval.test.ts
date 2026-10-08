@@ -3,7 +3,7 @@ import { catalogIngredientId, createUser, requestAs, resetDb } from './helpers';
 import { llmEnabled } from '$lib/server/llm/client';
 import { suggestIngredientMatch } from '$lib/server/llm/match';
 import { resetRateLimits } from '$lib/server/ratelimit';
-import { RESOLVE_CASES } from '$lib/shared/ingredient-match-cases';
+import { RESOLVE_CASES } from './ingredient-match-cases';
 import { unstubLlm } from '../llm-stub';
 
 /** Slow: one request per case to a real model server. */

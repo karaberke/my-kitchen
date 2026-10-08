@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, lt, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import { db, type DbOrTx } from '$lib/server/db';
 import { recipeAttachments, recipes } from '$lib/server/db/schema';
 import { recipeReadableBy } from '$lib/server/access';
 import { AppError } from '$lib/server/errors';
-import { storage } from '$lib/server/media/storage';
+import { MEDIA_SWEEP_BATCH, storage } from '$lib/server/media/storage';
 
 /** Source files an import may keep. HTML is stored as bytes and never served as markup. */
 export const ATTACHMENT_TYPES = {
@@ -108,22 +108,29 @@ export async function cleanupUnreferencedAttachments(
 	olderThanMinutes = 60,
 	keep: string[] = []
 ): Promise<number> {
+	// One statement checks and deletes, so a recipe that claims the file in between keeps it.
+	const unclaimed = and(
+		sql`not exists (select 1 from ${recipes} where ${recipes.sourceAttachmentId} = ${recipeAttachments.id})`,
+		lt(recipeAttachments.createdAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
+		keep.length ? notInArray(recipeAttachments.id, keep) : undefined
+	);
 	const rows = await db
-		.select({ id: recipeAttachments.id, objectKey: recipeAttachments.objectKey })
-		.from(recipeAttachments)
-		.leftJoin(recipes, eq(recipes.sourceAttachmentId, recipeAttachments.id))
+		.delete(recipeAttachments)
 		.where(
 			and(
-				isNull(recipes.id),
-				lt(recipeAttachments.createdAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
-				keep.length ? notInArray(recipeAttachments.id, keep) : undefined
+				inArray(
+					recipeAttachments.id,
+					db
+						.select({ id: recipeAttachments.id })
+						.from(recipeAttachments)
+						.where(unclaimed)
+						.limit(MEDIA_SWEEP_BATCH)
+				),
+				unclaimed
 			)
 		)
-		.limit(500);
+		.returning({ objectKey: recipeAttachments.objectKey });
 	const store = storage();
-	for (const row of rows) {
-		await store.delete(row.objectKey).catch(() => {});
-		await db.delete(recipeAttachments).where(eq(recipeAttachments.id, row.id));
-	}
+	for (const row of rows) await store.delete(row.objectKey).catch(() => {});
 	return rows.length;
 }

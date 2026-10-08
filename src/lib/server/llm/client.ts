@@ -37,6 +37,8 @@ export const LLM_BACKGROUND_TIMEOUT_MS = 600_000;
 /** Low, so structured output copies the source instead of inventing. */
 export const LLM_JSON_TEMPERATURE = 0.1;
 export const LLM_TEXT_TEMPERATURE = 0.3;
+/** The cut-off message when the caller words none of its own. */
+export const LLM_TOO_LONG_MESSAGE = 'The request is too long for the assistant.';
 /** Interactive calls allowed to wait behind the running one before a caller is told to come back. */
 export const LLM_MAX_WAITING = 3;
 
@@ -48,6 +50,16 @@ export const LLM_MAX_WAITING = 3;
 export interface LlmCallOptions {
 	timeoutMs?: number;
 	background?: boolean;
+	/**
+	 * The caller's request signal. When it aborts, a call still waiting leaves
+	 * the queue without reaching the server, and a running call is stopped.
+	 */
+	signal?: AbortSignal;
+}
+
+/** The person who asked went away; nobody reads this answer. */
+function cancelledError(): AppError {
+	return new AppError(499, 'The request was cancelled.');
 }
 
 function timeoutFor(call: LlmCallOptions): number {
@@ -82,8 +94,8 @@ export function llmEnabled(): boolean {
 	return llmConfig() !== null;
 }
 
-/** A client for one configuration. Exported so a test can build one with its own `fetch`. */
-export function createLlmClient(config: LlmConfig, fetchImpl?: LlmFetch): OpenAI {
+/** A client for one configuration. */
+function createLlmClient(config: LlmConfig, fetchImpl?: LlmFetch): OpenAI {
 	return new OpenAI({
 		baseURL: config.baseUrl,
 		apiKey: config.apiKey,
@@ -142,13 +154,26 @@ function pump() {
 	});
 }
 
-function enqueue<T>(job: () => Promise<T>, background = false): Promise<T> {
+function enqueue<T>(job: () => Promise<T>, call: LlmCallOptions): Promise<T> {
+	const { background = false, signal } = call;
+	if (signal?.aborted) return Promise.reject(cancelledError());
 	if (!background && lanes.interactive.length >= LLM_MAX_WAITING)
 		throw new AppError(503, 'The assistant is busy. Try again in a minute.');
+	const lane = background ? lanes.background : lanes.interactive;
 	return new Promise<T>((resolve, reject) => {
-		(background ? lanes.background : lanes.interactive).push(() =>
-			Promise.resolve().then(job).then(resolve, reject)
-		);
+		// A caller that goes away while waiting gives up its place; the server never sees it.
+		const onAbort = () => {
+			const at = lane.indexOf(start);
+			if (at < 0) return;
+			lane.splice(at, 1);
+			reject(cancelledError());
+		};
+		const start = () => {
+			signal?.removeEventListener('abort', onAbort);
+			return Promise.resolve().then(job).then(resolve, reject);
+		};
+		lane.push(start);
+		signal?.addEventListener('abort', onAbort, { once: true });
 		// Started on the next tick, so a burst of callers is counted before the first one runs.
 		void Promise.resolve().then(pump);
 	});
@@ -174,7 +199,10 @@ interface Reply {
 	finishReason: string | null;
 }
 
-function stoppedError(why: 'idle' | 'total'): AppError {
+type StopReason = 'idle' | 'total' | 'cancelled';
+
+function stoppedError(why: StopReason): AppError {
+	if (why === 'cancelled') return cancelledError();
 	return why === 'idle'
 		? new AppError(504, 'The assistant stopped answering.')
 		: new AppError(504, 'The assistant took too long to answer.');
@@ -194,16 +222,20 @@ async function chat(
 		temperature: number;
 		responseFormat?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'];
 		timeoutMs: number;
+		signal?: AbortSignal;
 	}
 ): Promise<Reply> {
 	const { openai, model } = client();
 	// Streamed, so the limit is on silence, not on how long a slow server writes.
 	const abort = new AbortController();
-	let stopped: 'idle' | 'total' | null = null;
-	const stop = (why: 'idle' | 'total') => {
-		stopped = why;
+	let stopped: StopReason | null = null;
+	const stop = (why: StopReason) => {
+		stopped ??= why;
 		abort.abort();
 	};
+	const cancel = () => stop('cancelled');
+	if (params.signal?.aborted) throw cancelledError();
+	params.signal?.addEventListener('abort', cancel, { once: true });
 	let idle = setTimeout(() => stop('idle'), LLM_IDLE_TIMEOUT_MS);
 	const total = setTimeout(() => stop('total'), params.timeoutMs);
 	try {
@@ -233,16 +265,20 @@ async function chat(
 	} catch (err) {
 		throw stopped ? stoppedError(stopped) : asLlmError(err);
 	} finally {
+		params.signal?.removeEventListener('abort', cancel);
 		clearTimeout(idle);
 		clearTimeout(total);
 	}
 }
 
+/** Drop the thinking block some servers put before the answer. */
+function stripThinking(content: string): string {
+	return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
 /** A thinking block or a code fence some servers add around JSON. */
 function unwrapJson(content: string): string {
-	return content
-		.replace(/<think>[\s\S]*?<\/think>/gi, '')
-		.trim()
+	return stripThinking(content)
 		.replace(/^```(?:json)?\s*/i, '')
 		.replace(/\s*```$/, '')
 		.trim();
@@ -260,7 +296,12 @@ export async function completeJson<T>(
 	schema: ZodType<T>,
 	system: string,
 	userText: string,
-	options: { maxTokens: number; name?: string } & LlmCallOptions
+	options: {
+		maxTokens: number;
+		name?: string;
+		/** Shown when the reply is cut off by `maxTokens`; worded for what was sent. */
+		tooLongMessage?: string;
+	} & LlmCallOptions
 ): Promise<T> {
 	const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
 	// Draft markers mean nothing to the server's grammar builder.
@@ -275,10 +316,11 @@ export async function completeJson<T>(
 				maxTokens: options.maxTokens,
 				temperature: LLM_JSON_TEMPERATURE,
 				responseFormat,
-				timeoutMs: timeoutFor(options)
+				timeoutMs: timeoutFor(options),
+				signal: options.signal
 			});
 			if (reply.finishReason === 'length')
-				throw new AppError(502, 'The recipe is too long for the assistant.');
+				throw new AppError(502, options.tooLongMessage ?? LLM_TOO_LONG_MESSAGE);
 			let json: unknown;
 			try {
 				json = JSON.parse(unwrapJson(reply.content));
@@ -289,7 +331,7 @@ export async function completeJson<T>(
 			if (parsed.success) return parsed.data;
 		}
 		throw new AppError(502, 'The assistant gave an answer that could not be read.');
-	}, options.background);
+	}, options);
 }
 
 /** Ask for plain text, such as the answer to a question. */
@@ -316,10 +358,11 @@ export async function completeChat(
 		const reply = await chat(system, messages, {
 			maxTokens: options.maxTokens,
 			temperature: LLM_TEXT_TEMPERATURE,
-			timeoutMs: timeoutFor(options)
+			timeoutMs: timeoutFor(options),
+			signal: options.signal
 		});
-		const text = reply.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+		const text = stripThinking(reply.content);
 		if (!text) throw new AppError(502, 'The assistant gave no answer.');
 		return text;
-	}, options.background);
+	}, options);
 }

@@ -5,9 +5,17 @@ import { pantryLotsFor } from '$lib/server/cooking';
 import { scanBarcode } from '$lib/server/barcode/lookup';
 import { undoFor } from '$lib/server/undo';
 
-/** Lots of one ingredient in the active household, for cooking substitutions and manual lot choice. */
+/**
+ * Lots of one ingredient in the active household, for cooking substitutions and
+ * manual lot choice; with `amount`, also how the server would split it across them.
+ */
 export const pantryLots = query(
-	z.object({ ingredient: z.string(), unit: z.string().nullable(), convention: z.string() }),
+	z.object({
+		ingredient: z.string(),
+		unit: z.string().nullable(),
+		convention: z.string(),
+		amount: z.string().max(40).nullable().optional()
+	}),
 	remote(pantryLotsFor)
 );
 

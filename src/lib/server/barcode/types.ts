@@ -1,8 +1,20 @@
 import type { Dec } from '$lib/shared/decimal';
+import { normalizeUnitInput, unitInfo } from '$lib/shared/units';
 import type { BarcodeIdentity } from '$lib/shared/gtin';
 import type { BarcodeSource, NutritionBasis } from '$lib/server/db/schema';
 
 export type { BarcodeSource, NutritionBasis };
+
+/**
+ * The 100-unit basis a provider's figures use, told by the dimension of the
+ * unit it states ("g", "kg", "ml", "cl", "Grams" …), or null when it cannot be told.
+ */
+export function nutritionBasisOf(rawUnit: string | null | undefined): NutritionBasis | null {
+	const dimension = unitInfo(rawUnit ? normalizeUnitInput(rawUnit) : null)?.dimension;
+	if (dimension === 'mass') return 'per_100g';
+	if (dimension === 'volume') return 'per_100ml';
+	return null;
+}
 
 /**
  * One nutrient exactly as a provider reported it.

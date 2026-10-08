@@ -9,7 +9,7 @@ import {
 	groceryLines,
 	type LinkOrigin
 } from '$lib/server/db/schema';
-import { assertMember } from '$lib/server/access';
+import { assertMember, type ActorContext } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
 import { assertIngredientsVisible, createCustomIngredient } from '$lib/server/ingredients';
 import { resolveIngredientName } from '$lib/server/ingredient-match';
@@ -23,12 +23,10 @@ import {
 import { runOperation } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
 import { convertAmount, isUnitId, unitInfo, unitsCompatible } from '$lib/shared/units';
+import { addDays, isIsoDate } from '$lib/shared/time';
+import { LOCATION_MAX_CHARS, NOTE_MAX_CHARS, cleanText } from '$lib/shared/text';
 
-export interface ActorContext {
-	userId: string;
-	actorName: string;
-	householdId: string;
-}
+/** Moved to access.ts; re-exported until every importer is updated. */
 
 export interface PantryFilters {
 	q: string;
@@ -61,13 +59,7 @@ export interface PantryGroup {
 	earliestExpiry: string | null;
 }
 
-export const USE_SOON_DAYS = 7;
-
-function addDays(iso: string, days: number): string {
-	const d = new Date(iso + 'T00:00:00Z');
-	d.setUTCDate(d.getUTCDate() + days);
-	return d.toISOString().slice(0, 10);
-}
+const USE_SOON_DAYS = 7;
 
 export function todayIso(): string {
 	return new Date().toISOString().slice(0, 10);
@@ -191,44 +183,16 @@ export async function getPantryOverview(
 	};
 }
 
-export async function getLot(dbx: DbOrTx, householdId: string, lotId: string) {
-	const [row] = await dbx
-		.select({
-			id: stockLots.id,
-			ingredientId: stockLots.ingredientId,
-			name: ingredients.name,
-			quantity: stockLots.quantity,
-			unit: stockLots.unit,
-			location: stockLots.location,
-			expiresOn: stockLots.expiresOn,
-			note: stockLots.note,
-			revision: stockLots.revision
-		})
-		.from(stockLots)
-		.innerJoin(ingredients, eq(ingredients.id, stockLots.ingredientId))
-		.where(and(eq(stockLots.id, lotId), eq(stockLots.householdId, householdId)))
-		.limit(1);
-	if (!row) throw new AppError(404, 'Pantry lot not found');
-	return { ...row, quantity: Dec.from(row.quantity).toString() };
-}
-
-function validateDate(raw: string | null | undefined): string | null {
+/** An optional best-before date: null when blank, a 400 unless it is a calendar date that exists. */
+export function validateDate(raw: string | null | undefined): string | null {
 	if (!raw) return null;
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new AppError(400, 'Use a calendar date (YYYY-MM-DD)');
-	const d = new Date(raw + 'T00:00:00Z');
-	if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== raw)
-		throw new AppError(400, 'That date does not exist');
+	if (!isIsoDate(raw)) throw new AppError(400, 'Use a calendar date that exists (YYYY-MM-DD)');
 	return raw;
 }
 
 function validateUnit(unit: string): string {
 	if (!isUnitId(unit)) throw new AppError(400, 'Unknown unit');
 	return unit;
-}
-
-/** Provider and phone text, kept to a length a column and a screen can hold. */
-function text(raw: string, max: number): string {
-	return raw.trim().replace(/\s+/g, ' ').slice(0, max);
 }
 
 function validateBarcodeLink(link: BarcodeLinkInput): void {
@@ -259,6 +223,28 @@ export interface BarcodeLinkInput {
 	packageCount: number;
 	packageLabelText: string;
 	origin: LinkOrigin;
+}
+
+/** The product source a scan form posts; anything else counts as typed by hand. */
+export function scanOrigin(raw: string): LinkOrigin {
+	return raw === 'usda' || raw === 'off' ? raw : 'manual';
+}
+
+/**
+ * The name a scan makes a new ingredient from, or null for none. A chosen
+ * ingredient wins. The untouched product title is not a choice: a scan makes a
+ * new identity only from a typed name or the explicit "new ingredient" option.
+ */
+export function scanNewIngredientName(scan: {
+	ingredientId: string | null;
+	name: string;
+	providerTitle: string;
+	createIdentity: boolean;
+}): string | null {
+	const name = scan.name.trim();
+	if (scan.ingredientId) return null;
+	if (!scan.createIdentity && name === scan.providerTitle) return null;
+	return name;
 }
 
 export interface AddStockInput {
@@ -333,9 +319,9 @@ export async function addStock(ctx: ActorContext, input: AddStockInput) {
 				ingredientId,
 				quantity: input.quantity,
 				unit,
-				location: input.location.trim().slice(0, 60),
+				location: input.location.trim().slice(0, LOCATION_MAX_CHARS),
 				expiresOn,
-				note: input.note.trim().slice(0, 300)
+				note: input.note.trim().slice(0, NOTE_MAX_CHARS)
 			});
 			if (input.barcode) {
 				// Same transaction as the lot: a household never ends up having
@@ -345,12 +331,12 @@ export async function addStock(ctx: ActorContext, input: AddStockInput) {
 					householdId: ctx.householdId,
 					gtin: b.gtin,
 					ingredientId,
-					displayName: text(b.displayName, 120) || name,
-					brand: text(b.brand, 80),
+					displayName: cleanText(b.displayName, 120) || name,
+					brand: cleanText(b.brand, 80),
 					defaultQuantity: b.packageQuantity.toDb(),
 					defaultUnit: b.packageUnit,
 					defaultPackageCount: b.packageCount,
-					packageLabelText: text(b.packageLabelText, 120),
+					packageLabelText: cleanText(b.packageLabelText, 120),
 					origin: b.origin
 				};
 				await tx
@@ -400,9 +386,9 @@ export async function updateLotMetadata(
 		const [updated] = await tx
 			.update(stockLots)
 			.set({
-				location: input.location.trim().slice(0, 60),
+				location: input.location.trim().slice(0, LOCATION_MAX_CHARS),
 				expiresOn,
-				note: input.note.trim().slice(0, 300),
+				note: input.note.trim().slice(0, NOTE_MAX_CHARS),
 				revision: sql`${stockLots.revision} + 1`,
 				updatedAt: sql`now()`
 			})
@@ -475,7 +461,7 @@ export async function correctLot(
 					before: lot.quantity.toString(),
 					after: input.checkedQuantity.toString(),
 					unit: lot.unit,
-					note: input.note.slice(0, 300)
+					note: input.note.slice(0, NOTE_MAX_CHARS)
 				}
 			});
 			const balance = await applyMovement(tx, {
@@ -539,7 +525,7 @@ export async function wasteLot(
 					name,
 					quantity: input.quantity.toString(),
 					unit: lot.unit,
-					reason: input.reason.slice(0, 300)
+					reason: input.reason.slice(0, NOTE_MAX_CHARS)
 				}
 			});
 			const balance = await applyMovement(tx, {
@@ -665,46 +651,59 @@ export interface ConsistencyReport {
 	lineMismatches: { lineId: string; purchasedAmount: string; allocationSum: string }[];
 }
 
-/** Compare current lot balances with the append-only movement log; never mutates. */
+/**
+ * Compare current lot balances with the append-only movement log, and line
+ * purchases with their allocations; never mutates. Only mismatches leave the database.
+ */
 export async function consistencyCheck(
 	dbx: DbOrTx,
 	householdId: string | null = null
 ): Promise<ConsistencyReport> {
-	const lotRows = await dbx
-		.select({
-			lotId: stockLots.id,
-			householdId: stockLots.householdId,
-			balance: stockLots.quantity,
-			movementSum: sql<string>`coalesce((select sum(m.delta) from inventory_movement m where m.lot_id = stock_lot.id), 0)`
-		})
-		.from(stockLots)
-		.where(householdId ? eq(stockLots.householdId, householdId) : sql`true`);
-	const lotMismatches = lotRows
-		.filter((r) => !Dec.from(r.balance).eq(Dec.from(r.movementSum)))
-		.map((r) => ({
+	const lotScope = householdId ? eq(stockLots.householdId, householdId) : sql`true`;
+	const movementSum = sql<string>`coalesce((select sum(m.delta) from inventory_movement m where m.lot_id = stock_lot.id), 0)`;
+	const allocationSum = sql<string>`coalesce((select sum(a.amount) from purchase_allocation a where a.line_id = grocery_line.id), 0)`;
+	const [[{ lotsChecked }], lotRows, lineRows] = await Promise.all([
+		dbx
+			.select({ lotsChecked: sql<number>`count(*)::int` })
+			.from(stockLots)
+			.where(lotScope),
+		dbx
+			.select({
+				lotId: stockLots.id,
+				householdId: stockLots.householdId,
+				balance: stockLots.quantity,
+				movementSum
+			})
+			.from(stockLots)
+			.where(and(lotScope, sql`${stockLots.quantity} <> ${movementSum}`)),
+		dbx
+			.select({
+				lineId: groceryLines.id,
+				purchasedAmount: groceryLines.purchasedAmount,
+				allocationSum
+			})
+			.from(groceryLines)
+			.where(
+				and(
+					householdId
+						? sql`${groceryLines.listId} in (select id from grocery_list where household_id = ${householdId})`
+						: sql`true`,
+					sql`${groceryLines.purchasedAmount} <> ${allocationSum}`
+				)
+			)
+	]);
+	return {
+		lotsChecked,
+		lotMismatches: lotRows.map((r) => ({
 			lotId: r.lotId,
 			householdId: r.householdId,
 			balance: Dec.from(r.balance).toString(),
 			movementSum: Dec.from(r.movementSum).toString()
-		}));
-	const lineRows = await dbx
-		.select({
-			lineId: groceryLines.id,
-			purchasedAmount: groceryLines.purchasedAmount,
-			allocationSum: sql<string>`coalesce((select sum(a.amount) from purchase_allocation a where a.line_id = grocery_line.id), 0)`
-		})
-		.from(groceryLines)
-		.where(
-			householdId
-				? sql`${groceryLines.listId} in (select id from grocery_list where household_id = ${householdId})`
-				: sql`true`
-		);
-	const lineMismatches = lineRows
-		.filter((r) => !Dec.from(r.purchasedAmount).eq(Dec.from(r.allocationSum)))
-		.map((r) => ({
+		})),
+		lineMismatches: lineRows.map((r) => ({
 			lineId: r.lineId,
 			purchasedAmount: Dec.from(r.purchasedAmount).toString(),
 			allocationSum: Dec.from(r.allocationSum).toString()
-		}));
-	return { lotsChecked: lotRows.length, lotMismatches, lineMismatches };
+		}))
+	};
 }

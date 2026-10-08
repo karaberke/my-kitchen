@@ -26,41 +26,38 @@ export async function listUnlinkedIngredients(
 	userId: string,
 	limit = 100
 ): Promise<UnlinkedGroup[]> {
-	const rows = await dbx
-		.select({
-			name: recipeIngredients.name,
-			title: recipes.title,
-			updatedAt: recipes.updatedAt
-		})
-		.from(recipeIngredients)
-		.innerJoin(recipes, eq(recipes.id, recipeIngredients.recipeId))
-		.where(
-			and(
-				eq(recipes.ownerUserId, userId),
-				isNull(recipeIngredients.ingredientId),
-				sql`length(trim(${recipeIngredients.name})) > 0`
-			)
+	// One row per written name (trimmed), newest first, counted per recipe in SQL.
+	// The group key comes from matchCandidates, which SQL cannot compute, so the
+	// names that share one are merged here, and the limit applies after that.
+	const rows = await dbx.execute<{ name: string; row_count: number; titles: string[] }>(sql`
+		with per_recipe as (
+			select trim(ri.name) as name, r.title, r.updated_at, count(*)::int as row_count
+			from ${recipeIngredients} ri
+			join ${recipes} r on r.id = ri.recipe_id
+			where r.owner_user_id = ${userId}
+				and ri.ingredient_id is null
+				and length(trim(ri.name)) > 0
+			group by trim(ri.name), r.id
 		)
-		.orderBy(sql`${recipes.updatedAt} desc`);
+		select name, sum(row_count)::int as row_count,
+			(array_agg(title order by updated_at desc))[1:${TITLES_SHOWN}] as titles
+		from per_recipe
+		group by name
+		order by max(updated_at) desc
+	`);
 
 	const groups = new Map<string, UnlinkedGroup>();
 	for (const r of rows) {
 		const key = groupKey(r.name);
 		if (!key) continue;
 		const held = groups.get(key);
-		if (held) {
-			held.rowCount++;
-			if (!held.recipeTitles.includes(r.title) && held.recipeTitles.length < TITLES_SHOWN)
-				held.recipeTitles.push(r.title);
-			continue;
+		const group = held ?? { key, name: r.name, rowCount: 0, recipeTitles: [], proposal: null };
+		group.rowCount += r.row_count;
+		for (const title of r.titles) {
+			if (!group.recipeTitles.includes(title) && group.recipeTitles.length < TITLES_SHOWN)
+				group.recipeTitles.push(title);
 		}
-		groups.set(key, {
-			key,
-			name: r.name.trim(),
-			rowCount: 1,
-			recipeTitles: [r.title],
-			proposal: null
-		});
+		if (!held) groups.set(key, group);
 	}
 
 	const list = [...groups.values()].sort((a, b) => b.rowCount - a.rowCount).slice(0, limit);
@@ -119,15 +116,21 @@ export async function linkIngredientNames(
 		}
 		if (!touched.size) return { rows: 0, recipes: 0 };
 
-		let rows = 0;
-		for (const [ingredientId, ids] of byIngredient) {
-			const updated = await tx
-				.update(recipeIngredients)
-				.set({ ingredientId })
-				.where(sql`${recipeIngredients.id} in ${ids}`)
-				.returning({ id: recipeIngredients.id });
-			rows += updated.length;
-		}
+		// One statement for every row: each row id with the ingredient it takes.
+		const pairs = sql.join(
+			[...byIngredient].flatMap(([ingredientId, ids]) =>
+				ids.map((id) => sql`(${id}::uuid, ${ingredientId}::uuid)`)
+			),
+			sql`, `
+		);
+		const updated = await tx.execute<{ id: string }>(sql`
+			update ${recipeIngredients} ri
+			set ingredient_id = v.ingredient_id
+			from (values ${pairs}) as v(id, ingredient_id)
+			where ri.id = v.id
+			returning ri.id
+		`);
+		const rows = updated.length;
 		await tx
 			.update(recipes)
 			.set({ revision: sql`${recipes.revision} + 1`, updatedAt: sql`now()` })

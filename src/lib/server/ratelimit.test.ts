@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { IMPORT_LIMITS, consume, resetRateLimits } from './ratelimit';
+import { IMPORT_LIMITS, PROVIDER_LIMITS, consume, resetRateLimits } from './ratelimit';
 
 describe('consume', () => {
 	beforeEach(resetRateLimits);
@@ -13,6 +13,18 @@ describe('consume', () => {
 		expect(denied.retryAfterSeconds).toBe(57);
 		expect(consume('other', rule, 3000).allowed).toBe(true);
 		expect(consume('k', rule, 61_000).allowed).toBe(true);
+	});
+
+	it('keeps an hour-long bucket through the periodic sweep until its own window ends', () => {
+		const rule = { windowMs: PROVIDER_LIMITS.usda.windowMs, max: 2 };
+		const start = 10 * 60_000;
+		expect(consume('usda', rule, start).allowed).toBe(true);
+		expect(consume('usda', rule, start + 1).allowed).toBe(true);
+		// Twenty minutes later another key triggers the sweep; the hourly count must survive it.
+		const later = start + 20 * 60_000;
+		expect(consume('other', { windowMs: 60_000, max: 1 }, later).allowed).toBe(true);
+		expect(consume('usda', rule, later).allowed).toBe(false);
+		expect(consume('usda', rule, start + rule.windowMs + 1).allowed).toBe(true);
 	});
 });
 

@@ -1,4 +1,5 @@
 import { Dec } from './decimal';
+import { collapseSpaces } from './text';
 
 export type ParsedAmount = { ok: true; value: Dec | null } | { ok: false; error: string };
 
@@ -20,6 +21,10 @@ const VULGAR: Record<string, [number, number]> = {
 	'⅞': [7, 8]
 };
 
+/** A regex character class of every vulgar fraction `parseAmount` reads: "[½⅓…]". */
+export const VULGAR_CLASS = `[${Object.keys(VULGAR).join('')}]`;
+const VULGAR_AMOUNT = new RegExp(`^(\\d+)?\\s?(${VULGAR_CLASS})$`);
+
 const MAX = Dec.from('10000000'); // 10 million of any unit is beyond any kitchen
 
 function finish(make: () => Dec): ParsedAmount {
@@ -40,10 +45,10 @@ function finish(make: () => Dec): ParsedAmount {
  * "1 1/2") and unicode vulgar fractions ("½", "1½"). Never guesses.
  */
 export function parseAmount(raw: string): ParsedAmount {
-	const s = raw.trim().replace(/\s+/g, ' ');
+	const s = collapseSpaces(raw);
 	if (s === '') return { ok: true, value: null };
 
-	const vulgar = /^(\d+)?\s?([½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞])$/.exec(s);
+	const vulgar = VULGAR_AMOUNT.exec(s);
 	if (vulgar) {
 		const whole = vulgar[1] ? BigInt(vulgar[1]) : 0n;
 		const [n, d] = VULGAR[vulgar[2]];

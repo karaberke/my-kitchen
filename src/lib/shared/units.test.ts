@@ -7,6 +7,7 @@ import {
 	convertAmount,
 	formatQuantity,
 	normalizeUnitInput,
+	readUnitToken,
 	unitLabel
 } from './units';
 
@@ -149,5 +150,25 @@ describe('formatQuantity', () => {
 	it('labels units', () => {
 		expect(unitLabel('tbsp')).toBe('tbsp');
 		expect(unitLabel('piece', 2)).toBe('pieces');
+	});
+	it('uses the singular for an amount above zero and at most one', () => {
+		expect(formatQuantity(Dec.from('0.5'), 'cup')).toBe('0.5 cup');
+		expect(formatQuantity(Dec.from('1'), 'cup')).toBe('1 cup');
+		expect(formatQuantity(Dec.from('1.5'), 'cup')).toBe('1.5 cups');
+		expect(formatQuantity(Dec.zero, 'clove')).toBe('0 cloves');
+		expect(unitLabel('piece', 0.25)).toBe('piece');
+		expect(unitLabel('piece', 0)).toBe('pieces');
+	});
+});
+
+describe('readUnitToken', () => {
+	it('reads a two-word unit before a one-word unit', () => {
+		expect(readUnitToken(['fl', 'oz', 'milk'])).toEqual({ unit: 'fl_oz', words: 2 });
+		expect(readUnitToken(['g', 'flour'])).toEqual({ unit: 'g', words: 1 });
+		expect(readUnitToken(['Tbsp.'])).toEqual({ unit: 'tbsp', words: 1 });
+	});
+	it('returns null when the first word is not a unit', () => {
+		expect(readUnitToken(['flour'])).toBeNull();
+		expect(readUnitToken([])).toBeNull();
 	});
 });

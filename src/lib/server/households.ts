@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import type { RequestEvent } from '@sveltejs/kit';
 import { db as appDb, type DbOrTx } from '$lib/server/db';
 import {
@@ -15,11 +16,16 @@ import { AppError, forbidden } from '$lib/server/errors';
 import {
 	assertMember,
 	assertOwner,
-	loadHouseholdOrThrow,
-	requireUserApi
+	memberHousehold,
+	pickActiveMembership,
+	requireHousehold,
+	requireUserApi,
+	revisionsOf
 } from '$lib/server/access';
 import { withTransaction } from '$lib/server/operations';
 import { dbTimestampMs } from '$lib/shared/time';
+import type { Convention } from '$lib/shared/units';
+import { HOUSEHOLD_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
 
 /**
  * The `{ pantry, grocery, plan }` revision counters of one household the caller
@@ -28,16 +34,9 @@ import { dbTimestampMs } from '$lib/shared/time';
  */
 export async function revisionsFor(event: RequestEvent, arg: { household?: string }) {
 	const user = requireUserApi(event);
-	const householdId = arg.household ?? event.locals.household?.id;
-	if (!householdId) throw new AppError(400, 'No household');
-	await assertMember(appDb, householdId, user.id);
-	const h = await loadHouseholdOrThrow(appDb, householdId);
-	return {
-		household: h.id,
-		pantry: h.pantryRevision,
-		grocery: h.groceryRevision,
-		plan: h.planRevision
-	};
+	const householdId = arg.household ?? requireHousehold(event).household.id;
+	const h = await memberHousehold(appDb, householdId, user.id);
+	return { household: h.id, ...revisionsOf(h) };
 }
 
 /** Create the personal household for a new user, idempotently. */
@@ -70,40 +69,58 @@ export interface MembershipRow {
 }
 
 export async function listMemberships(db: DbOrTx, userId: string): Promise<MembershipRow[]> {
+	return (await sessionMemberships(db, userId)).memberships;
+}
+
+const otherMembers = alias(householdMembers, 'm2');
+
+/**
+ * The user's memberships with member counts, and their stored active household
+ * preference, in one query: what `hooks.server.ts` needs on every request.
+ */
+export async function sessionMemberships(
+	db: DbOrTx,
+	userId: string
+): Promise<{ memberships: MembershipRow[]; preferredHouseholdId: string | null }> {
 	const rows = await db
 		.select({
 			householdId: householdMembers.householdId,
 			name: households.name,
 			role: householdMembers.role,
-			memberCount: sql<number>`(select count(*)::int from household_member m2 where m2.household_id = ${householdMembers.householdId})`
+			memberCount: sql<number>`count(${otherMembers.userId})::int`,
+			preferredHouseholdId: userPreferences.activeHouseholdId
 		})
 		.from(householdMembers)
 		.innerJoin(households, eq(households.id, householdMembers.householdId))
+		.innerJoin(otherMembers, eq(otherMembers.householdId, householdMembers.householdId))
+		.leftJoin(userPreferences, eq(userPreferences.userId, householdMembers.userId))
 		.where(eq(householdMembers.userId, userId))
+		.groupBy(
+			householdMembers.householdId,
+			householdMembers.userId,
+			households.id,
+			userPreferences.userId
+		)
 		.orderBy(asc(households.createdAt), asc(households.id));
-	return rows;
+	return {
+		memberships: rows.map(({ householdId, name, role, memberCount }) => ({
+			householdId,
+			name,
+			role,
+			memberCount
+		})),
+		preferredHouseholdId: rows[0]?.preferredHouseholdId ?? null
+	};
 }
 
 /**
  * The active household read straight from the database, for server code that has
- * no request locals. Same rule as resolveActiveHousehold: the stored preference
- * while the user is still a member, otherwise their first membership.
+ * no request locals: the same query and rule (`pickActiveMembership`) as the
+ * request hook. It does not repair a stale preference; the next request does.
  */
 export async function getActiveHouseholdId(db: DbOrTx, userId: string): Promise<string | null> {
-	const rows = await db
-		.select({ householdId: householdMembers.householdId })
-		.from(householdMembers)
-		.innerJoin(households, eq(households.id, householdMembers.householdId))
-		.where(eq(householdMembers.userId, userId))
-		.orderBy(
-			desc(
-				sql`${householdMembers.householdId} = (select p.active_household_id from user_preference p where p.user_id = ${userId})`
-			),
-			asc(households.createdAt),
-			asc(households.id)
-		)
-		.limit(1);
-	return rows[0]?.householdId ?? null;
+	const { memberships, preferredHouseholdId } = await sessionMemberships(db, userId);
+	return pickActiveMembership(memberships, preferredHouseholdId)?.householdId ?? null;
 }
 
 /* ------------------------- management (owners) ------------------------- */
@@ -115,7 +132,7 @@ function hashToken(token: string): string {
 }
 
 export async function createHousehold(db: DbOrTx, userId: string, name: string): Promise<string> {
-	const clean = name.trim().replace(/\s+/g, ' ').slice(0, 60);
+	const clean = cleanText(name, HOUSEHOLD_NAME_MAX_CHARS);
 	if (clean.length < 2) throw new AppError(400, 'Give the household a name');
 	const [household] = await db
 		.insert(households)
@@ -133,7 +150,7 @@ export async function renameHousehold(
 	name: string
 ) {
 	await assertOwner(db, householdId, userId);
-	const clean = name.trim().replace(/\s+/g, ' ').slice(0, 60);
+	const clean = cleanText(name, HOUSEHOLD_NAME_MAX_CHARS);
 	if (clean.length < 2) throw new AppError(400, 'Give the household a name');
 	await db.update(households).set({ name: clean }).where(eq(households.id, householdId));
 }
@@ -146,6 +163,26 @@ export async function setActiveHousehold(db: DbOrTx, userId: string, householdId
 		.onConflictDoUpdate({
 			target: userPreferences.userId,
 			set: { activeHouseholdId: householdId, updatedAt: sql`now()` }
+		});
+}
+
+/** The user's stored measurement convention; metric until they choose. */
+export async function getConvention(db: DbOrTx, userId: string): Promise<Convention> {
+	const [pref] = await db
+		.select({ convention: userPreferences.convention })
+		.from(userPreferences)
+		.where(eq(userPreferences.userId, userId))
+		.limit(1);
+	return pref?.convention === 'us' ? 'us' : 'metric';
+}
+
+export async function setConvention(db: DbOrTx, userId: string, convention: Convention) {
+	await db
+		.insert(userPreferences)
+		.values({ userId, convention })
+		.onConflictDoUpdate({
+			target: userPreferences.userId,
+			set: { convention, updatedAt: sql`now()` }
 		});
 }
 

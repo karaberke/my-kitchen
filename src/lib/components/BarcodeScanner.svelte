@@ -78,6 +78,8 @@
 	 * way out never lands on the next screen.
 	 */
 	let generation = 0;
+	/** Set on unmount: `open` stays true then, so the generation check alone is not enough. */
+	let destroyed = false;
 
 	/** Widest frame handed to the decoder. Small codes still need real pixels. */
 	const MAX_CAPTURE_WIDTH = 900;
@@ -118,6 +120,10 @@
 		if (phase === 'starting' || phase === 'scanning') return;
 		failure = null;
 		phase = 'starting';
+		// Taken before the first await: a stop() while the reader loads or the
+		// permission prompt is open makes this start stale.
+		const mine = ++generation;
+		const stale = () => mine !== generation || destroyed || !open;
 
 		if (typeof window !== 'undefined' && !window.isSecureContext) return fail('insecure');
 		if (!navigator.mediaDevices?.getUserMedia) return fail('unsupported');
@@ -126,12 +132,14 @@
 		try {
 			await loadDecoder();
 		} catch {
+			if (stale()) return;
 			return fail('decoder');
 		}
+		if (stale()) return;
 
-		const mine = ++generation;
+		let granted: MediaStream;
 		try {
-			stream = await navigator.mediaDevices.getUserMedia({
+			granted = await navigator.mediaDevices.getUserMedia({
 				video: {
 					facingMode: { ideal: 'environment' },
 					width: { ideal: 1280 },
@@ -140,19 +148,22 @@
 				audio: false
 			});
 		} catch (err) {
+			if (stale()) return;
 			return fail(classify(err));
 		}
-		// The dialog may have closed while the permission prompt was open.
-		if (mine !== generation || !open) {
-			for (const track of stream.getTracks()) track.stop();
-			stream = null;
+		// The dialog may have closed, or the page unmounted, while the permission
+		// prompt was open: release the late stream.
+		if (stale()) {
+			for (const track of granted.getTracks()) track.stop();
 			return;
 		}
+		stream = granted;
 		if (video) {
 			video.srcObject = stream;
 			await video.play().catch(() => {});
+			if (stale()) return;
 		}
-		const track = stream.getVideoTracks()[0];
+		const track = granted.getVideoTracks()[0];
 		const capabilities = track?.getCapabilities?.() as { torch?: boolean } | undefined;
 		torchAvailable = capabilities?.torch === true;
 		phase = 'scanning';
@@ -271,7 +282,10 @@
 		}
 	});
 
-	onDestroy(stop);
+	onDestroy(() => {
+		destroyed = true;
+		stop();
+	});
 
 	export function resume() {
 		manual = '';

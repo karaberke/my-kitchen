@@ -7,12 +7,11 @@ import {
 	searchIngredients,
 	type IngredientSuggestion
 } from '$lib/server/ingredients';
-import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/recipe-input';
-import { cleanChatText } from './ask';
-import { claimLlmCall, completeJson } from './client';
+import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/assistant-limits';
+import { cleanChatText } from '$lib/shared/text';
+import { claimLlmCall, completeJson, type LlmCallOptions } from './client';
 import { INGREDIENT_PICK_SYSTEM, INGREDIENT_PICK_TASK } from './prompts';
 
-export { INGREDIENT_MATCH_MAX_NAMES };
 /** Catalog candidates shown to the model for each name. */
 export const INGREDIENT_MATCH_CANDIDATES = 5;
 /** Room for one `{ name, pick }` entry in the reply. */
@@ -81,7 +80,8 @@ export function checkPicks(
  */
 export async function pickMatches(
 	candidates: ReadonlyMap<string, readonly IngredientSuggestion[]>,
-	claim: () => void
+	claim: () => void,
+	call: LlmCallOptions = {}
 ): Promise<IngredientPicks> {
 	const asked = new Map([...candidates].filter(([, c]) => c.length > 0));
 	const out: IngredientPicks = {};
@@ -90,7 +90,8 @@ export async function pickMatches(
 	claim();
 	const reply = await completeJson(pickReplySchema, INGREDIENT_PICK_SYSTEM, pickUserText(asked), {
 		maxTokens: INGREDIENT_MATCH_BASE_TOKENS + INGREDIENT_MATCH_TOKENS_PER_NAME * asked.size,
-		name: 'ingredient_pick'
+		name: 'ingredient_pick',
+		...call
 	});
 	return { ...out, ...checkPicks(asked, reply.picks) };
 }
@@ -110,11 +111,15 @@ export async function suggestIngredientMatch(
 	const household = event.locals.household;
 	if (household) await assertMember(db, household.id, user.id);
 	const names = cleanMatchNames(arg.names);
-	const candidates = new Map<string, IngredientSuggestion[]>();
-	for (const name of names)
-		candidates.set(
-			name,
-			await searchIngredients(db, user.id, name, INGREDIENT_MATCH_CANDIDATES, household?.id ?? null)
-		);
-	return { picks: await pickMatches(candidates, () => claimLlmCall(user.id)) };
+	const found = await Promise.all(
+		names.map((name) =>
+			searchIngredients(db, user.id, name, INGREDIENT_MATCH_CANDIDATES, household?.id ?? null)
+		)
+	);
+	const candidates = new Map(names.map((name, i) => [name, found[i]]));
+	return {
+		picks: await pickMatches(candidates, () => claimLlmCall(user.id), {
+			signal: event.request.signal
+		})
+	};
 }

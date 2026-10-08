@@ -6,6 +6,7 @@ import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { registrationAllowed } from '$lib/server/registration';
 import { AUTH_LIMITS, clientKey, consume } from '$lib/server/ratelimit';
+import { PERSON_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
 
 const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, '/recipes');
@@ -42,10 +43,7 @@ export const actions: Actions = {
 	},
 	signup: async (event) => {
 		const fd = await event.request.formData();
-		const name = String(fd.get('name') ?? '')
-			.trim()
-			.replace(/\s+/g, ' ')
-			.slice(0, 80);
+		const name = cleanText(String(fd.get('name') ?? ''), PERSON_NAME_MAX_CHARS);
 		const email = String(fd.get('email') ?? '')
 			.trim()
 			.slice(0, 200);

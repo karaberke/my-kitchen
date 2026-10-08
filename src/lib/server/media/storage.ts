@@ -5,6 +5,9 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { serverEnv } from '$lib/server/env';
 
+/** Rows one media sweep (images, attachments) removes at most; the next hourly run takes the rest. */
+export const MEDIA_SWEEP_BATCH = 500;
+
 export interface StoredObject {
 	stream: ReadableStream<Uint8Array>;
 	size: number | null;

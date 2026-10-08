@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Dec } from './decimal';
-import { scaleAmount, scaleFactor } from './scaling';
+import { scaleAmount } from './scaling';
 
 describe('scaleAmount', () => {
 	it('scales by target/base servings without touching base values', () => {
@@ -19,8 +19,5 @@ describe('scaleAmount', () => {
 	it('rejects non-positive servings', () => {
 		expect(() => scaleAmount(Dec.from('1'), Dec.zero, Dec.from('1'))).toThrow();
 		expect(() => scaleAmount(Dec.from('1'), Dec.from('4'), Dec.from('-1'))).toThrow();
-	});
-	it('exposes the factor as a human string', () => {
-		expect(scaleFactor(Dec.from('4'), Dec.from('6'))).toBe('1.5');
 	});
 });

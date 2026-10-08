@@ -5,27 +5,19 @@ import { AppError } from '$lib/server/errors';
 import { getRecipeDetail, recipeToPlainText } from '$lib/server/recipes';
 import { claimLlmCall, completeChat, type LlmMessage } from './client';
 import { RECIPE_ASK_SYSTEM, RECIPE_ASK_TASK } from './prompts';
-import { LLM_MAX_INPUT_CHARS } from './recipe';
 import { parsePositiveAmount } from '$lib/shared/amount-parse';
+import type { RecipeChatTurn } from '$lib/shared/recipe-input';
 import {
 	LLM_CHAT_ANSWER_MAX_CHARS,
 	LLM_CHAT_HISTORY_MAX_CHARS,
 	LLM_CHAT_MAX_TURNS,
-	LLM_QUESTION_MAX_CHARS,
-	type RecipeChatTurn
-} from '$lib/shared/recipe-input';
+	LLM_MAX_INPUT_CHARS,
+	LLM_QUESTION_MAX_CHARS
+} from '$lib/shared/assistant-limits';
+import { cleanChatText } from '$lib/shared/text';
 
 /** A short answer to one question. */
 export const LLM_ANSWER_MAX_TOKENS = 400;
-
-/** Text from the browser made safe for the prompt: no control characters, one line, at most `max` characters. */
-export function cleanChatText(raw: string, max: number): string {
-	return raw
-		.replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
-		.replace(/\s+/g, ' ')
-		.trim()
-		.slice(0, max);
-}
 
 /**
  * The earlier turns the model sees: each part cleaned, empty turns removed,
@@ -112,7 +104,8 @@ export async function askAboutRecipe(
 		stepNote(arg.step, recipe.steps.length)
 	);
 	const answer = await completeChat(RECIPE_ASK_SYSTEM, messages, {
-		maxTokens: LLM_ANSWER_MAX_TOKENS
+		maxTokens: LLM_ANSWER_MAX_TOKENS,
+		signal: event.request.signal
 	});
 	return { answer };
 }

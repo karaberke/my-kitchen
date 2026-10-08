@@ -18,8 +18,15 @@
 import { z } from 'zod';
 import { Dec } from '$lib/shared/decimal';
 import { providerGtin, type BarcodeIdentity } from '$lib/shared/gtin';
-import { fetchJson, type FetchImpl } from './http';
-import type { NutritionBasis, ProductNutrient, ProviderAdapter, ProviderResult } from './types';
+import type { FetchImpl } from '$lib/server/fetch-capped';
+import { failedLookup, fetchJson } from './http';
+import {
+	nutritionBasisOf,
+	type NutritionBasis,
+	type ProductNutrient,
+	type ProviderAdapter,
+	type ProviderResult
+} from './types';
 
 const TIMEOUT_MS = 4000;
 const MAX_BYTES = 500_000;
@@ -92,18 +99,6 @@ function isoDate(seconds: number | undefined): string | null {
 	return new Date(seconds * 1000).toISOString().slice(0, 10);
 }
 
-/**
- * The "_100g" fields hold a value per 100 g or per 100 ml, and the product's
- * own unit is what says which. When there is no unit the basis is unknown, and
- * unknown nutrients are not stored.
- */
-function basisOf(unit: string | undefined): NutritionBasis | null {
-	const clean = (unit ?? '').trim().toLowerCase();
-	if (clean === 'g') return 'per_100g';
-	if (clean === 'ml' || clean === 'l') return 'per_100ml';
-	return null;
-}
-
 function nutrientsOf(
 	nutriments: Record<string, unknown> | undefined,
 	basis: NutritionBasis
@@ -162,11 +157,7 @@ export function offAdapter(config: OffConfig, fetchImpl?: FetchImpl): ProviderAd
 				fetchImpl
 			});
 
-			if (!res.ok) {
-				if (res.kind === 'status' && (res.status === 429 || res.status === 403))
-					return { status: 'rate_limited', retryAfterSeconds: res.retryAfterSeconds };
-				return { status: 'unavailable', reason: `Open Food Facts ${res.kind}` };
-			}
+			if (!res.ok) return failedLookup(res, 'Open Food Facts');
 
 			const parsed = envelopeSchema.safeParse(res.body);
 			if (!parsed.success)
@@ -184,11 +175,14 @@ export function offAdapter(config: OffConfig, fetchImpl?: FetchImpl): ProviderAd
 			const name = (product.product_name ?? '').trim();
 			if (!name) return { status: 'missing' };
 
-			const packageUnit = basisOf(product.product_quantity_unit) === 'per_100ml' ? 'ml' : 'g';
+			// The "_100g" fields hold a value per 100 g or per 100 ml, and the product's
+			// own unit is what says which. When there is no unit the basis is unknown,
+			// and unknown nutrients are not stored.
+			const basis = nutritionBasisOf(product.product_quantity_unit);
+			const packageUnit = basis === 'per_100ml' ? 'ml' : 'g';
 			const packageAmount = product.product_quantity_unit
 				? numberOf(product.product_quantity)
 				: null;
-			const basis = basisOf(product.product_quantity_unit);
 
 			return {
 				status: 'found',

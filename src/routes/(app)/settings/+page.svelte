@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import { clearToasts, pushToast } from '$lib/client/toast.svelte';
+	import { PERSON_NAME_MAX_CHARS } from '$lib/shared/text';
 	let { data, form } = $props();
 	const msg = (f: string) => (form?.form === f ? form : null);
 	const report = $derived(form?.form === 'consistency' && 'report' in form ? form.report : null);
@@ -26,7 +26,6 @@
 					await update({ reset: false });
 					if (result.type === 'success') {
 						pushToast('Name updated.', { kind: 'success' });
-						await invalidateAll();
 					}
 				}}
 		>
@@ -35,7 +34,7 @@
 				name="name"
 				value={data.user?.name ?? ''}
 				minlength="2"
-				maxlength="80"
+				maxlength={PERSON_NAME_MAX_CHARS}
 				aria-label="Name"
 				required
 			/>

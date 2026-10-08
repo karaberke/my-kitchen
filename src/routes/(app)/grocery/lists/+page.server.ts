@@ -2,7 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import { actionError, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { assertMember, requireHousehold } from '$lib/server/access';
+import { assertMember, householdActor, requireHousehold } from '$lib/server/access';
 import { createList, listGroceryLists } from '$lib/server/grocery';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
@@ -13,13 +13,10 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 
 export const actions: Actions = {
 	create: async (event) => {
-		const { user, household } = requireHousehold(event);
+		const actor = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const id = await createList(
-				{ userId: user.id, actorName: user.name, householdId: household.id },
-				String(fd.get('name') ?? '')
-			);
+			const id = await createList(actor, String(fd.get('name') ?? ''));
 			throw redirect(303, `/grocery/${id}`);
 		} catch (err) {
 			return actionError(err);

@@ -3,7 +3,8 @@ import { command, query } from '$app/server';
 import { remote } from '$lib/server/http';
 import { INGREDIENT_NAME_MAX, suggestIngredients } from '$lib/server/ingredients';
 import { matchIngredient } from '$lib/server/ingredient-match';
-import { INGREDIENT_MATCH_MAX_NAMES, suggestIngredientMatch } from '$lib/server/llm/match';
+import { suggestIngredientMatch } from '$lib/server/llm/match';
+import { INGREDIENT_MATCH_MAX_NAMES } from '$lib/shared/assistant-limits';
 
 /** Autocomplete: catalog + the caller's own custom identities only. */
 export const ingredientSuggestions = query(

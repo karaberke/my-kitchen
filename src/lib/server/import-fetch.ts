@@ -1,5 +1,10 @@
 import { AppError } from '$lib/server/errors';
-import { fetchWithRedirects, readCapped, type FetchImpl } from '$lib/server/fetch-capped';
+import {
+	discardBody,
+	fetchWithRedirects,
+	readCapped,
+	type FetchImpl
+} from '$lib/server/fetch-capped';
 
 /**
  * Read a recipe page over the network.
@@ -86,8 +91,13 @@ export async function fetchRecipePage(
 		fetchImpl: options.fetchImpl
 	});
 
-	if (!response.ok) throw statusError(response.status);
-	checkType(response);
+	try {
+		if (!response.ok) throw statusError(response.status);
+		checkType(response);
+	} catch (err) {
+		await discardBody(response);
+		throw err;
+	}
 	const bytes = await readCapped(response, maxBytes, tooLarge);
 	return {
 		html: bytes.toString('utf8'),

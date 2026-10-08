@@ -1,4 +1,4 @@
-import sharp, { type Metadata } from 'sharp';
+import sharp, { type Metadata, type OutputInfo } from 'sharp';
 import { AppError } from '$lib/server/errors';
 
 /**
@@ -67,19 +67,35 @@ export async function renderImageVariants(buffer: Buffer): Promise<RenderedImage
 	if (meta.width > MAX_DIMENSION || meta.height > MAX_DIMENSION)
 		throw new AppError(400, 'Image dimensions are too large');
 
-	const encode = (width: number, quality: number) =>
-		sharp(buffer, { limitInputPixels: MAX_DIMENSION * MAX_DIMENSION })
-			.rotate()
-			.resize({ width, withoutEnlargement: true })
-			.webp({ quality })
-			.toBuffer({ resolveWithObject: true });
+	// Decode the original one time, already turned upright and scaled to the
+	// largest variant. Every variant and every fallback quality starts from these
+	// pixels, so the source is never decoded again.
+	const largest = Math.max(...Object.values(IMAGE_VARIANTS).map((v) => v.width));
+	const base = await sharp(buffer, { limitInputPixels: MAX_DIMENSION * MAX_DIMENSION })
+		.rotate()
+		.resize({ width: largest, withoutEnlargement: true })
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const fromRaw = (pixels: { data: Buffer; info: OutputInfo }) =>
+		sharp(pixels.data, {
+			raw: { width: pixels.info.width, height: pixels.info.height, channels: pixels.info.channels }
+		});
 
 	const variants = {} as Record<ImageVariant, RenderedVariant>;
 	for (const [name, spec] of Object.entries(IMAGE_VARIANTS)) {
-		let out = await encode(spec.width, spec.quality);
+		const pixels =
+			spec.width >= base.info.width
+				? base
+				: await fromRaw(base)
+						.resize({ width: spec.width, withoutEnlargement: true })
+						.raw()
+						.toBuffer({ resolveWithObject: true });
+		const encode = (quality: number) =>
+			fromRaw(pixels).webp({ quality }).toBuffer({ resolveWithObject: true });
+		let out = await encode(spec.quality);
 		for (const quality of FALLBACK_QUALITIES) {
 			if (out.data.byteLength <= buffer.byteLength) break;
-			const smaller = await encode(spec.width, quality);
+			const smaller = await encode(quality);
 			if (smaller.data.byteLength < out.data.byteLength) out = smaller;
 		}
 		variants[name as ImageVariant] = {

@@ -2,6 +2,45 @@ import { env as dynamic } from '$env/dynamic/private';
 import { env as dynamicPublic } from '$env/dynamic/public';
 import { building } from '$app/environment';
 import { z } from 'zod';
+import { PERSON_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
+
+const TRUE_WORDS = ['true', '1', 'yes', 'on'];
+const FALSE_WORDS = ['false', '0', 'no', 'off'];
+
+/** An on/off variable. A word in neither list (or an empty value) keeps the default. */
+function flag(fallback: boolean) {
+	return z
+		.string()
+		.optional()
+		.transform((v) => {
+			const word = (v ?? '').trim().toLowerCase();
+			if (TRUE_WORDS.includes(word)) return true;
+			if (FALSE_WORDS.includes(word)) return false;
+			return fallback;
+		});
+}
+
+/**
+ * A URL variable: trimmed, trailing slashes removed, then checked. Without
+ * `path` it must be a bare origin; `allowEmpty` lets an empty value mean "off" or "auto".
+ */
+function urlVar(opts: {
+	fallback: string;
+	message: string;
+	allowEmpty?: boolean;
+	httpsOnly?: boolean;
+	path?: boolean;
+}) {
+	const pattern = new RegExp(
+		`^${opts.httpsOnly ? 'https' : 'https?'}:\\/\\/[^\\s/]+${opts.path ? '(\\/[^\\s]*)?' : ''}$`
+	);
+	return z
+		.string()
+		.optional()
+		.default(opts.fallback)
+		.transform((v) => v.trim().replace(/\/+$/, ''))
+		.refine((v) => (opts.allowEmpty && v === '') || pattern.test(v), opts.message);
+}
 
 const schema = z.object({
 	DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
@@ -10,21 +49,15 @@ const schema = z.object({
 	DATABASE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(1).default(30),
 	DATABASE_SSL: z.string().optional().default(''),
 	/** Public URL users type. Empty = "auto": trust the origin of each request (behind a proxy/tunnel that sets X-Forwarded-Proto). */
-	ORIGIN: z
-		.string()
-		.optional()
-		.default('')
-		.transform((v) => v.trim().replace(/\/+$/, ''))
-		.refine(
-			(v) => v === '' || /^https?:\/\/[^\s/]+$/.test(v),
-			'ORIGIN must be a URL like https://pantry.example.com (or empty for auto)'
-		),
+	ORIGIN: urlVar({
+		fallback: '',
+		allowEmpty: true,
+		message: 'ORIGIN must be a URL like https://pantry.example.com (or empty for auto)'
+	}),
 	BETTER_AUTH_SECRET: z.string().min(16, 'BETTER_AUTH_SECRET must be at least 16 characters'),
-	REGISTRATION_OPEN: z
-		.string()
-		.optional()
-		.default('true')
-		.transform((v) => !['false', '0', 'no', 'off'].includes(v.trim().toLowerCase())),
+	REGISTRATION_OPEN: flag(true),
+	/** Multiplies the sign-in, sign-up and password limits. Tests raise it; production keeps 1. */
+	AUTH_RATE_LIMIT_FACTOR: z.coerce.number().min(1).max(1000).default(1),
 	/**
 	 * Social sign-in. Each provider turns itself on only when its credentials are
 	 * present, so an install that sets none behaves exactly as before, and one that
@@ -56,7 +89,7 @@ const schema = z.object({
 		.string()
 		.optional()
 		.default('')
-		.transform((v) => v.trim().replace(/\s+/g, ' ').slice(0, 80)),
+		.transform((v) => cleanText(v, PERSON_NAME_MAX_CHARS)),
 	ADMIN_PASSWORD: z.string().optional().default(''),
 	STORAGE_BACKEND: z.enum(['local', 's3']).default('local'),
 	UPLOAD_DIR: z.string().default('./data/uploads'),
@@ -65,11 +98,7 @@ const schema = z.object({
 	S3_ENDPOINT: z.string().optional().default(''),
 	S3_ACCESS_KEY_ID: z.string().optional().default(''),
 	S3_SECRET_ACCESS_KEY: z.string().optional().default(''),
-	S3_FORCE_PATH_STYLE: z
-		.string()
-		.optional()
-		.default('false')
-		.transform((v) => ['true', '1', 'yes'].includes(v.trim().toLowerCase())),
+	S3_FORCE_PATH_STYLE: flag(false),
 	UPLOAD_MAX_BYTES: z.coerce
 		.number()
 		.int()
@@ -92,30 +121,17 @@ const schema = z.object({
 	 * made by this process, not by the browser, so a browser-side mock cannot
 	 * reach them.
 	 */
-	USDA_BASE_URL: z
-		.string()
-		.optional()
-		.default('https://api.nal.usda.gov')
-		.transform((v) => v.trim().replace(/\/+$/, ''))
-		.refine(
-			(v) => /^https?:\/\/[^\s/]+$/.test(v),
-			'USDA_BASE_URL must be an origin such as https://api.nal.usda.gov'
-		),
-	OFF_ENABLED: z
-		.string()
-		.optional()
-		.default('true')
-		.transform((v) => !['false', '0', 'no', 'off'].includes(v.trim().toLowerCase())),
+	USDA_BASE_URL: urlVar({
+		fallback: 'https://api.nal.usda.gov',
+		message: 'USDA_BASE_URL must be an origin such as https://api.nal.usda.gov'
+	}),
+	OFF_ENABLED: flag(true),
 	/** Point this at https://world.openfoodfacts.net to work against staging. */
-	OFF_BASE_URL: z
-		.string()
-		.optional()
-		.default('https://world.openfoodfacts.org')
-		.transform((v) => v.trim().replace(/\/+$/, ''))
-		.refine(
-			(v) => /^https:\/\/[^\s/]+$/.test(v),
-			'OFF_BASE_URL must be an https origin such as https://world.openfoodfacts.org'
-		),
+	OFF_BASE_URL: urlVar({
+		fallback: 'https://world.openfoodfacts.org',
+		httpsOnly: true,
+		message: 'OFF_BASE_URL must be an https origin such as https://world.openfoodfacts.org'
+	}),
 	/** Open Food Facts asks every caller to identify itself and leave a contact. */
 	OFF_CONTACT: z
 		.string()
@@ -129,15 +145,13 @@ const schema = z.object({
 	 * it, not the browser, so it can stay on a private network. In Docker, do
 	 * not use localhost: that is the app container itself.
 	 */
-	LLM_BASE_URL: z
-		.string()
-		.optional()
-		.default('')
-		.transform((v) => v.trim().replace(/\/+$/, ''))
-		.refine(
-			(v) => v === '' || /^https?:\/\/[^\s/]+(\/[^\s]*)?$/.test(v),
+	LLM_BASE_URL: urlVar({
+		fallback: '',
+		allowEmpty: true,
+		path: true,
+		message:
 			'LLM_BASE_URL must be a URL such as http://192.0.2.10:8080/v1 (or empty to turn it off)'
-		),
+	}),
 	/** Most local servers ignore the key; the client still has to send one. */
 	LLM_API_KEY: z
 		.string()
@@ -187,8 +201,7 @@ export function serverEnv(): ServerEnv {
 
 /**
  * How often the client polls the `householdRevisions` query, floored so a low or missing
- * override can't hammer it. Shared by the session layout (every page) and the
- * settings page, which both send `pollMs` to the client.
+ * override can't hammer it. The root layout sends it to every page as `pollMs`.
  */
 export function revisionPollMs(): number {
 	return Math.max(3000, Number(dynamicPublic.PUBLIC_REVISION_POLL_MS ?? 20000) || 20000);

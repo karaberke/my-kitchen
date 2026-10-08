@@ -45,9 +45,10 @@ import { createRecipe } from '$lib/server/recipes';
 import { cleanupUnreferencedAttachments } from '$lib/server/media/attachments';
 import { LLM_LIMITS, resetRateLimits } from '$lib/server/ratelimit';
 import { emptyRecipeFormInput } from '$lib/shared/recipe-html';
-import { LLM_CHAT_MAX_TURNS, LLM_QUESTION_MAX_CHARS } from '$lib/shared/recipe-input';
+import { LLM_CHAT_MAX_TURNS, LLM_QUESTION_MAX_CHARS } from '$lib/shared/assistant-limits';
 import { actions } from '../../src/routes/(app)/recipes/import/+page.server';
 import { actions as groceryActions } from '../../src/routes/(app)/grocery/[listId=uuid]/+page.server';
+import { actions as editActions } from '../../src/routes/(app)/recipes/[id=uuid]/edit/+page.server';
 import { STUB_LLM_CONFIG, completionResponse, jsonResponse, stubLlm, unstubLlm } from '../llm-stub';
 import { claimLlmCall, setLlmForTests } from '$lib/server/llm/client';
 import type { RequestEvent } from '@sveltejs/kit';
@@ -1227,5 +1228,30 @@ describe('suggestIngredientMatch', () => {
 		await expect(
 			suggestIngredientMatch(requestAs(alice), { names: ['chicken'] })
 		).rejects.toMatchObject({ status: 503 });
+	});
+});
+
+describe('recipe edit: aiFix action', () => {
+	it('does not reach the model when the browser has already gone away', async () => {
+		const { requests } = stubLlm([MODEL_RECIPE]);
+		const recipeId = await createRecipe(
+			alice.id,
+			recipeInput({ title: 'Pancakes', ingredients: [] })
+		);
+		const body = new FormData();
+		body.set('title', 'Pancakes');
+		body.set('steps.0.text', 'Mix and fry.');
+		const event = {
+			...requestAs(alice),
+			params: { id: recipeId },
+			request: new Request(`http://localhost/recipes/${recipeId}/edit?/aiFix`, {
+				method: 'POST',
+				body,
+				signal: AbortSignal.abort()
+			})
+		} as unknown as RequestEvent;
+		const out = (await editActions.aiFix!(event as never)) as unknown as { status: number };
+		expect(out.status).toBe(499);
+		expect(requests).toHaveLength(0);
 	});
 });

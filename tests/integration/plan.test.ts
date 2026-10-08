@@ -11,9 +11,16 @@ import {
 } from '$lib/server/plan';
 import { createInvite, acceptInvite } from '$lib/server/households';
 import { deleteRecipe } from '$lib/server/recipes';
-import { getListDetail, getCurrentListId } from '$lib/server/grocery';
+import { createRecipe } from '$lib/server/recipes';
+import {
+	addBatch,
+	createList,
+	getListDetail,
+	getCurrentListId,
+	startShopping
+} from '$lib/server/grocery';
 import { households, mealPlanEntries } from '$lib/server/db/schema';
-import { createUser, makeChickenRecipe, resetDb } from './helpers';
+import { createUser, d, makeChickenRecipe, recipeInput, resetDb } from './helpers';
 
 async function planRevision(householdId: string): Promise<number> {
 	const [row] = await db
@@ -171,6 +178,52 @@ describe('planning a week into the grocery list', () => {
 		expect(Number(roastBatch.servings)).toBe(4);
 		const curryBatch = detail.batches.find((b) => b.recipeTitle === 'Curry')!;
 		expect(Number(curryBatch.servings)).toBe(2);
+	});
+
+	it('adds to a draft while a trip is in progress, and twice adds nothing new', async () => {
+		const alice = await createUser('Alice');
+		const roast = await makeChickenRecipe(alice, 'Roast', '400', 4);
+		const curry = await makeChickenRecipe(alice, 'Curry', '300', 2);
+		const trip = await createList(alice.ctx, 'Trip');
+		await addBatch(alice.ctx, {
+			listId: trip,
+			recipeId: roast,
+			servings: d(4),
+			clientKey: 'trip-roast',
+			includeOptional: []
+		});
+		const { revision } = await getListDetail(db, alice.householdId, trip);
+		await startShopping(alice.ctx, { listId: trip, expectedRevision: revision });
+		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-07', recipeId: roast });
+		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-09', recipeId: curry });
+
+		const listId = await planWeekToGrocery(alice.ctx, '2026-09-07');
+		expect(listId).not.toBe(trip);
+		const draft = await getListDetail(db, alice.householdId, listId);
+		expect(draft.status).toBe('draft');
+		expect(draft.batches.map((b) => b.recipeTitle).sort()).toEqual(['Curry', 'Roast']);
+		const tripAfter = await getListDetail(db, alice.householdId, trip);
+		expect(tripAfter.batches).toHaveLength(1);
+
+		// The same week again lands on the same draft and adds no duplicate batch.
+		expect(await planWeekToGrocery(alice.ctx, '2026-09-07')).toBe(listId);
+		const again = await getListDetail(db, alice.householdId, listId);
+		expect(again.batches).toHaveLength(2);
+	});
+
+	it('adds nothing when one planned recipe cannot be planned', async () => {
+		const alice = await createUser('Alice');
+		const roast = await makeChickenRecipe(alice, 'Roast', '400', 4);
+		const draftRecipe = await createRecipe(
+			alice.id,
+			recipeInput({ title: 'Unfinished', status: 'draft', ingredients: [] })
+		);
+		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-07', recipeId: roast });
+		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-08', recipeId: draftRecipe });
+		await expect(planWeekToGrocery(alice.ctx, '2026-09-07')).rejects.toMatchObject({
+			status: 409
+		});
+		expect(await getCurrentListId(db, alice.householdId)).toBeNull();
 	});
 
 	it('refuses when the week has no recipe attached to anything', async () => {

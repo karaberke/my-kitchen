@@ -1,21 +1,22 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { HOUSEHOLD_NAME_MAX_CHARS } from '$lib/shared/text';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import { clearToasts, pushToast } from '$lib/client/toast.svelte';
 	import { fmtDateTime, initials } from '$lib/client/format';
+	import { keepForm } from '$lib/client/enhance';
 
 	let { data, form } = $props();
 	let renameOpen = $state(false);
 	let deleteOpen = $state(false);
 	let confirmText = $state('');
 	const confirmMatches = $derived(confirmText.trim() === data.managed.name);
-	let inviteUrl = $state<string | null>(null);
-	$effect(() => {
-		if (form?.inviteUrl) inviteUrl = form.inviteUrl as string;
-	});
+	// The link exists only in the answer to "create": any later action drops it, so a revoked link is not left on screen.
+	const inviteUrl = $derived<string | null>(
+		typeof form?.inviteUrl === 'string' ? form.inviteUrl : null
+	);
 	async function copy() {
 		if (!inviteUrl) return;
 		try {
@@ -25,12 +26,6 @@
 			pushToast('Select the link and copy it manually.');
 		}
 	}
-	const after =
-		() =>
-		async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => {
-			await update({ reset: false });
-			await invalidateAll();
-		};
 </script>
 
 <PageHeader
@@ -65,7 +60,7 @@
 					</div>
 				</div>
 				{#if data.isOwner && m.userId !== data.user?.id}
-					<form method="post" action="?/role" use:enhance={after}>
+					<form method="post" action="?/role" use:enhance={keepForm}>
 						<input type="hidden" name="userId" value={m.userId} />
 						<input type="hidden" name="role" value={m.role === 'owner' ? 'member' : 'owner'} />
 						<button class="btn-ghost btn-sm"
@@ -75,7 +70,7 @@
 					<form
 						method="post"
 						action="?/remove"
-						use:enhance={after}
+						use:enhance={keepForm}
 						onsubmit={(e) => {
 							if (!confirm(`Remove ${m.name} from the household? They lose access immediately.`))
 								e.preventDefault();
@@ -99,7 +94,7 @@
 			Invitation links work once and expire after 72 hours. Whoever opens one joins as a member with
 			access to this household's pantry and lists. Recipes stay personal until shared.
 		</p>
-		<form method="post" action="?/invite" class="mt-3" use:enhance={after}>
+		<form method="post" action="?/invite" class="mt-3" use:enhance={keepForm}>
 			<button class="btn-primary btn-sm">Create invitation link</button>
 		</form>
 		{#if inviteUrl}
@@ -128,7 +123,7 @@
 								? ` by ${inv.createdByName}`
 								: ''} · expires {fmtDateTime(inv.expiresAt)}</span
 						>
-						<form method="post" action="?/revoke" use:enhance={after}>
+						<form method="post" action="?/revoke" use:enhance={keepForm}>
 							<input type="hidden" name="inviteId" value={inv.id} /><button
 								class="btn-ghost btn-sm h-8 text-brick-dark">Revoke</button
 							>
@@ -166,12 +161,9 @@
 			method="post"
 			action="?/remove"
 			class="mt-3"
-			use:enhance={() => {
+			use:enhance={(input) => {
 				clearToasts();
-				return async ({ update }) => {
-					await update({ reset: false });
-					await invalidateAll();
-				};
+				return keepForm(input);
 			}}
 			onsubmit={(e) => {
 				if (!confirm('Leave this household?')) e.preventDefault();
@@ -192,7 +184,6 @@
 			async ({ update }) => {
 				await update({ reset: false });
 				renameOpen = false;
-				await invalidateAll();
 			}}
 	>
 		<div>
@@ -203,7 +194,7 @@
 				name="name"
 				required
 				minlength="2"
-				maxlength="60"
+				maxlength={HOUSEHOLD_NAME_MAX_CHARS}
 				value={data.managed.name}
 			/>
 		</div>
@@ -226,8 +217,6 @@
 			return async ({ update }) => {
 				await update({ reset: false });
 				deleteOpen = false;
-				// This household is gone: drop every cached load so the page we land on is fresh.
-				await invalidateAll();
 			};
 		}}
 	>

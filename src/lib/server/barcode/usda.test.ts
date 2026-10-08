@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { identifyManual, type BarcodeIdentity } from '$lib/shared/gtin';
 import { usdaAdapter } from './usda';
-import type { FetchImpl } from './http';
+import type { FetchImpl } from '$lib/server/fetch-capped';
 
 const identity = (raw: string): BarcodeIdentity => {
 	const r = identifyManual(raw);

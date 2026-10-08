@@ -13,7 +13,7 @@
  */
 
 import type { RequestEvent } from '@sveltejs/kit';
-import { and, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
 	barcodeLinks,
@@ -508,17 +508,4 @@ export async function lookupBarcode(
 /** Test hook: forget which requests are in flight. */
 export function resetBarcodeInFlight(): void {
 	inFlight.clear();
-}
-
-/** Every ingredient id a household has already linked to a barcode. */
-export async function linkedIngredientIds(
-	householdId: string,
-	gtins: string[]
-): Promise<Map<string, string>> {
-	if (!gtins.length) return new Map();
-	const rows = await db
-		.select({ gtin: barcodeLinks.gtin, ingredientId: barcodeLinks.ingredientId })
-		.from(barcodeLinks)
-		.where(and(eq(barcodeLinks.householdId, householdId), inArray(barcodeLinks.gtin, gtins)));
-	return new Map(rows.map((r) => [r.gtin, r.ingredientId]));
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Dec } from '$lib/shared/decimal';
 import {
+	recipeToFormInput,
 	recipeToPlainText,
 	type RecipeDetail,
 	type RecipeIngredientView
@@ -98,5 +99,23 @@ describe('recipeToPlainText', () => {
 		expect(recipeToPlainText(recipe(), Dec.from('0'))).toBe(recipeToPlainText(recipe()));
 		const zeroBase = recipe({ baseServings: '0' });
 		expect(recipeToPlainText(zeroBase, Dec.from('8'))).toContain('  - 200 g flour');
+	});
+});
+
+describe('recipeToFormInput', () => {
+	it('gives the edit form the stored recipe as text, ready to save unchanged', () => {
+		const input = recipeToFormInput(recipe({ revision: 7, tags: ['quick', 'sweet'] }));
+		expect(input).toMatchObject({
+			title: 'Pancakes',
+			baseServings: '4',
+			prepMinutes: '',
+			tags: 'quick, sweet',
+			intent: 'save',
+			expectedRevision: 7,
+			imageUrl: ''
+		});
+		expect(input.ingredients[1]).toMatchObject({ name: 'eggs', amount: '2', unit: '' });
+		expect(input.ingredients[2].amount).toBe('');
+		expect(input.steps).toEqual([{ section: '', text: 'Mix and fry.' }]);
 	});
 });

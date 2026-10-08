@@ -2,7 +2,7 @@ import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { assertMember, requireHousehold } from '$lib/server/access';
+import { assertMember, householdActor, requireHousehold } from '$lib/server/access';
 import { getHistory } from '$lib/server/pantry';
 import { undoEvent } from '$lib/server/undo';
 import { operationIdFrom } from '$lib/server/operations';
@@ -23,14 +23,11 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 
 export const actions: Actions = {
 	undo: async (event) => {
-		const { user, household } = requireHousehold(event);
+		const actor = householdActor(event);
 		const fd = await event.request.formData();
 		try {
 			const operationId = operationIdFrom(fd);
-			await undoEvent(
-				{ userId: user.id, actorName: user.name, householdId: household.id },
-				{ operationId, eventId: String(fd.get('eventId') ?? '') }
-			);
+			await undoEvent(actor, { operationId, eventId: String(fd.get('eventId') ?? '') });
 			return { ok: true };
 		} catch (err) {
 			return actionError(err);

@@ -153,6 +153,29 @@ describe('fetchRecipePage', () => {
 		expect(err.message).toMatch(/Import a PDF/);
 	});
 
+	it('releases the body of every response it does not read', async () => {
+		const cancelled: string[] = [];
+		const watched = (name: string, init: ResponseInit) =>
+			new Response(
+				new ReadableStream({
+					pull(controller) {
+						controller.enqueue(new TextEncoder().encode('x'));
+					},
+					cancel() {
+						cancelled.push(name);
+					}
+				}),
+				init
+			);
+		const { impl } = queue(
+			watched('redirect', { status: 302, headers: { location: 'https://example.com/b' } }),
+			watched('missing', { status: 404, headers: { 'content-type': 'text/html' } })
+		);
+		const err = await failure(fetchRecipePage('https://example.com/a', opts({ fetchImpl: impl })));
+		expect(err.status).toBe(502);
+		expect(cancelled).toEqual(['redirect', 'missing']);
+	});
+
 	it('accepts a response with no content type at all', async () => {
 		const { impl } = queue(new Response('<html></html>', { status: 200 }));
 		const page = await fetchRecipePage('https://example.com', opts({ fetchImpl: impl }));

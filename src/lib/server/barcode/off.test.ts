@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { identifyManual, type BarcodeIdentity } from '$lib/shared/gtin';
 import { offAdapter, type OffConfig } from './off';
-import type { FetchImpl } from './http';
+import type { FetchImpl } from '$lib/server/fetch-capped';
 
 const identity = (raw: string): BarcodeIdentity => {
 	const r = identifyManual(raw);
@@ -100,6 +100,22 @@ describe('open food facts adapter', () => {
 		if (r.status !== 'found') throw new Error('expected found');
 		expect(r.product.packageUnit).toBe('ml');
 		expect(r.product.nutrients[0].basis).toBe('per_100ml');
+	});
+
+	it('tells the basis from the unit dimension, so kg and dl count as mass and volume', async () => {
+		for (const [unit, basis] of [
+			['kg', 'per_100g'],
+			['dl', 'per_100ml']
+		] as const) {
+			const { adapter } = adapterFor({
+				...PRODUCT,
+				product: { ...PRODUCT.product, product_quantity_unit: unit }
+			});
+			const r = await run(adapter);
+			if (r.status !== 'found') throw new Error('expected found');
+			expect(r.product.servingBasis).toBe(basis);
+			expect(r.product.nutrients[0].basis).toBe(basis);
+		}
 	});
 
 	it('stores no nutrients when the basis cannot be told', async () => {

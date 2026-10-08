@@ -4,13 +4,11 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
-	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
+	import CookItems from '$lib/components/CookItems.svelte';
 	import RecipeChat from '$lib/components/RecipeChat.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
 	import { fmtNum, fmtQty, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
-	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
-	import { pantryLots } from '$lib/remote/pantry.remote';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
 	import StepText from '$lib/components/StepText.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
@@ -22,24 +20,10 @@
 		cookView,
 		setCookView
 	} from '$lib/client/cook-view.svelte';
+	import { prepareStepIngredients } from '$lib/shared/step-amounts';
 
 	let { data, form } = $props();
-	type LooseForm =
-		| {
-				ok?: boolean;
-				undone?: boolean;
-				message?: string;
-				eventId?: string;
-				deductions?: number;
-				plannedServingsFulfilled?: string | null;
-				unplannedServings?: string | null;
-				review?: {
-					insufficient?: { lotId: string; requested: string; available: string; unit: string }[];
-				};
-		  }
-		| null
-		| undefined;
-	const f = $derived(form as LooseForm);
+	const f = $derived(form);
 	const r = $derived(data.recipe);
 	const preview = $derived(data.preview);
 
@@ -62,90 +46,14 @@
 		return i < 0 ? undefined : i + 1;
 	});
 
-	interface Alloc {
-		lotId: string;
-		amount: string;
-		revision: number;
-		label: string;
-	}
-	interface ItemState {
-		position: number;
-		mode: 'deduct' | 'skip';
-		ingredientId: string | null;
-		ingredientName: string;
-		substituteName: string;
-		substituteId: string | null;
-		substituteLabel: string | null;
-		createIdentity: boolean;
-		allocations: Alloc[];
-		note: string;
-		loading: boolean;
-	}
-	// items are edited in place inside the finish sheet, so they stay $state and resync when the preview changes
-	// eslint-disable-next-line svelte/prefer-writable-derived
-	let items = $state<ItemState[]>([]);
-	$effect(() => {
-		items = (data.preview?.items ?? []).map((it) => ({
-			position: it.position,
-			mode: it.defaultMode,
-			ingredientId: it.ingredientId,
-			ingredientName: it.ingredientName ?? it.name,
-			substituteName: '',
-			substituteId: null,
-			substituteLabel: null,
-			createIdentity: false,
-			allocations: it.suggestions.map((s) => ({
-				lotId: s.lotId,
-				amount: Dec.from(s.take).toString(),
-				revision: s.revision,
-				label: `${fmtQty(s.quantity, s.unit)} · ${s.location || 'no location'}${s.expiresOn ? ' · use by ' + s.expiresOn : ''}`
-			})),
-			note: '',
-			loading: false
-		}));
-	});
-
-	async function loadSubstituteLots(i: number) {
-		const item = items[i];
-		const id = item.substituteId;
-		if (!id) return;
-		item.loading = true;
-		try {
-			const it = preview!.items[i];
-			const json = await fetchFresh(
-				pantryLots({ ingredient: id, unit: it.unit ?? null, convention: preview!.convention })
-			);
-			if (items[i].substituteId !== id) return; // stale
-			let remaining = it.scaledAmount ? Dec.from(it.scaledAmount) : null;
-			items[i].allocations = json.lots.map((l) => {
-				let take = '';
-				if (remaining && l.inRequestedUnit && l.unit === it.unit) {
-					const t = Dec.min(remaining, Dec.from(l.quantity));
-					remaining = remaining.sub(t);
-					take = t.toString();
-				}
-				return {
-					lotId: l.lotId,
-					amount: take,
-					revision: l.revision,
-					label: `${fmtQty(l.quantity, l.unit)} · ${l.location || 'no location'}${l.expiresOn ? ' · use by ' + l.expiresOn : ''}`
-				};
-			});
-			items[i].ingredientId = id;
-			items[i].mode = json.lots.length ? 'deduct' : 'skip';
-		} catch (err) {
-			pushToast(remoteErrorMessage(err, 'Could not load lots'), { kind: 'error' });
-		} finally {
-			items[i].loading = false;
-		}
-	}
-
 	const cookHref = (n: string) => `/recipes/${r.id}/cook?servings=${encodeURIComponent(n)}`;
 	function bumpServings(delta: number) {
 		const next = Dec.from(servings).add(Dec.from(delta));
 		if (next.isPositive()) goto(cookHref(next.toString()), { noScroll: true, keepFocus: true });
 	}
 	const base = $derived(Dec.from(r.baseServings ?? '1'));
+	// Parsed once per recipe; every step shares it.
+	const stepIngredients = $derived(prepareStepIngredients(r.ingredients));
 	const lines = $derived(
 		r.ingredients.map((ing) => {
 			const { line } = scaledIngredientLine(
@@ -208,7 +116,8 @@
 							await update({ reset: false });
 							if (result.type === 'success')
 								pushToast('Cooking undone. Pantry restored.', { kind: 'success' });
-							await invalidate('app:cook');
+							// A failed undo changes nothing on the page, so reload the preview.
+							else if (result.type === 'failure') await invalidate('app:cook');
 						}}
 				>
 					<input type="hidden" name="operationId" value={data.undoOperationId} />
@@ -352,7 +261,7 @@
 					<p class="font-serif leading-relaxed text-pretty" style:font-size={sizes.slide}>
 						<StepText
 							text={r.steps[slide].text}
-							ingredients={r.ingredients}
+							ingredients={stepIngredients}
 							{base}
 							servings={Dec.from(servings)}
 							convention={r.convention}
@@ -414,7 +323,7 @@
 						>
 							<StepText
 								text={step.text}
-								ingredients={r.ingredients}
+								ingredients={stepIngredients}
 								{base}
 								servings={Dec.from(servings)}
 								convention={r.convention}
@@ -486,7 +395,6 @@
 					if (result.type === 'success') {
 						finishOpen = false;
 						pushToast('Pantry updated.', { kind: 'success' });
-						await invalidate('app:cook');
 					}
 				}}
 		>
@@ -515,133 +423,9 @@
 					</select>
 				</div>
 			</div>
-			<ul class="flex flex-col gap-2.5">
-				{#each preview.items as it, i (it.position)}
-					{@const st = items[i]}
-					{#if st}
-						<li class="card p-3">
-							<input type="hidden" name="item.{it.position}.name" value={it.name} />
-							<input type="hidden" name="item.{it.position}.mode" value={st.mode} />
-							<input
-								type="hidden"
-								name="item.{it.position}.ingredientId"
-								value={st.ingredientId ?? ''}
-							/>
-							<div class="flex items-start justify-between gap-2">
-								<div>
-									<div class="text-[13.5px] font-semibold">
-										{it.scaledAmount
-											? fmtQty(it.scaledAmount, it.unit) + ' '
-											: ''}{it.name}{it.optional ? ' (optional)' : ''}
-									</div>
-									{#if it.reason}<div class="mt-0.5 text-[11.5px] text-honey-dark">
-											{it.reason}
-										</div>{/if}
-									{#if it.incompatible.length}<div class="mt-0.5 text-[11.5px] text-sage">
-											Also in pantry: {it.incompatible
-												.map((x) => fmtQty(x.quantity, x.unit))
-												.join(', ')} (not convertible)
-										</div>{/if}
-								</div>
-								<div
-									class="flex flex-none rounded-[10px] bg-linen p-0.5 text-[11.5px] font-bold"
-									role="group"
-									aria-label="Tracking for {it.name}"
-								>
-									<button
-										type="button"
-										class="rounded-[8px] px-2.5 py-1.5 {st.mode === 'deduct'
-											? 'bg-card text-leaf'
-											: 'text-sage'}"
-										aria-pressed={st.mode === 'deduct'}
-										onclick={() => (st.mode = 'deduct')}
-										disabled={!st.allocations.length}>Deduct</button
-									>
-									<button
-										type="button"
-										class="rounded-[8px] px-2.5 py-1.5 {st.mode === 'skip'
-											? 'bg-card text-ink'
-											: 'text-sage'}"
-										aria-pressed={st.mode === 'skip'}
-										onclick={() => (st.mode = 'skip')}>Skip tracking</button
-									>
-								</div>
-							</div>
-							{#if st.mode === 'deduct'}
-								<div class="mt-2 flex flex-col gap-1.5">
-									{#each st.allocations as a, ai (a.lotId)}
-										<div class="flex items-center gap-2 text-[12.5px]">
-											<input
-												type="hidden"
-												name="item.{it.position}.alloc.{ai}.lotId"
-												value={a.lotId}
-											/>
-											<input
-												type="hidden"
-												name="item.{it.position}.alloc.{ai}.revision"
-												value={a.revision}
-											/>
-											<label class="flex-1 text-sage" for="alloc-{it.position}-{ai}"
-												>Lot: {a.label}</label
-											>
-											<input
-												id="alloc-{it.position}-{ai}"
-												class="field h-9 w-24 py-1 text-right"
-												name="item.{it.position}.alloc.{ai}.amount"
-												inputmode="decimal"
-												bind:value={a.amount}
-												aria-label="Amount to deduct from this lot"
-											/>
-											<span class="w-10 text-sage"
-												>{preview.items[i].suggestions.find((s) => s.lotId === a.lotId)?.unit ??
-													it.unit ??
-													''}</span
-											>
-										</div>
-									{/each}
-								</div>
-							{/if}
-							<details class="mt-2 text-[12.5px]">
-								<summary class="cursor-pointer text-leaf">Substitute or note</summary>
-								<div class="mt-2 grid gap-2">
-									<div>
-										<label class="label" for="sub-{it.position}">Used a different ingredient</label>
-										<IngredientAutocomplete
-											inputId="sub-{it.position}"
-											fieldName="item.{it.position}.subname"
-											bind:name={st.substituteName}
-											bind:ingredientId={st.substituteId}
-											bind:identityLabel={st.substituteLabel}
-											bind:createIdentity={st.createIdentity}
-											placeholder="e.g. chicken thigh"
-										/>
-										{#if st.substituteId && st.substituteId !== st.ingredientId}
-											<button
-												type="button"
-												class="btn-secondary btn-sm mt-1.5"
-												onclick={() => loadSubstituteLots(i)}
-												disabled={st.loading}
-												>{st.loading ? 'Loading lots…' : 'Use its pantry lots'}</button
-											>
-										{/if}
-									</div>
-									<div>
-										<label class="label" for="note-{it.position}">Note</label>
-										<input
-											id="note-{it.position}"
-											class="field"
-											name="item.{it.position}.note"
-											bind:value={st.note}
-											placeholder="e.g. used the last of the jar"
-											maxlength="300"
-										/>
-									</div>
-								</div>
-							</details>
-						</li>
-					{/if}
-				{/each}
-			</ul>
+			{#key preview}
+				<CookItems {preview} />
+			{/key}
 			<button class="btn-primary h-12 w-full rounded-[16px]">Deduct from pantry</button>
 			<p class="text-center text-[11.5px] text-sage-soft">
 				Insufficient or changed stock produces a review, never a negative balance.

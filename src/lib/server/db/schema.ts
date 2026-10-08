@@ -233,6 +233,8 @@ export const recipes = pgTable(
 	(t) => [
 		index('recipe_owner_updated_idx').on(t.ownerUserId, t.updatedAt, t.id),
 		index('recipe_tags_gin_idx').using('gin', t.tags),
+		index('recipe_image_idx').on(t.imageId),
+		index('recipe_source_attachment_idx').on(t.sourceAttachmentId),
 		check('recipe_status_chk', sql`${t.status} in ('draft','active','archived')`),
 		check('recipe_servings_chk', sql`${t.baseServings} is null or ${t.baseServings} > 0`)
 	]
@@ -530,7 +532,10 @@ export const groceryLineSources = pgTable(
 		amount: qty('amount'),
 		unit: text('unit')
 	},
-	(t) => [primaryKey({ columns: [t.lineId, t.batchId] })]
+	(t) => [
+		primaryKey({ columns: [t.lineId, t.batchId] }),
+		index('grocery_line_source_batch_idx').on(t.batchId)
+	]
 );
 
 /* ------------------------------------------------------------------------ */
@@ -569,6 +574,9 @@ export const inventoryEvents = pgTable(
 		index('inventory_event_household_time_idx').on(t.householdId, t.occurredAt, t.id),
 		uniqueIndex('inventory_event_reverses_uq').on(t.reversesEventId),
 		index('inventory_event_batch_idx').on(t.batchId),
+		index('inventory_event_operation_idx').on(t.operationId),
+		index('inventory_event_recipe_idx').on(t.recipeId),
+		index('inventory_event_grocery_list_idx').on(t.groceryListId),
 		check(
 			'inventory_event_kind_chk',
 			sql`${t.kind} in ('purchase','cook','add_stock','correction','waste','undo')`

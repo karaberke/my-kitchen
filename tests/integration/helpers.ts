@@ -5,7 +5,7 @@ import { db } from '$lib/server/db';
 import { auth } from '$lib/server/auth';
 import { listMemberships } from '$lib/server/households';
 import { Dec } from '$lib/shared/decimal';
-import type { ActorContext } from '$lib/server/pantry';
+import type { ActorContext } from '$lib/server/access';
 import { createRecipe } from '$lib/server/recipes';
 import type { ValidRecipe } from '$lib/shared/recipe-input';
 
@@ -53,7 +53,11 @@ export function requestAs(user: TestUser | null, householdId = user?.householdId
 		user: user ? ({ id: user.id, name: user.name, email: user.email } as App.Locals['user']) : null,
 		household: user && householdId ? { id: householdId, name: user.name, role: 'owner' } : null
 	};
-	return { locals, url: new URL('http://localhost/') } as unknown as RequestEvent;
+	return {
+		locals,
+		url: new URL('http://localhost/'),
+		request: new Request('http://localhost/')
+	} as unknown as RequestEvent;
 }
 
 export function opId(): string {

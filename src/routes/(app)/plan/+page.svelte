@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import PollRevisions from '$lib/components/PollRevisions.svelte';
 	import { recipeMetaLine } from '$lib/client/format';
+	import { keepForm } from '$lib/client/enhance';
 
 	let { data, form } = $props();
 
@@ -27,13 +27,6 @@
 	const planned = $derived(data.days.reduce((n, d) => n + d.entries.length, 0));
 	const daysUsed = $derived(data.days.filter((d) => d.entries.length).length);
 	const anyRecipe = $derived(data.days.some((d) => d.entries.some((e) => e.recipeId)));
-
-	const after =
-		() =>
-		async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => {
-			await update({ reset: false });
-			await invalidateAll();
-		};
 </script>
 
 <PageHeader title="This week" subtitle={data.household?.name ?? ''}>
@@ -48,14 +41,7 @@
 
 {#if form?.message}<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>{/if}
 
-<form
-	method="post"
-	action="?/toGrocery"
-	use:enhance={() =>
-		async ({ update }) => {
-			await update({ reset: false });
-		}}
->
+<form method="post" action="?/toGrocery" use:enhance={keepForm}>
 	<input type="hidden" name="start" value={data.start} />
 	<button
 		class="h-[42px] w-full rounded-[14px] border border-sand-dark bg-card text-[12.5px] font-bold hover:bg-parchment disabled:cursor-not-allowed disabled:opacity-50"
@@ -103,7 +89,7 @@
 								<div class="mt-1 text-[11px] text-sage">Note · no recipe attached</div>
 							</div>
 						{/if}
-						<form method="post" action="?/remove" use:enhance={after}>
+						<form method="post" action="?/remove" use:enhance={keepForm}>
 							<input type="hidden" name="entryId" value={e.id} />
 							<button
 								class="icon-btn h-[30px] w-[30px] flex-none text-[14px]"
@@ -142,7 +128,6 @@
 								async ({ update }) => {
 									await update({ reset: false });
 									addOpen = false;
-									await invalidateAll();
 								}}
 						>
 							<input type="hidden" name="plannedOn" value={addDay} />
@@ -175,7 +160,6 @@
 					if (result.type === 'success') {
 						addOpen = false;
 						noteText = '';
-						await invalidateAll();
 					}
 				}}
 		>

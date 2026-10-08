@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { beforeNavigate } from '$app/navigation';
 	import IngredientAutocomplete from './IngredientAutocomplete.svelte';
@@ -146,11 +147,19 @@
 			imageUrl
 		});
 	const initialSnapshot = snapshot();
-	const dirty = $derived(proposed || snapshot() !== initialSnapshot);
+	/** The full comparison. Costly, so it runs on commit and on leaving, not per keystroke. */
+	const differs = () => proposed || snapshot() !== initialSnapshot;
+	/** What the status line shows; a keystroke only raises it, a commit settles it. */
+	let edited = $state(false);
+	const dirty = $derived(proposed || edited);
+	/** Per keystroke: something may differ now. */
+	const onInput = () => (edited = true);
+	/** On commit (a field is left, a row is added or moved): compare for real. */
+	const settle = () => (edited = differs());
 
 	beforeNavigate((nav) => {
 		if (
-			dirty &&
+			differs() &&
 			!submitting &&
 			!nav.willUnload &&
 			!confirm('You have unsaved changes. Leave without saving?')
@@ -158,8 +167,11 @@
 			nav.cancel();
 	});
 	function onBeforeUnload(e: BeforeUnloadEvent) {
-		if (dirty && !submitting) e.preventDefault();
+		if (differs() && !submitting) e.preventDefault();
 	}
+	onDestroy(() => {
+		if (imagePreview) URL.revokeObjectURL(imagePreview);
+	});
 
 	function move<T>(list: T[], from: number, to: number): T[] {
 		if (to < 0 || to >= list.length || from === to) return list;
@@ -176,11 +188,13 @@
 		const group = ingredients[after ?? ingredients.length - 1]?.group ?? '';
 		ingredients = [...ingredients.slice(0, idx), blankIng(group), ...ingredients.slice(idx)];
 		focusRow('ing', idx, 'amount');
+		settle();
 	}
 	function removeIngredient(i: number) {
 		ingredients = ingredients.filter((_, idx) => idx !== i);
 		if (!ingredients.length) ingredients = [blankIng()];
 		focusRow('ing', Math.max(0, i - 1), 'name');
+		settle();
 	}
 	function addStep(after?: number) {
 		const idx = after === undefined ? steps.length : after + 1;
@@ -190,10 +204,12 @@
 			...steps.slice(idx)
 		];
 		focusRow('step', idx, 'text');
+		settle();
 	}
 	function removeStep(i: number) {
 		steps = steps.filter((_, idx) => idx !== i);
 		if (!steps.length) steps = [blankStep()];
+		settle();
 	}
 	function checkAmount(i: number) {
 		const r = parseAmount(ingredients[i].amount);
@@ -206,12 +222,21 @@
 		if (norm) ingredients[i].unit = norm;
 	}
 
+	function moveIngredient(from: number, to: number) {
+		ingredients = move(ingredients, from, to);
+		settle();
+	}
+	function moveStep(from: number, to: number) {
+		steps = move(steps, from, to);
+		settle();
+	}
+
 	// Drag & drop (pointer) — keyboard users have the up/down buttons.
 	let dragging = $state<{ list: 'ing' | 'step'; index: number } | null>(null);
 	function onDrop(list: 'ing' | 'step', index: number) {
 		if (!dragging || dragging.list !== list) return;
-		if (list === 'ing') ingredients = move(ingredients, dragging.index, index);
-		else steps = move(steps, dragging.index, index);
+		if (list === 'ing') moveIngredient(dragging.index, index);
+		else moveStep(dragging.index, index);
 		dragging = null;
 	}
 	function onFile(e: Event) {
@@ -241,6 +266,9 @@
 	{action}
 	enctype="multipart/form-data"
 	class="flex flex-col gap-6"
+	oninput={onInput}
+	onchange={settle}
+	onfocusout={settle}
 	use:enhance={async ({ formData, action: target, cancel }) => {
 		// The tidy proposal is allowed to fix what validation would refuse, and it
 		// saves nothing, so it skips the checks and the photo resize below.
@@ -588,14 +616,14 @@
 						<button
 							type="button"
 							class="icon-btn"
-							onclick={() => (ingredients = move(ingredients, i, i - 1))}
+							onclick={() => moveIngredient(i, i - 1)}
 							disabled={i === 0}
 							aria-label="Move ingredient {i + 1} up">↑</button
 						>
 						<button
 							type="button"
 							class="icon-btn"
-							onclick={() => (ingredients = move(ingredients, i, i + 1))}
+							onclick={() => moveIngredient(i, i + 1)}
 							disabled={i === ingredients.length - 1}
 							aria-label="Move ingredient {i + 1} down">↓</button
 						>
@@ -686,14 +714,14 @@
 						<button
 							type="button"
 							class="icon-btn"
-							onclick={() => (steps = move(steps, i, i - 1))}
+							onclick={() => moveStep(i, i - 1)}
 							disabled={i === 0}
 							aria-label="Move step {i + 1} up">↑</button
 						>
 						<button
 							type="button"
 							class="icon-btn"
-							onclick={() => (steps = move(steps, i, i + 1))}
+							onclick={() => moveStep(i, i + 1)}
 							disabled={i === steps.length - 1}
 							aria-label="Move step {i + 1} down">↓</button
 						>

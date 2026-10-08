@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm';
-import type { Tx } from '$lib/server/db';
+import type { DbOrTx, Tx } from '$lib/server/db';
 import {
 	households,
 	inventoryEvents,
@@ -124,47 +124,59 @@ export async function insertEvent(tx: Tx, input: EventInput): Promise<string> {
 	return row.id;
 }
 
+export interface MovementInput {
+	eventId: string;
+	householdId: string;
+	lotId: string;
+	ingredientId: string;
+	delta: Dec;
+	unit: string;
+}
+
 /**
- * Apply a signed delta to a lot with a guarded atomic update (never below
- * zero) and record the append-only movement with the resulting balance.
+ * Apply signed deltas to lots, each with a guarded atomic update (never below
+ * zero), in the given order, and record the append-only movements with their
+ * resulting balances in one insert. Returns the balances in input order.
  */
-export async function applyMovement(
-	tx: Tx,
-	args: {
-		eventId: string;
-		householdId: string;
-		lotId: string;
-		ingredientId: string;
-		delta: Dec;
-		unit: string;
-	}
-): Promise<Dec> {
-	const [updated] = await tx
-		.update(stockLots)
-		.set({
-			quantity: sql`${stockLots.quantity} + ${args.delta.toDb()}::numeric`,
-			revision: sql`${stockLots.revision} + 1`,
-			updatedAt: sql`now()`
-		})
-		.where(
-			and(
-				eq(stockLots.id, args.lotId),
-				eq(stockLots.householdId, args.householdId),
-				sql`${stockLots.quantity} + ${args.delta.toDb()}::numeric >= 0`
+export async function applyMovements(tx: Tx, moves: MovementInput[]): Promise<Dec[]> {
+	const balances: Dec[] = [];
+	for (const m of moves) {
+		const [updated] = await tx
+			.update(stockLots)
+			.set({
+				quantity: sql`${stockLots.quantity} + ${m.delta.toDb()}::numeric`,
+				revision: sql`${stockLots.revision} + 1`,
+				updatedAt: sql`now()`
+			})
+			.where(
+				and(
+					eq(stockLots.id, m.lotId),
+					eq(stockLots.householdId, m.householdId),
+					sql`${stockLots.quantity} + ${m.delta.toDb()}::numeric >= 0`
+				)
 			)
-		)
-		.returning({ quantity: stockLots.quantity });
-	if (!updated) throw new AppError(409, 'That change would take a pantry lot below zero');
-	const balance = Dec.from(updated.quantity);
-	await tx.insert(inventoryMovements).values({
-		eventId: args.eventId,
-		householdId: args.householdId,
-		lotId: args.lotId,
-		ingredientId: args.ingredientId,
-		delta: args.delta.toDb(),
-		unit: args.unit,
-		balanceAfter: balance.toDb()
-	});
+			.returning({ quantity: stockLots.quantity });
+		if (!updated) throw new AppError(409, 'That change would take a pantry lot below zero');
+		balances.push(Dec.from(updated.quantity));
+	}
+	if (moves.length)
+		await tx.insert(inventoryMovements).values(
+			moves.map((m, i) => ({
+				eventId: m.eventId,
+				householdId: m.householdId,
+				lotId: m.lotId,
+				ingredientId: m.ingredientId,
+				delta: m.delta.toDb(),
+				unit: m.unit,
+				balanceAfter: balances[i].toDb()
+			}))
+		);
+	return balances;
+}
+
+/** `applyMovements` for one lot; returns its balance after the change. */
+export async function applyMovement(tx: Tx, args: MovementInput): Promise<Dec> {
+	const [balance] = await applyMovements(tx, [args]);
 	return balance;
 }
 
@@ -230,8 +242,28 @@ export interface DeductionPlan {
 }
 
 /**
- * Suggest lots to deduct from: earliest expires_on first, then undated,
- * then oldest. Pure planning — nothing is written. Callers may override.
+ * FEFO order for pantry lots: earliest expires_on first, then undated lots
+ * oldest first; the lot id breaks ties so the order is stable.
+ */
+export function fefoOrder(
+	a: { id: string; expiresOn: string | null; createdAt?: string },
+	b: { id: string; expiresOn: string | null; createdAt?: string }
+): number {
+	if (a.expiresOn && b.expiresOn && a.expiresOn !== b.expiresOn)
+		return a.expiresOn < b.expiresOn ? -1 : 1;
+	if (a.expiresOn && !b.expiresOn) return -1;
+	if (!a.expiresOn && b.expiresOn) return 1;
+	if (!a.expiresOn) {
+		const ca = a.createdAt ?? '';
+		const cb = b.createdAt ?? '';
+		if (ca !== cb) return ca < cb ? -1 : 1;
+	}
+	return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Suggest lots to deduct from in `fefoOrder`. Pure planning — nothing is
+ * written. Callers may override.
  */
 export function planDeduction(
 	ingredientId: string,
@@ -252,21 +284,7 @@ export function planDeduction(
 ): DeductionPlan {
 	const candidates = lots
 		.filter((l) => l.ingredientId === ingredientId && l.quantity.isPositive())
-		.sort((a, b) => {
-			if (a.expiresOn && b.expiresOn)
-				return a.expiresOn < b.expiresOn
-					? -1
-					: a.expiresOn > b.expiresOn
-						? 1
-						: a.id < b.id
-							? -1
-							: 1;
-			if (a.expiresOn) return -1;
-			if (b.expiresOn) return 1;
-			const ca = a.createdAt ?? '';
-			const cb = b.createdAt ?? '';
-			return ca < cb ? -1 : ca > cb ? 1 : a.id < b.id ? -1 : 1;
-		});
+		.sort(fefoOrder);
 	let remaining = requested;
 	const suggestions: LotSuggestion[] = [];
 	const incompatible: DeductionPlan['incompatible'] = [];
@@ -311,7 +329,7 @@ export function planDeduction(
 }
 
 export async function activeLotsForIngredients(
-	tx: Tx,
+	tx: DbOrTx,
 	householdId: string,
 	ingredientIds: string[]
 ) {

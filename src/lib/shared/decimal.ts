@@ -67,12 +67,6 @@ export class Dec {
 		return Dec.from(value);
 	}
 
-	static sum(values: Iterable<Dec>): Dec {
-		let acc = 0n;
-		for (const v of values) acc += v.units;
-		return new Dec(acc);
-	}
-
 	static max(a: Dec, b: Dec): Dec {
 		return a.units >= b.units ? a : b;
 	}
@@ -115,8 +109,14 @@ export class Dec {
 		return new Dec(divRound(this.units * ONE, other.units));
 	}
 
-	cmp(other: Dec): -1 | 0 | 1 {
-		return this.units < other.units ? -1 : this.units > other.units ? 1 : 0;
+	/** The integer part, rounding toward zero: 2.7 -> 2, -2.7 -> -2. */
+	trunc(): Dec {
+		return new Dec((this.units / ONE) * ONE);
+	}
+
+	/** The nearest integer, rounding half away from zero: 2.5 -> 3, -2.5 -> -3. */
+	round(): Dec {
+		return new Dec(divRound(this.units, ONE) * ONE);
 	}
 
 	eq(other: Dec): boolean {
@@ -181,9 +181,5 @@ export class Dec {
 	toHuman(): string {
 		const fixed = this.toFixed(2);
 		return fixed.replace(/\.?0+$/, '').replace(/^-0$/, '0') || '0';
-	}
-
-	toNumber(): number {
-		return Number(this.toString());
 	}
 }

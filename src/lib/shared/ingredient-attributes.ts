@@ -9,6 +9,21 @@
  */
 
 import { normalizeName } from './text';
+import { UNITS } from './units';
+
+/**
+ * Every word of every mass and volume unit name ("g", "grams", "fl", "oz",
+ * "gallon"), so a new unit is an attribute without a second list. Package and
+ * count units ("can", "clove", "whole") are not here: they can name a
+ * different product.
+ */
+const MEASURE_WORDS: readonly string[] = [
+	...new Set(
+		UNITS.filter((u) => u.dimension === 'mass' || u.dimension === 'volume')
+			.flatMap((u) => [u.singular, u.plural, ...u.aliases])
+			.flatMap((name) => normalizeName(name).split(' '))
+	)
+];
 
 /** Harmless for any ingredient: quality, processing and package wording. */
 export const GENERIC_ATTRIBUTES: readonly string[] = [
@@ -30,19 +45,7 @@ export const GENERIC_ATTRIBUTES: readonly string[] = [
 	'count',
 	'ct',
 	'half',
-	'gallon',
-	'gal',
-	'quart',
-	'qt',
-	'pint',
-	'pt',
-	'oz',
-	'fl',
-	'lb',
-	'l',
-	'ml',
-	'g',
-	'kg'
+	...MEASURE_WORDS
 ];
 
 /** Harmless for one ingredient only, keyed by its normalized catalog name. */

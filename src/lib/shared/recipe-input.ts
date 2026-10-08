@@ -1,26 +1,12 @@
 import { Dec } from './decimal';
 import { parseAmount } from './amount-parse';
 import { normalizeUnitInput, type Convention } from './units';
-import { isRfcUuid } from './text';
+import { cleanText, collapseSpaces, isRfcUuid } from './text';
 
 export type RecipeIntent = 'draft' | 'save';
 
 /** The longest servings text a form or a request may send, such as "1 1/2". */
 export const SERVINGS_INPUT_MAX_CHARS = 16;
-
-/** The longest question a cook may ask the assistant about a recipe. */
-export const LLM_QUESTION_MAX_CHARS = 500;
-/** The most ingredient names one assistant match request asks about. */
-export const INGREDIENT_MATCH_MAX_NAMES = 8;
-/** Earlier question-and-answer pairs a chat sends with a new question; older ones are dropped. */
-export const LLM_CHAT_MAX_TURNS = 6;
-/** The longest earlier answer a chat may send back; the assistant's answers are shorter. */
-export const LLM_CHAT_ANSWER_MAX_CHARS = 2000;
-/**
- * All earlier turns together, in characters (about 1500 tokens). With the
- * recipe text and the answer this stays inside the model's 8192-token context.
- */
-export const LLM_CHAT_HISTORY_MAX_CHARS = 6000;
 
 /** One earlier question and the assistant's answer to it. */
 export interface RecipeChatTurn {
@@ -185,7 +171,7 @@ export function parseTags(raw: string): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];
 	for (const part of raw.split(/[,\n]/)) {
-		const t = part.trim().replace(/\s+/g, ' ').slice(0, 40);
+		const t = cleanText(part, 40);
 		const key = t.toLowerCase();
 		if (!t || seen.has(key)) continue;
 		seen.add(key);
@@ -203,7 +189,7 @@ export function parseTags(raw: string): string[] {
 export function validateRecipe(input: RecipeFormInput): RecipeValidation {
 	const errors: FieldErrors = {};
 	const draft = input.intent === 'draft';
-	const title = input.title.trim().replace(/\s+/g, ' ');
+	const title = collapseSpaces(input.title);
 	if (!title && !draft) errors.title = 'Give the recipe a title';
 	if (title.length > 200) errors.title = 'Keep the title under 200 characters';
 
@@ -226,7 +212,7 @@ export function validateRecipe(input: RecipeFormInput): RecipeValidation {
 
 	const ingredients: ValidIngredient[] = [];
 	input.ingredients.forEach((row, i) => {
-		const name = row.name.trim().replace(/\s+/g, ' ');
+		const name = collapseSpaces(row.name);
 		const blank = !name && !row.amount.trim() && !row.unit.trim() && !row.preparation.trim();
 		if (blank) return;
 		if (!name) errors[`ing.${i}.name`] = 'Name this ingredient';

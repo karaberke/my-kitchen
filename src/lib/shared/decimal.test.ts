@@ -36,9 +36,6 @@ describe('Dec fixed-point decimal', () => {
 		expect(a.add(b).toString()).toBe('800');
 		expect(a.sub(b).toString()).toBe('200');
 		expect(b.sub(a).toString()).toBe('-200');
-		expect(a.cmp(b)).toBe(1);
-		expect(b.cmp(a)).toBe(-1);
-		expect(a.cmp(Dec.from('500.0'))).toBe(0);
 		expect(a.eq(Dec.from(500))).toBe(true);
 		expect(a.gt(b)).toBe(true);
 		expect(b.lt(a)).toBe(true);
@@ -82,13 +79,24 @@ describe('Dec fixed-point decimal', () => {
 		expect(Dec.from('0.004').toHuman()).toBe('0');
 	});
 
+	it('truncates toward zero', () => {
+		expect(Dec.from('2.7').trunc().toString()).toBe('2');
+		expect(Dec.from('2').trunc().toString()).toBe('2');
+		expect(Dec.from('0.999999').trunc().toString()).toBe('0');
+		expect(Dec.from('-2.7').trunc().toString()).toBe('-2');
+		expect(Dec.from('-0.5').trunc().toString()).toBe('0');
+	});
+
+	it('rounds to the nearest integer, half away from zero', () => {
+		expect(Dec.from('2.5').round().toString()).toBe('3');
+		expect(Dec.from('2.499999').round().toString()).toBe('2');
+		expect(Dec.from('-2.5').round().toString()).toBe('-3');
+		expect(Dec.from('-2.4').round().toString()).toBe('-2');
+		expect(Dec.from('0.4').round().toString()).toBe('0');
+	});
+
 	it('serialises to a plain string for JSON and database boundaries', () => {
 		expect(JSON.stringify({ q: Dec.from('1.25') })).toBe('{"q":"1.25"}');
 		expect(Dec.from('1.250000').toDb()).toBe('1.250000');
-	});
-
-	it('sums a list', () => {
-		expect(Dec.sum([Dec.from('1'), Dec.from('2.5'), Dec.from('-0.5')]).toString()).toBe('3');
-		expect(Dec.sum([]).toString()).toBe('0');
 	});
 });
