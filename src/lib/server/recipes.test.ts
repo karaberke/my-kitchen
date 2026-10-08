@@ -82,6 +82,18 @@ describe('recipeToPlainText', () => {
 		expect(text).not.toContain('Serves');
 	});
 
+	it('scales the amounts in the steps that belong to an ingredient', () => {
+		const steps = [
+			{ id: 's', position: 0, sectionTitle: '', text: 'Whisk 200 g flour with 2 eggs at 180 °C.' }
+		];
+		expect(recipeToPlainText(recipe({ steps }), Dec.from('8'))).toContain(
+			'  1. Whisk 400 g flour with 4 eggs at 180 °C.'
+		);
+		expect(recipeToPlainText(recipe({ steps }))).toContain(
+			'  1. Whisk 200 g flour with 2 eggs at 180 °C.'
+		);
+	});
+
 	it('ignores zero servings and zero base servings', () => {
 		expect(recipeToPlainText(recipe(), Dec.from('0'))).toBe(recipeToPlainText(recipe()));
 		const zeroBase = recipe({ baseServings: '0' });

@@ -1,7 +1,7 @@
 import { normalizeName } from './text';
 
 /** "olives" -> "olive", "berries" -> "berry", "tomatoes" -> "tomato"; "cress" stays. */
-function singular(name: string): string | null {
+export function singular(name: string): string | null {
 	if (/(^|\s)\S*ies$/.test(name)) return name.replace(/ies$/, 'y');
 	if (/(ch|sh|s|x|z)es$/.test(name)) return name.replace(/es$/, '');
 	if (/oes$/.test(name)) return name.replace(/es$/, '');

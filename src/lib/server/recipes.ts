@@ -21,6 +21,7 @@ import { Dec } from '$lib/shared/decimal';
 import { UNITS, convertAmount, unitsCompatible, type Convention } from '$lib/shared/units';
 import { ingredientLine } from '$lib/shared/ingredient-line';
 import { scaleAmount } from '$lib/shared/scaling';
+import { scaledStepLine } from '$lib/shared/step-amounts';
 import type { ValidRecipe } from '$lib/shared/recipe-input';
 import { withTransaction } from '$lib/server/operations';
 import { CATEGORIES_PER_HOUSEHOLD_MAX } from '$lib/server/recipe-categories';
@@ -924,7 +925,8 @@ export function recipeToPlainText(r: RecipeDetail, servings?: Dec): string {
 			section = s.sectionTitle;
 			lines.push(`  ${section}:`);
 		}
-		lines.push(`  ${idx + 1}. ${s.text}`);
+		const text = base && target ? scaledStepLine(s.text, r.ingredients, base, target) : s.text;
+		lines.push(`  ${idx + 1}. ${text}`);
 	});
 	if (r.notes) lines.push('', 'NOTES', r.notes);
 	if (r.source) lines.push('', `Source: ${r.source}`);

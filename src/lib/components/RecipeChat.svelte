@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import { remoteErrorMessage } from '$lib/client/remote';
 	import {
 		listen,
 		speak,
 		speechInputAvailable,
+		speechLang,
 		speechOutputAvailable,
 		stopSpeaking
 	} from '$lib/client/speech';
@@ -22,19 +23,29 @@
 	 * sessionStorage (a reload keeps them, closing the tab clears them). `voice`
 	 * adds speech input and read-aloud; only the cook page may set it, because
 	 * only that page may use the microphone.
+	 *
+	 * `ask` is a question heard by the page's wake phrase: it is sent at once and
+	 * its answer is read aloud, then `onasked` lets the page clear it. `onbusy`
+	 * reports when the chat needs the microphone or the speaker to itself.
 	 */
 	let {
 		recipeId,
 		step,
 		servings,
 		storageKey,
-		voice = false
+		voice = false,
+		ask = null,
+		onasked,
+		onbusy
 	}: {
 		recipeId: string;
 		step?: number;
 		servings?: string;
 		storageKey?: string;
 		voice?: boolean;
+		ask?: string | null;
+		onasked?: () => void;
+		onbusy?: (busy: boolean) => void;
 	} = $props();
 
 	const READ_ALOUD_KEY = 'my-kitchen:chat-read-aloud';
@@ -49,12 +60,29 @@
 	let listening = $state(false);
 	let micError = $state('');
 	let readAloud = $state(false);
+	let speaking = $state(false);
 	let listEl = $state<HTMLElement>();
 	/** Bumped by "Clear chat" so an answer that arrives afterwards is dropped. */
 	let epoch = 0;
 	let recognition: { stop(): void } | null = null;
 
-	const lang = () => (typeof navigator === 'undefined' ? 'en' : navigator.language || 'en');
+	const busy = $derived(pending || listening || speaking);
+	$effect(() => onbusy?.(busy));
+
+	$effect(() => {
+		const question = ask?.trim();
+		if (!question) return;
+		untrack(() => {
+			onasked?.();
+			input = question.slice(0, LLM_QUESTION_MAX_CHARS);
+			send({ speakAnswer: true });
+		});
+	});
+
+	function quiet() {
+		stopSpeaking();
+		speaking = false;
+	}
 
 	function loadTurns(): RecipeChatTurn[] {
 		if (!storageKey) return [];
@@ -110,15 +138,16 @@
 		scrollToNewest();
 		return () => {
 			recognition?.stop();
-			stopSpeaking();
+			quiet();
 		};
 	});
 
-	async function send() {
+	/** `speakAnswer` reads the answer aloud even with read-aloud off: nobody is looking. */
+	async function send({ speakAnswer = false } = {}) {
 		const question = input.trim();
 		if (pending || !question) return;
 		recognition?.stop();
-		stopSpeaking();
+		quiet();
 		const mine = epoch;
 		pending = true;
 		error = '';
@@ -138,7 +167,10 @@
 			turns = [...turns, { question, answer }].slice(-LLM_CHAT_MAX_TURNS);
 			input = '';
 			saveTurns();
-			if (voice && readAloud) speak(answer, lang());
+			if (voice && canSpeak && (readAloud || speakAnswer)) {
+				speaking = true;
+				speak(answer, speechLang(), () => (speaking = false));
+			}
 		} catch (err) {
 			if (mine !== epoch) return;
 			// The question stays in the box so the cook can send it again.
@@ -154,7 +186,7 @@
 	function clearChat() {
 		epoch++;
 		recognition?.stop();
-		stopSpeaking();
+		quiet();
 		turns = [];
 		error = '';
 		micError = '';
@@ -174,8 +206,10 @@
 			return;
 		}
 		micError = '';
-		stopSpeaking(); // the microphone must not hear the answer
-		const session = listen({ lang: lang() });
+		quiet(); // the microphone must not hear the answer
+		// Tell the page first: its wake listener must let go of the microphone.
+		onbusy?.(true);
+		const session = listen({ lang: speechLang() });
 		recognition = session;
 		listening = true;
 		try {
@@ -192,7 +226,7 @@
 
 	function setReadAloud(on: boolean) {
 		readAloud = on;
-		if (!on) stopSpeaking();
+		if (!on) quiet();
 		try {
 			localStorage.setItem(READ_ALOUD_KEY, on ? '1' : '0');
 		} catch {

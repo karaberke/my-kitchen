@@ -11,6 +11,7 @@
 	import { Dec } from '$lib/shared/decimal';
 	import { displayQuantity } from '$lib/shared/display-units';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
+	import StepText from '$lib/components/StepText.svelte';
 	import UnitToggle from '$lib/components/UnitToggle.svelte';
 	import { stockStatus, STOCK_STATUS_LABEL, type StockStatus } from '$lib/shared/stock-status';
 
@@ -382,7 +383,13 @@
 							? 'text-sage line-through'
 							: 'text-[#354031]'}"
 					>
-						{step.text}
+						<StepText
+							text={step.text}
+							ingredients={r.ingredients}
+							{base}
+							{servings}
+							convention={r.convention}
+						/>
 					</p>
 				</li>
 			{/each}
