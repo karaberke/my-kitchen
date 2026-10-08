@@ -28,7 +28,7 @@ import { LLM_LIMITS, resetRateLimits } from '$lib/server/ratelimit';
 import { emptyRecipeFormInput } from '$lib/shared/recipe-html';
 import { LLM_QUESTION_MAX_CHARS } from '$lib/shared/recipe-input';
 import { actions } from '../../src/routes/(app)/recipes/import/+page.server';
-import { STUB_LLM_CONFIG, chatCompletion, jsonResponse, stubLlm, unstubLlm } from '../llm-stub';
+import { STUB_LLM_CONFIG, completionResponse, jsonResponse, stubLlm, unstubLlm } from '../llm-stub';
 import { claimLlmCall, setLlmForTests } from '$lib/server/llm/client';
 import type { RequestEvent } from '@sveltejs/kit';
 
@@ -214,7 +214,7 @@ function gatedLlm(reply: string) {
 	const fetchStub = (async (_url: unknown, init?: RequestInit) => {
 		requests.push(JSON.parse(String(init?.body)));
 		await gate;
-		return jsonResponse(chatCompletion(reply));
+		return completionResponse(reply);
 	}) as typeof fetch;
 	setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
 	openGates.push(release);

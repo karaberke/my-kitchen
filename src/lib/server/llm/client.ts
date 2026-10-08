@@ -23,8 +23,15 @@ export interface LlmConfig {
 
 export type LlmFetch = typeof fetch;
 
-/** One request may run this long before it is a 504. */
-export const LLM_TIMEOUT_MS = 120_000;
+/**
+ * A request whose server sends nothing for this long is a 504. Replies are
+ * streamed, so a slow server that is still writing tokens is never cut off;
+ * the gap before the first token (reading the prompt, about 30 s for a long
+ * recipe on the CPU) has to fit in it too.
+ */
+export const LLM_IDLE_TIMEOUT_MS = 90_000;
+/** The most one interactive request may take in total, even while tokens arrive. */
+export const LLM_TIMEOUT_MS = 300_000;
 /** The limit for work nobody waits on, such as an import that runs in the background. */
 export const LLM_BACKGROUND_TIMEOUT_MS = 600_000;
 /** Low, so structured output copies the source instead of inventing. */
@@ -80,7 +87,8 @@ export function createLlmClient(config: LlmConfig, fetchImpl?: LlmFetch): OpenAI
 	return new OpenAI({
 		baseURL: config.baseUrl,
 		apiKey: config.apiKey,
-		timeout: LLM_TIMEOUT_MS,
+		// The real limits are in `chat`; this one only backs them up.
+		timeout: LLM_BACKGROUND_TIMEOUT_MS + LLM_IDLE_TIMEOUT_MS,
 		// A retry would put a second slow request in the one-slot queue; the
 		// caller decides what a failure means instead.
 		maxRetries: 0,
@@ -165,6 +173,12 @@ interface Reply {
 	finishReason: string | null;
 }
 
+function stoppedError(why: 'idle' | 'total'): AppError {
+	return why === 'idle'
+		? new AppError(504, 'The assistant stopped answering.')
+		: new AppError(504, 'The assistant took too long to answer.');
+}
+
 async function chat(
 	system: string,
 	userText: string,
@@ -176,8 +190,17 @@ async function chat(
 	}
 ): Promise<Reply> {
 	const { openai, model } = client();
+	// Streamed, so the limit is on silence, not on how long a slow server writes.
+	const abort = new AbortController();
+	let stopped: 'idle' | 'total' | null = null;
+	const stop = (why: 'idle' | 'total') => {
+		stopped = why;
+		abort.abort();
+	};
+	let idle = setTimeout(() => stop('idle'), LLM_IDLE_TIMEOUT_MS);
+	const total = setTimeout(() => stop('total'), params.timeoutMs);
 	try {
-		const res = await openai.chat.completions.create(
+		const stream = await openai.chat.completions.create(
 			{
 				model,
 				messages: [
@@ -186,17 +209,28 @@ async function chat(
 				],
 				max_tokens: params.maxTokens,
 				temperature: params.temperature,
+				stream: true,
 				...(params.responseFormat ? { response_format: params.responseFormat } : {})
 			},
-			{ timeout: params.timeoutMs }
+			{ signal: abort.signal }
 		);
-		const choice = res.choices?.[0];
-		return {
-			content: typeof choice?.message?.content === 'string' ? choice.message.content : '',
-			finishReason: choice?.finish_reason ?? null
-		};
+		let content = '';
+		let finishReason: string | null = null;
+		for await (const chunk of stream) {
+			clearTimeout(idle);
+			idle = setTimeout(() => stop('idle'), LLM_IDLE_TIMEOUT_MS);
+			const choice = chunk.choices?.[0];
+			if (typeof choice?.delta?.content === 'string') content += choice.delta.content;
+			if (choice?.finish_reason) finishReason = choice.finish_reason;
+		}
+		// The SDK ends an aborted stream quietly, so a partial reply must not pass.
+		if (stopped) throw stoppedError(stopped);
+		return { content, finishReason };
 	} catch (err) {
-		throw asLlmError(err);
+		throw stopped ? stoppedError(stopped) : asLlmError(err);
+	} finally {
+		clearTimeout(idle);
+		clearTimeout(total);
 	}
 }
 

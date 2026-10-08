@@ -3,14 +3,17 @@ import { z } from 'zod';
 import { AppError } from '$lib/server/errors';
 import { LLM_LIMITS, resetRateLimits } from '$lib/server/ratelimit';
 import {
+	SSE_DONE,
 	STUB_LLM_CONFIG,
-	chatCompletion,
+	completionResponse,
 	jsonResponse,
+	sseChunk,
 	stubLlm,
 	unstubLlm
 } from '../../../../tests/llm-stub';
 import {
 	LLM_BACKGROUND_TIMEOUT_MS,
+	LLM_IDLE_TIMEOUT_MS,
 	LLM_JSON_TEMPERATURE,
 	LLM_MAX_WAITING,
 	LLM_TIMEOUT_MS,
@@ -125,7 +128,26 @@ describe('failure mapping', () => {
 		expect(err.message).not.toContain('secret detail');
 	});
 
-	it('is a 504 when the server does not answer within the time limit', async () => {
+	it('asks for a streamed reply', async () => {
+		const { requests } = stubLlm([good]);
+		await completeJson(schema, SYSTEM, 'x', { maxTokens: 100 });
+		expect(requests[0].stream).toBe(true);
+	});
+
+	it('joins a reply streamed in many chunks', async () => {
+		const parts = ['{"ok":', 'true,', '"name":', '"dal"}'];
+		const body =
+			parts.map((p) => sseChunk({ content: p })).join('') + sseChunk({}, 'stop') + SSE_DONE;
+		const fetchStub = (async () =>
+			new Response(body, { headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
+		await expect(completeJson(schema, SYSTEM, 'x', { maxTokens: 100 })).resolves.toEqual({
+			ok: true,
+			name: 'dal'
+		});
+	});
+
+	it('is a 504 when the server sends nothing within the idle limit', async () => {
 		vi.useFakeTimers();
 		// A server that never answers: the call ends only when the client aborts it.
 		const fetchStub = ((_url: unknown, init?: RequestInit) =>
@@ -136,51 +158,95 @@ describe('failure mapping', () => {
 			})) as typeof fetch;
 		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
 		const result = completeText(SYSTEM, 'x', { maxTokens: 50 }).catch((e) => e);
-		await vi.advanceTimersByTimeAsync(LLM_TIMEOUT_MS + 1);
+		await vi.advanceTimersByTimeAsync(LLM_IDLE_TIMEOUT_MS + 1);
 		const err = await result;
 		expect(err).toBeInstanceOf(AppError);
 		expect(err.status).toBe(504);
 	});
 
-	/** A server that answers after `delayMs`, and ends the request early only when the client aborts it. */
-	function slowStub(delayMs: number) {
-		const fetchStub = ((_url: unknown, init?: RequestInit) =>
-			new Promise<Response>((resolve, reject) => {
-				const timer = setTimeout(
-					() => resolve(jsonResponse(chatCompletion('late answer'))),
-					delayMs
-				);
-				init?.signal?.addEventListener('abort', () => {
-					clearTimeout(timer);
-					reject(new DOMException('The operation was aborted.', 'AbortError'));
-				});
-			})) as typeof fetch;
+	/**
+	 * A server that streams `tokens` one word at a time, `everyMs` apart, and
+	 * then (unless `stall`) ends the reply. It stops when the client aborts.
+	 */
+	function trickleStub(tokens: number, everyMs: number, stall = false) {
+		const fetchStub = (async (_url: unknown, init?: RequestInit) => {
+			const encoder = new TextEncoder();
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					let sent = 0;
+					const timer = setInterval(() => {
+						if (sent < tokens) {
+							controller.enqueue(encoder.encode(sseChunk({ content: `w${sent} ` })));
+							sent++;
+						} else if (!stall) {
+							clearInterval(timer);
+							controller.enqueue(encoder.encode(sseChunk({}, 'stop') + SSE_DONE));
+							controller.close();
+						}
+					}, everyMs);
+					init?.signal?.addEventListener('abort', () => {
+						clearInterval(timer);
+						controller.error(new DOMException('The operation was aborted.', 'AbortError'));
+					});
+				}
+			});
+			return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+		}) as typeof fetch;
 		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
 	}
 
-	it('lets a background call run past the interactive limit', async () => {
+	// Six tokens a minute apart: never silent for the idle limit, but longer
+	// than an interactive call may take, and shorter than a background one.
+	const TOKEN_GAP_MS = 60_000;
+	const SLOW_TOKENS = 6;
+	const slowTotalMs = (SLOW_TOKENS + 1) * TOKEN_GAP_MS;
+
+	it('keeps a call alive past the idle limit while tokens arrive', async () => {
 		vi.useFakeTimers();
-		slowStub(LLM_TIMEOUT_MS + 30_000);
-		const result = completeText(SYSTEM, 'x', { maxTokens: 50, background: true });
-		await vi.advanceTimersByTimeAsync(LLM_TIMEOUT_MS + 30_001);
-		await expect(result).resolves.toBe('late answer');
+		// Two tokens and the end, each just inside the idle limit: longer than the
+		// idle limit in total, shorter than the total limit.
+		const gap = LLM_IDLE_TIMEOUT_MS - 1_000;
+		expect(3 * gap).toBeLessThan(LLM_TIMEOUT_MS);
+		trickleStub(2, gap);
+		const result = completeText(SYSTEM, 'x', { maxTokens: 50 });
+		await vi.advanceTimersByTimeAsync(3 * gap + 1);
+		await expect(result).resolves.toBe('w0 w1');
 	});
 
-	it('gives the same slow answer a 504 when the call is interactive', async () => {
+	it('is a 504 when the stream goes silent after the first token', async () => {
 		vi.useFakeTimers();
-		slowStub(LLM_TIMEOUT_MS + 30_000);
+		trickleStub(1, 1_000, true);
 		const result = completeText(SYSTEM, 'x', { maxTokens: 50 }).catch((e) => e);
-		await vi.advanceTimersByTimeAsync(LLM_TIMEOUT_MS + 30_001);
+		await vi.advanceTimersByTimeAsync(LLM_IDLE_TIMEOUT_MS + 2_000);
 		expect(await result).toMatchObject({ status: 504 });
+	});
+
+	it('stops an interactive call at its total limit even while tokens arrive', async () => {
+		expect(slowTotalMs).toBeGreaterThan(LLM_TIMEOUT_MS);
+		vi.useFakeTimers();
+		trickleStub(SLOW_TOKENS, TOKEN_GAP_MS);
+		const result = completeText(SYSTEM, 'x', { maxTokens: 50 }).catch((e) => e);
+		await vi.advanceTimersByTimeAsync(slowTotalMs + 1);
+		expect(await result).toMatchObject({ status: 504 });
+	});
+
+	it('lets a background call run past the interactive limit', async () => {
+		expect(slowTotalMs).toBeLessThan(LLM_BACKGROUND_TIMEOUT_MS);
+		vi.useFakeTimers();
+		trickleStub(SLOW_TOKENS, TOKEN_GAP_MS);
+		const result = completeText(SYSTEM, 'x', { maxTokens: 50, background: true });
+		await vi.advanceTimersByTimeAsync(slowTotalMs + 1);
+		await expect(result).resolves.toBe('w0 w1 w2 w3 w4 w5');
 	});
 
 	it('is a 504 when a background call passes its own, longer limit', async () => {
 		vi.useFakeTimers();
-		slowStub(LLM_BACKGROUND_TIMEOUT_MS + 30_000);
+		const tokens = LLM_BACKGROUND_TIMEOUT_MS / TOKEN_GAP_MS + 2;
+		trickleStub(tokens, TOKEN_GAP_MS);
 		const result = completeJson(schema, SYSTEM, 'x', { maxTokens: 50, background: true }).catch(
 			(e) => e
 		);
-		await vi.advanceTimersByTimeAsync(LLM_BACKGROUND_TIMEOUT_MS + 1);
+		await vi.advanceTimersByTimeAsync((tokens + 1) * TOKEN_GAP_MS);
 		expect(await result).toMatchObject({ status: 504 });
 	});
 
@@ -245,7 +311,7 @@ describe('queue', () => {
 			maxActive = Math.max(maxActive, active);
 			await new Promise<void>((resolve) => gates.push(resolve));
 			active--;
-			return jsonResponse(chatCompletion('answer'));
+			return completionResponse('answer');
 		}) as typeof fetch;
 		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
 		return {
