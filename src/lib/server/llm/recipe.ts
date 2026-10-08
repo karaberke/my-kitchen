@@ -11,7 +11,12 @@ import { ingredientLine } from '$lib/shared/ingredient-line';
 import { isEmptyRecipe, type RecipeFormInput } from '$lib/shared/recipe-input';
 import { normalizeName } from '$lib/shared/text';
 import { claimLlmCall, completeJson, llmEnabled, type LlmCallOptions } from './client';
-import { RECIPE_JSON_SYSTEM, RECIPE_PARSE_TASK, RECIPE_TIDY_TASK } from './prompts';
+import {
+	RECIPE_JSON_SYSTEM,
+	RECIPE_PARSE_TASK,
+	RECIPE_TIDY_TASK,
+	SCRIPT_DATA_HEADING
+} from './prompts';
 
 /**
  * Text sent to the model is cut here: about 3k tokens, which leaves room in the
@@ -41,24 +46,50 @@ export const modelRecipeSchema = z.object({
 
 export type ModelRecipe = z.infer<typeof modelRecipeSchema>;
 
+/** A script line that is code, not data: DOM and method calls, functions, string building, markup. */
+const SCRIPT_CODE_LINE =
+	/\b(document|window|function|return|addEventListener|getAttribute|querySelector|innerHTML|localStorage)\b|=>|\+=|\.\w+\(|["'`]\s*\+|\+\s*["'`]|["'`]\s*</;
+/** A script line with a quoted word in it, such as `[2/3, "cup", "heavy cream"]`. */
+const SCRIPT_DATA_LINE = /["'`][^"'`]*[A-Za-z]{3}/;
+
+/**
+ * Lines that look like data in the page's inline scripts. Some recipe pages
+ * hold their ingredients and steps in a script and draw them in the browser,
+ * so the visible text alone has no recipe in it.
+ */
+function scriptDataLines(html: string): string[] {
+	const lines: string[] = [];
+	for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+		if (/\bsrc\s*=/i.test(m[1])) continue;
+		for (const line of m[2].split('\n')) {
+			const t = line.trim();
+			if (SCRIPT_DATA_LINE.test(t) && !SCRIPT_CODE_LINE.test(t)) lines.push(t);
+		}
+	}
+	return lines;
+}
+
 /**
  * Source text made small enough for the model: no scripts, styles, menus,
- * headers, footers or sidebars, no markup, block elements as line breaks,
+ * headers, footers, sidebars or buttons, no markup, block elements as line breaks,
  * no runs of blank lines, and at most `LLM_MAX_INPUT_CHARS` characters.
+ * Data lines from inline scripts follow the visible text, which goes first.
  */
 export function cleanSourceText(raw: string): string {
 	const html = raw
 		.replace(/<!--[\s\S]*?-->/g, ' ')
 		.replace(
-			/<(script|style|nav|header|footer|aside|noscript|svg|form)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
+			/<(script|style|nav|header|footer|aside|noscript|svg|form|button)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
 			' '
 		)
 		.replace(/<\/(p|li|div|h[1-6]|section|article|tr|ul|ol)\s*>/gi, '\n')
 		.replace(/<br\s*\/?>/gi, '\n');
-	return stripTags(html)
+	const visible = stripTags(html)
 		.replace(/\n{3,}/g, '\n\n')
-		.slice(0, LLM_MAX_INPUT_CHARS)
 		.trim();
+	const data = scriptDataLines(raw);
+	const text = data.length ? `${visible}\n\n${SCRIPT_DATA_HEADING}\n${data.join('\n')}` : visible;
+	return text.slice(0, LLM_MAX_INPUT_CHARS).trim();
 }
 
 /** A recipe form as the plain text the model tidies. */

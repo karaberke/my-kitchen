@@ -9,6 +9,9 @@
  * convert or add up. Ingredient lines come back as written, and code parses them.
  */
 
+/** Heads the script data that `cleanSourceText` puts after the visible text. */
+export const SCRIPT_DATA_HEADING = 'Data from the page scripts:';
+
 /** One system prompt for every structured recipe call, so its prefix is cached once. */
 export const RECIPE_JSON_SYSTEM = `You turn recipe text into JSON for a recipe app.
 Rules:
@@ -21,6 +24,8 @@ Rules:
 - "description": one or two sentences from the text that describe the dish. Empty if there are none.
 - "notes": tips, storage or substitutions from the text. Empty if there are none.
 - Ignore navigation, adverts, comments, life stories and anything that is not the recipe.
+- The text can end with "${SCRIPT_DATA_HEADING}" and lines such as [2/3, "cup", "heavy cream", "room temperature"]. Read them as ingredient lines ("2/3 cup heavy cream, room temperature") and steps, under their group titles. Copy a fraction such as 2/3 as written.
+- If a step holds a placeholder such as {n}, put the servings number from the text in its place.
 - If the text holds no recipe, return empty strings and empty lists.`;
 
 /** Task line for a page the app could not read: the user message starts with it. */
