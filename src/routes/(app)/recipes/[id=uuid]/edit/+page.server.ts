@@ -1,12 +1,16 @@
 import type { Actions, PageServerLoadEvent } from './$types';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { getRecipeDetail } from '$lib/server/recipes';
 import { handleRecipeSubmit, type RecipeFormClientInput } from '$lib/server/recipe-form';
 import { getIngredientMeta } from '$lib/server/ingredients';
-import { error } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
 import { Dec } from '$lib/shared/decimal';
+import { parseRecipeForm } from '$lib/shared/recipe-input';
+import { AppError } from '$lib/server/errors';
+import { claimLlmCall, llmEnabled } from '$lib/server/llm/client';
+import { fixRecipe } from '$lib/server/llm/recipe';
 
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
@@ -52,7 +56,8 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		revision: recipe.revision,
 		image: recipe.image ? { id: recipe.image.id, version: recipe.image.version } : null,
 		initial,
-		identityLabels: Object.fromEntries([...meta].map(([id, m]) => [id, m.name]))
+		identityLabels: Object.fromEntries([...meta].map(([id, m]) => [id, m.name])),
+		aiEnabled: llmEnabled()
 	};
 };
 
@@ -60,6 +65,32 @@ export const actions: Actions = {
 	default: async (event) => {
 		requireUser(event);
 		return handleRecipeSubmit(event, event.params.id);
+	},
+	/**
+	 * The assistant's tidy copy of the form as posted. It refills the form and
+	 * saves nothing: the user reads it and saves through `default`, with the
+	 * revision the form already carries.
+	 */
+	aiFix: async (event) => {
+		const user = requireUser(event);
+		let recipe;
+		try {
+			recipe = await getRecipeDetail(db, user.id, event.params.id, null);
+		} catch (err) {
+			return actionError(err);
+		}
+		if (!recipe.isOwner) return fail(403, { message: 'Only the recipe owner can edit it.' });
+		const input = parseRecipeForm(await event.request.formData());
+		try {
+			claimLlmCall(user.id);
+			const proposed = await fixRecipe(input);
+			return { input: proposed, errors: {}, message: '', conflict: false, aiFixed: true };
+		} catch (err) {
+			// The form keeps what the user typed; only the message changes.
+			if (err instanceof AppError)
+				return fail(err.status, { input, errors: {}, message: err.message, conflict: false });
+			throw err;
+		}
 	}
 };
 

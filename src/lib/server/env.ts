@@ -122,6 +122,33 @@ const schema = z.object({
 		.optional()
 		.default('')
 		.transform((v) => v.trim().slice(0, 120)),
+
+	/**
+	 * AI assistant: an OpenAI-compatible model server, such as
+	 * http://192.0.2.10:8080/v1. Empty turns the feature off. The server calls
+	 * it, not the browser, so it can stay on a private network. In Docker, do
+	 * not use localhost: that is the app container itself.
+	 */
+	LLM_BASE_URL: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim().replace(/\/+$/, ''))
+		.refine(
+			(v) => v === '' || /^https?:\/\/[^\s/]+(\/[^\s]*)?$/.test(v),
+			'LLM_BASE_URL must be a URL such as http://192.0.2.10:8080/v1 (or empty to turn it off)'
+		),
+	/** Most local servers ignore the key; the client still has to send one. */
+	LLM_API_KEY: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim() || 'none'),
+	LLM_MODEL: z
+		.string()
+		.optional()
+		.default('')
+		.transform((v) => v.trim() || 'assistant'),
 	NODE_ENV: z.string().optional().default('development')
 });
 

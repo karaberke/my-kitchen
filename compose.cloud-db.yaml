@@ -36,6 +36,10 @@ x-app-env: &app-env
   BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-6M}
   IMAGE_CONCURRENCY: ${IMAGE_CONCURRENCY:-2}
   PUBLIC_REVISION_POLL_MS: ${PUBLIC_REVISION_POLL_MS:-20000}
+  # AI assistant; empty LLM_BASE_URL turns it off. A LAN/Tailscale URL, never localhost.
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_MODEL: ${LLM_MODEL:-}
   HOST: 0.0.0.0
   PORT: '3000'
 

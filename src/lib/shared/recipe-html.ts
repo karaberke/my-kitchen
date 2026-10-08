@@ -10,10 +10,12 @@ import { normalizeUnitInput } from './units';
  * any text is taken, so nothing from the source can reach the page as markup.
  */
 
-export type ImportSource = 'json-ld' | 'text';
+/** 'assistant': the AI assistant read the source; its amounts need a check. */
+export type ImportSource = 'json-ld' | 'text' | 'assistant';
 
 export interface HtmlImportResult {
-	source: ImportSource;
+	/** The page parser itself never answers 'assistant'. */
+	source: Exclude<ImportSource, 'assistant'>;
 	input: RecipeFormInput;
 }
 
@@ -58,7 +60,7 @@ function decodeEntities(s: string): string {
 }
 
 /** Strip markup to plain text. Script and style contents go first, not just their tags. */
-function stripTags(html: string): string {
+export function stripTags(html: string): string {
 	const withoutCode = html
 		.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
 		.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
@@ -222,7 +224,8 @@ export function splitIngredientLine(line: string): SplitIngredient {
 	return { amount, unit, name: rest, original };
 }
 
-function ingredient(line: string): RecipeIngredientInput {
+/** One written ingredient line as a form row, split into amount, unit and name. */
+export function ingredientFromLine(line: string): RecipeIngredientInput {
 	const split = splitIngredientLine(line);
 	return {
 		name: split.name,
@@ -282,6 +285,13 @@ function titleFromDocument(html: string): string {
  * anyway, so the stored original becomes the better reference.
  */
 const MAX_USEFUL_NOTES = 4000;
+
+/** A yield like "4 servings" gives a servings count; "one loaf" is kept as a note. */
+export function servingsFromYield(yieldText: string): { baseServings: string; yieldNote: string } {
+	const servings = /^\s*(\d+(?:\.\d+)?)\b/.exec(yieldText);
+	if (servings) return { baseServings: servings[1], yieldNote: '' };
+	return { baseServings: '', yieldNote: yieldText.trim() };
+}
 
 export function emptyRecipeFormInput(): RecipeFormInput {
 	return {
@@ -369,18 +379,14 @@ export function importRecipeHtml(html: string, pageUrl?: string): HtmlImportResu
 		if (prep !== null) input.prepMinutes = String(prep);
 		if (cook !== null) input.cookMinutes = String(cook);
 
-		// A yield like "4 servings" gives a servings count; "one loaf" is kept as a note.
-		const yieldText = firstScalar(recipe.recipeYield);
-		const servings = /^\s*(\d+(?:\.\d+)?)\b/.exec(yieldText);
-		if (servings) input.baseServings = servings[1];
-		else if (yieldText) input.yieldNote = yieldText;
+		Object.assign(input, servingsFromYield(firstScalar(recipe.recipeYield)));
 
 		const ingredients = recipe.recipeIngredient ?? recipe.ingredients;
 		if (Array.isArray(ingredients))
 			input.ingredients = ingredients
 				.map((i) => text(i))
 				.filter(Boolean)
-				.map(ingredient);
+				.map(ingredientFromLine);
 
 		input.steps = instructionsToSteps(recipe.recipeInstructions);
 		// The recipe's own picture beats og:image, which is sometimes the site logo.

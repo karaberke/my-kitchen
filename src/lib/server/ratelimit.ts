@@ -49,6 +49,15 @@ export const PROVIDER_LIMITS = {
 	off: { windowMs: 60_000, max: 12 }
 } as const;
 
+/**
+ * Calls to the AI assistant. The model server is one small CPU box that runs
+ * one request at a time, so a cook gets a few calls, not a queue of them.
+ * Keyed by user.
+ */
+export const LLM_LIMITS = {
+	user: { windowMs: 10 * 60_000, max: 10 }
+} as const;
+
 function sweep(now: number) {
 	if (now - lastSweep < 60_000) return;
 	lastSweep = now;

@@ -5,6 +5,9 @@ import { isRfcUuid } from './text';
 
 export type RecipeIntent = 'draft' | 'save';
 
+/** The longest question a cook may ask the assistant about a recipe. */
+export const LLM_QUESTION_MAX_CHARS = 500;
+
 export interface RecipeIngredientInput {
 	name: string;
 	ingredientId: string | null;
@@ -148,6 +151,14 @@ function parseMinutes(raw: string, key: string, errors: FieldErrors): number | n
 		return null;
 	}
 	return Number(s);
+}
+
+/**
+ * True when a parse found no recipe body: no ingredient with a name and no step
+ * with text. Blank rows do not count, and text kept only in notes does not count.
+ */
+export function isEmptyRecipe(input: Pick<RecipeFormInput, 'ingredients' | 'steps'>): boolean {
+	return !input.ingredients.some((i) => i.name.trim()) && !input.steps.some((s) => s.text.trim());
 }
 
 export function parseTags(raw: string): string[] {

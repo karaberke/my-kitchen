@@ -204,6 +204,7 @@
 		<ul class="mt-2 text-[13px] text-ink-soft">
 			<li>Registration: {data.registrationOpen ? 'open' : 'closed (invite only)'}</li>
 			<li>Image storage: {data.storageBackend}</li>
+			<li>Assistant: {data.aiEnabled ? 'on' : 'off (set LLM_BASE_URL)'}</li>
 			<li>
 				Household sync: polls every {Math.round(data.pollMs / 1000)} s while a pantry or list screen is
 				visible

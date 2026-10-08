@@ -17,7 +17,7 @@ const PREP = /\bprep(?:aration)?(?:\s*time)?\b[:\s]*(.+)$/i;
 const COOK = /\b(?:cook|bake|total)(?:ing)?(?:\s*time)?\b[:\s]*(.+)$/i;
 
 /** "1 hr 30 min", "45 minutes", "1h30" -> minutes. */
-function timeToMinutes(raw: string): number | null {
+export function timeToMinutes(raw: string): number | null {
 	const s = raw.toLowerCase();
 	const h = /(\d+(?:\.\d+)?)\s*(?:h\b|hr|hour)/.exec(s);
 	const m = /(\d+)\s*(?:m\b|min)/.exec(s);
