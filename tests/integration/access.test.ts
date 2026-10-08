@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db } from '$lib/server/db';
-import { createUser, makeChickenRecipe, resetDb } from './helpers';
+import type { RequestEvent } from '@sveltejs/kit';
 import {
+	catalogIngredientId,
+	createUser,
+	d,
+	makeChickenRecipe,
+	recipeInput,
+	requestAs,
+	resetDb
+} from './helpers';
+import {
+	createRecipe,
 	getRecipeDetail,
 	listRecipes,
 	parseListParams,
@@ -21,6 +31,8 @@ import { assertMember } from '$lib/server/access';
 import { asAppError, isInvalidTextRepresentation } from '$lib/server/errors';
 import { getPantryOverview } from '$lib/server/pantry';
 import { searchIngredients, createCustomIngredient } from '$lib/server/ingredients';
+import { load as cookLoad } from '../../src/routes/(app)/recipes/[id=uuid]/cook/+page.server';
+import { actions as settingsActions } from '../../src/routes/(app)/settings/+page.server';
 
 describe('identity, ownership and isolation', () => {
 	beforeEach(resetDb);
@@ -134,5 +146,57 @@ describe('identity, ownership and isolation', () => {
 		const err = await assertMember(db, 'not-a-uuid', alice.id).catch((e) => e);
 		expect(isInvalidTextRepresentation(err)).toBe(true);
 		expect(asAppError(err)?.status).toBe(404);
+	});
+});
+
+describe('a stale active household in locals', () => {
+	beforeEach(resetDb);
+
+	it('cook page: checks membership before it reads the pantry stock', async () => {
+		const alice = await createUser('Alice');
+		const bob = await createUser('Bob');
+		// No servings: not cookable, so the load does not call previewCooking.
+		const recipeId = await createRecipe(
+			bob.id,
+			recipeInput({
+				title: 'Bob soup',
+				baseServings: null,
+				ingredients: [
+					{
+						position: 0,
+						name: 'chicken breast',
+						ingredientId: await catalogIngredientId('chicken breast'),
+						amount: d('200'),
+						unit: 'g',
+						preparation: '',
+						groupName: '',
+						optional: false,
+						createIdentity: false
+					}
+				]
+			})
+		);
+		const event = {
+			...requestAs(bob, alice.householdId),
+			params: { id: recipeId },
+			url: new URL(`http://localhost/recipes/${recipeId}/cook`),
+			depends: () => {}
+		} as unknown as RequestEvent;
+		await expect(cookLoad(event as never)).rejects.toMatchObject({ status: 403 });
+	});
+
+	it('settings consistency check: checks membership before it reads the report', async () => {
+		const alice = await createUser('Alice');
+		const bob = await createUser('Bob');
+		const event = {
+			...requestAs(bob, alice.householdId),
+			request: new Request('http://localhost/settings?/consistency', { method: 'POST' })
+		} as unknown as RequestEvent;
+		const out = (await settingsActions.consistency!(event as never)) as unknown as {
+			status?: number;
+			data?: { form?: string };
+		};
+		expect(out.status).toBe(403);
+		expect(out.data?.form).toBe('consistency');
 	});
 });

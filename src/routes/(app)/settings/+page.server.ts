@@ -1,10 +1,10 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard } from '$lib/server/http';
+import { actionError, guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
-import { requireUser } from '$lib/server/access';
+import { assertMember, requireHousehold, requireUser } from '$lib/server/access';
 import { serverEnv } from '$lib/server/env';
 import { llmEnabled } from '$lib/server/llm/client';
 import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
@@ -143,11 +143,14 @@ export const actions: Actions = {
 		throw redirect(303, '/login');
 	},
 	consistency: async (event) => {
-		requireUser(event);
-		const household = event.locals.household;
-		if (!household) return fail(400, { message: 'No household', form: 'consistency' });
-		const report = await consistencyCheck(db, household.id);
-		return { ok: true, form: 'consistency', report };
+		try {
+			const { user, household } = requireHousehold(event);
+			await assertMember(db, household.id, user.id);
+			const report = await consistencyCheck(db, household.id);
+			return { ok: true, form: 'consistency', report };
+		} catch (err) {
+			return actionError(err, 'consistency');
+		}
 	}
 };
 

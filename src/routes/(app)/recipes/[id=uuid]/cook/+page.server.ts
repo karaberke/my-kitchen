@@ -3,7 +3,7 @@ import { actionError, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { householdActor } from '$lib/server/access';
+import { assertMember, householdActor } from '$lib/server/access';
 import { finishCooking, previewCooking, type CookItemInput } from '$lib/server/cooking';
 import { getRecipeDetail } from '$lib/server/recipes';
 import { undoEvent } from '$lib/server/undo';
@@ -16,6 +16,8 @@ import { NOTE_MAX_CHARS } from '$lib/shared/text';
 const loadImpl = async (event: PageServerLoadEvent) => {
 	const ctx = householdActor(event);
 	event.depends('app:cook');
+	// Before the recipe read: it includes the household's pantry stock.
+	await assertMember(db, ctx.householdId, ctx.userId);
 	const recipe = await getRecipeDetail(db, ctx.userId, event.params.id, ctx.householdId);
 	const servingsRaw = event.url.searchParams.get('servings') ?? recipe.baseServings ?? '1';
 	const servings = parsePositiveAmount(servingsRaw) ?? Dec.from(recipe.baseServings ?? '1');
