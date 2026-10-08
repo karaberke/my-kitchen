@@ -1,16 +1,10 @@
-<script lang="ts" module>
-	/** What the chat is doing, for the page's Ask button and its wake listener. */
-	export type ChatStatus = 'idle' | 'thinking' | 'speaking' | 'listening';
-</script>
-
 <script lang="ts">
-	import { onMount, tick, untrack } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import { remoteErrorMessage } from '$lib/client/remote';
 	import {
 		listen,
 		primeSpeech,
-		type Dictation,
 		speak,
 		speechInputAvailable,
 		speechLang,
@@ -30,34 +24,19 @@
 	 * sessionStorage (a reload keeps them, closing the tab clears them). `voice`
 	 * adds speech input and read-aloud; only the cook page may set it, because
 	 * only that page may use the microphone.
-	 *
-	 * `ask` is a question heard by the page's wake phrase: it is sent at once and
-	 * its answer (or why there is none) is read aloud, even with the sheet
-	 * closed, then `onasked` lets the page clear it. `onstatus` reports what the
-	 * chat is doing; anything but `idle` needs the microphone left alone.
-	 * `dictate`, when given, is used by the Speak button instead of starting a
-	 * second recognition next to the page's wake listener.
 	 */
 	let {
 		recipeId,
 		step,
 		servings,
 		storageKey,
-		voice = false,
-		ask = null,
-		onasked,
-		onstatus,
-		dictate
+		voice = false
 	}: {
 		recipeId: string;
 		step?: number;
 		servings?: string;
 		storageKey?: string;
 		voice?: boolean;
-		ask?: string | null;
-		onasked?: () => void;
-		onstatus?: (status: ChatStatus) => void;
-		dictate?: () => Dictation;
 	} = $props();
 
 	const READ_ALOUD_KEY = 'my-kitchen:chat-read-aloud';
@@ -72,31 +51,10 @@
 	let listening = $state(false);
 	let micError = $state('');
 	let readAloud = $state(false);
-	let speaking = $state(false);
 	let listEl = $state<HTMLElement>();
 	/** Bumped by "Clear chat" so an answer that arrives afterwards is dropped. */
 	let epoch = 0;
-	let recognition: Dictation | null = null;
-
-	const status: ChatStatus = $derived(
-		pending ? 'thinking' : speaking ? 'speaking' : listening && !dictate ? 'listening' : 'idle'
-	);
-	$effect(() => onstatus?.(status));
-
-	$effect(() => {
-		const question = ask?.trim();
-		if (!question) return;
-		untrack(() => {
-			onasked?.();
-			input = question.slice(0, LLM_QUESTION_MAX_CHARS);
-			send({ speakAnswer: true });
-		});
-	});
-
-	function quiet() {
-		stopSpeaking();
-		speaking = false;
-	}
+	let recognition: { stop(): void } | null = null;
 
 	function loadTurns(): RecipeChatTurn[] {
 		if (!storageKey) return [];
@@ -140,8 +98,7 @@
 
 	onMount(() => {
 		turns = loadTurns();
-		// Any tap on the page lets the answers speak later on iOS, including
-		// answers to "Hey Chef" questions, which come with no tap at all.
+		// iOS speaks only after a tap; any tap on the page lets later answers speak.
 		if (voice) document.addEventListener('pointerdown', primeSpeech, { capture: true, once: true });
 		if (voice) {
 			canListen = speechInputAvailable();
@@ -156,16 +113,15 @@
 		return () => {
 			document.removeEventListener('pointerdown', primeSpeech, { capture: true });
 			recognition?.stop();
-			quiet();
+			stopSpeaking();
 		};
 	});
 
-	/** `speakAnswer` reads the answer aloud even with read-aloud off: nobody is looking. */
-	async function send({ speakAnswer = false } = {}) {
+	async function send() {
 		const question = input.trim();
 		if (pending || !question) return;
 		recognition?.stop();
-		quiet();
+		stopSpeaking();
 		if (voice) primeSpeech();
 		const mine = epoch;
 		pending = true;
@@ -186,18 +142,11 @@
 			turns = [...turns, { question, answer }].slice(-LLM_CHAT_MAX_TURNS);
 			input = '';
 			saveTurns();
-			if (voice && canSpeak && (readAloud || speakAnswer)) {
-				speaking = true;
-				speak(answer, speechLang(), () => (speaking = false));
-			}
+			if (voice && readAloud) speak(answer, speechLang());
 		} catch (err) {
 			if (mine !== epoch) return;
 			// The question stays in the box so the cook can send it again.
 			error = remoteErrorMessage(err, 'Could not reach the server. Check your connection.');
-			if (voice && canSpeak && speakAnswer) {
-				speaking = true;
-				speak(`Sorry, I could not answer. ${error}`, speechLang(), () => (speaking = false));
-			}
 		} finally {
 			if (mine === epoch) {
 				pending = false;
@@ -209,7 +158,7 @@
 	function clearChat() {
 		epoch++;
 		recognition?.stop();
-		quiet();
+		stopSpeaking();
 		turns = [];
 		error = '';
 		micError = '';
@@ -229,10 +178,8 @@
 			return;
 		}
 		micError = '';
-		quiet(); // the microphone must not hear the answer
-		// Without `dictate`, tell the page first: its wake listener must let go of the microphone.
-		if (!dictate) onstatus?.('listening');
-		const session = dictate ? dictate() : listen({ lang: speechLang() });
+		stopSpeaking(); // the microphone must not hear the answer
+		const session = listen({ lang: speechLang() });
 		recognition = session;
 		listening = true;
 		try {
@@ -249,7 +196,7 @@
 
 	function setReadAloud(on: boolean) {
 		readAloud = on;
-		if (!on) quiet();
+		if (!on) stopSpeaking();
 		try {
 			localStorage.setItem(READ_ALOUD_KEY, on ? '1' : '0');
 		} catch {
