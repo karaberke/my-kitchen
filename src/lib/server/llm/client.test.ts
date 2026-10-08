@@ -10,6 +10,7 @@ import {
 	unstubLlm
 } from '../../../../tests/llm-stub';
 import {
+	LLM_BACKGROUND_TIMEOUT_MS,
 	LLM_JSON_TEMPERATURE,
 	LLM_MAX_WAITING,
 	LLM_TIMEOUT_MS,
@@ -141,6 +142,48 @@ describe('failure mapping', () => {
 		expect(err.status).toBe(504);
 	});
 
+	/** A server that answers after `delayMs`, and ends the request early only when the client aborts it. */
+	function slowStub(delayMs: number) {
+		const fetchStub = ((_url: unknown, init?: RequestInit) =>
+			new Promise<Response>((resolve, reject) => {
+				const timer = setTimeout(
+					() => resolve(jsonResponse(chatCompletion('late answer'))),
+					delayMs
+				);
+				init?.signal?.addEventListener('abort', () => {
+					clearTimeout(timer);
+					reject(new DOMException('The operation was aborted.', 'AbortError'));
+				});
+			})) as typeof fetch;
+		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
+	}
+
+	it('lets a background call run past the interactive limit', async () => {
+		vi.useFakeTimers();
+		slowStub(LLM_TIMEOUT_MS + 30_000);
+		const result = completeText(SYSTEM, 'x', { maxTokens: 50, background: true });
+		await vi.advanceTimersByTimeAsync(LLM_TIMEOUT_MS + 30_001);
+		await expect(result).resolves.toBe('late answer');
+	});
+
+	it('gives the same slow answer a 504 when the call is interactive', async () => {
+		vi.useFakeTimers();
+		slowStub(LLM_TIMEOUT_MS + 30_000);
+		const result = completeText(SYSTEM, 'x', { maxTokens: 50 }).catch((e) => e);
+		await vi.advanceTimersByTimeAsync(LLM_TIMEOUT_MS + 30_001);
+		expect(await result).toMatchObject({ status: 504 });
+	});
+
+	it('is a 504 when a background call passes its own, longer limit', async () => {
+		vi.useFakeTimers();
+		slowStub(LLM_BACKGROUND_TIMEOUT_MS + 30_000);
+		const result = completeJson(schema, SYSTEM, 'x', { maxTokens: 50, background: true }).catch(
+			(e) => e
+		);
+		await vi.advanceTimersByTimeAsync(LLM_BACKGROUND_TIMEOUT_MS + 1);
+		expect(await result).toMatchObject({ status: 504 });
+	});
+
 	it('is a 502 when a text answer is empty', async () => {
 		stubLlm(['  ']);
 		await expect(completeText(SYSTEM, 'x', { maxTokens: 50 })).rejects.toMatchObject({
@@ -189,10 +232,14 @@ describe('queue', () => {
 	/** A stub whose requests wait until the test lets each one go. */
 	function gatedStub() {
 		const gates: (() => void)[] = [];
+		/** the user text of every request, in the order the server saw them */
+		const texts: string[] = [];
 		let active = 0;
 		let maxActive = 0;
 		let started = 0;
-		const fetchStub = (async () => {
+		const fetchStub = (async (_url: unknown, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+			texts.push(body.messages.at(-1)!.content);
 			started++;
 			active++;
 			maxActive = Math.max(maxActive, active);
@@ -203,6 +250,7 @@ describe('queue', () => {
 		setLlmForTests({ config: STUB_LLM_CONFIG, fetch: fetchStub });
 		return {
 			gates,
+			texts,
 			started: () => started,
 			maxActive: () => maxActive
 		};
@@ -234,6 +282,46 @@ describe('queue', () => {
 		}
 		await Promise.all(accepted);
 		expect(stub.started()).toBe(LLM_MAX_WAITING);
+	});
+
+	it('runs an interactive call that arrives later before a background call that waits', async () => {
+		const stub = gatedStub();
+		const first = completeText(SYSTEM, 'running', { maxTokens: 50, background: true });
+		await vi.waitFor(() => expect(stub.started()).toBe(1));
+		const waitingBackground = completeText(SYSTEM, 'background', {
+			maxTokens: 50,
+			background: true
+		});
+		const interactive = completeText(SYSTEM, 'interactive', { maxTokens: 50 });
+		stub.gates[0]();
+		await vi.waitFor(() => expect(stub.started()).toBe(2));
+		expect(stub.texts[1]).toBe('interactive');
+		stub.gates[1]();
+		await vi.waitFor(() => expect(stub.started()).toBe(3));
+		expect(stub.texts[2]).toBe('background');
+		stub.gates[2]();
+		await Promise.all([first, waitingBackground, interactive]);
+		expect(stub.maxActive()).toBe(1);
+	});
+
+	it('does not refuse a background call when the interactive callers waiting are at the limit', async () => {
+		const stub = gatedStub();
+		const interactive = Array.from({ length: LLM_MAX_WAITING }, (_, n) =>
+			completeText(SYSTEM, `q${n}`, { maxTokens: 50 })
+		);
+		const background = completeText(SYSTEM, 'background', { maxTokens: 50, background: true });
+		// The lane of interactive callers is full, so one more of them is refused.
+		await expect(completeText(SYSTEM, 'one too many', { maxTokens: 50 })).rejects.toMatchObject({
+			status: 503
+		});
+		for (let n = 1; n <= LLM_MAX_WAITING + 1; n++) {
+			await vi.waitFor(() => expect(stub.started()).toBe(n));
+			stub.gates[n - 1]();
+		}
+		await expect(background).resolves.toBe('answer');
+		await Promise.all(interactive);
+		// The background call went last.
+		expect(stub.texts.at(-1)).toBe('background');
 	});
 
 	it('keeps serving after a call failed', async () => {

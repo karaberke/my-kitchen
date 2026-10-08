@@ -10,7 +10,7 @@ import { timeToMinutes } from '$lib/shared/recipe-text';
 import { ingredientLine } from '$lib/shared/ingredient-line';
 import { isEmptyRecipe, type RecipeFormInput } from '$lib/shared/recipe-input';
 import { normalizeName } from '$lib/shared/text';
-import { claimLlmCall, completeJson, llmEnabled } from './client';
+import { claimLlmCall, completeJson, llmEnabled, type LlmCallOptions } from './client';
 import { RECIPE_JSON_SYSTEM, RECIPE_PARSE_TASK, RECIPE_TIDY_TASK } from './prompts';
 
 /**
@@ -153,7 +153,8 @@ export function recipeFromModel(
  */
 export async function llmParseRecipe(
 	text: string,
-	base: RecipeFormInput = emptyRecipeFormInput()
+	base: RecipeFormInput = emptyRecipeFormInput(),
+	call: LlmCallOptions = {}
 ): Promise<RecipeFormInput> {
 	const source = cleanSourceText(text);
 	if (!source) throw new AppError(422, 'There is no text the assistant can read.');
@@ -163,21 +164,25 @@ export async function llmParseRecipe(
 		RECIPE_PARSE_TASK + source,
 		{
 			maxTokens: LLM_RECIPE_MAX_TOKENS,
-			name: 'recipe'
+			name: 'recipe',
+			...call
 		}
 	);
 	return recipeFromModel(out, { ...base, notes: '' });
 }
 
 /** A tidied copy of a recipe form. Only a proposal: nothing is saved here. */
-export async function fixRecipe(input: RecipeFormInput): Promise<RecipeFormInput> {
+export async function fixRecipe(
+	input: RecipeFormInput,
+	call: LlmCallOptions = {}
+): Promise<RecipeFormInput> {
 	if (isEmptyRecipe(input) && !input.title.trim())
 		throw new AppError(422, 'There is no recipe to tidy yet.');
 	const out = await completeJson(
 		modelRecipeSchema,
 		RECIPE_JSON_SYSTEM,
 		RECIPE_TIDY_TASK + formInputToPlainText(input),
-		{ maxTokens: LLM_RECIPE_MAX_TOKENS, name: 'recipe' }
+		{ maxTokens: LLM_RECIPE_MAX_TOKENS, name: 'recipe', ...call }
 	);
 	return recipeFromModel(out, input);
 }
@@ -190,37 +195,88 @@ export interface AssistedImport {
 	assistantError: string | null;
 }
 
+export interface ImportAssistArgs {
+	input: RecipeFormInput;
+	/** the user asked for the assistant even though the app read the recipe */
+	forced: boolean;
+	/** the raw source; read only when the parse is empty */
+	sourceText: () => Promise<string>;
+}
+
 /**
- * The assistant's part in an import.
- *
- * It runs when the app's own parse found no ingredients and no steps, or when
- * the user asked for it (`forced`). An empty parse sends the cleaned source
- * text; a full parse sends the recipe as read, to tidy. It never fails the
- * import: any failure leaves the app's own result and a message.
+ * True when an import asks for the assistant: it is set up, and the app's own
+ * parse found no ingredients and no steps, or the user asked for it.
+ */
+export function assistWanted(input: RecipeFormInput, forced: boolean): boolean {
+	return llmEnabled() && (forced || isEmptyRecipe(input));
+}
+
+/** What the assistant does for one import: read `source`, or tidy `base` when `source` is null. */
+export interface AssistPlan {
+	base: RecipeFormInput;
+	source: string | null;
+}
+
+/**
+ * The assistant's work for an import, or `skip` with the message to show
+ * (null for none) when there is nothing for it to do. Spends no quota. An
+ * empty parse sends the cleaned source text; a full parse sends the recipe as
+ * read, to tidy.
+ */
+export async function planAssist(
+	args: ImportAssistArgs
+): Promise<{ plan: AssistPlan } | { skip: string | null }> {
+	if (!assistWanted(args.input, args.forced)) return { skip: null };
+	if (!isEmptyRecipe(args.input)) return { plan: { base: args.input, source: null } };
+	const source = cleanSourceText(await args.sourceText());
+	if (!source) return { skip: args.forced ? 'There is no text the assistant can read.' : null };
+	return { plan: { base: args.input, source } };
+}
+
+/** Message for a failure that is not an `AppError`; its detail is never shown. */
+const ASSIST_FAILED = 'The assistant could not read this recipe.';
+
+function assistFailure(err: unknown): string {
+	if (err instanceof AppError) return err.message;
+	console.warn('llm: import assist failed', err instanceof Error ? err.name : typeof err);
+	return ASSIST_FAILED;
+}
+
+/**
+ * Run a plan whose call was already claimed. It never throws: a failure
+ * leaves `plan.base` and a message.
+ */
+export async function runAssist(
+	plan: AssistPlan,
+	call: LlmCallOptions = {}
+): Promise<AssistedImport> {
+	try {
+		const input =
+			plan.source !== null
+				? await llmParseRecipe(plan.source, plan.base, call)
+				: await fixRecipe(plan.base, call);
+		return { input, assisted: true, assistantError: null };
+	} catch (err) {
+		return { input: plan.base, assisted: false, assistantError: assistFailure(err) };
+	}
+}
+
+/**
+ * The assistant's part in an import, start to end, while the caller waits:
+ * `planAssist`, then the quota, then `runAssist`. It never fails the import:
+ * any failure leaves the app's own result and a message.
  */
 export async function assistImport(
 	userId: string,
-	args: { input: RecipeFormInput; forced: boolean; sourceText: () => Promise<string> }
+	args: ImportAssistArgs
 ): Promise<AssistedImport> {
 	const unchanged = { input: args.input, assisted: false, assistantError: null };
-	if (!llmEnabled()) return unchanged;
-	const empty = isEmptyRecipe(args.input);
-	if (!empty && !args.forced) return unchanged;
 	try {
-		let source = '';
-		if (empty) {
-			source = cleanSourceText(await args.sourceText());
-			if (!source)
-				return args.forced
-					? { ...unchanged, assistantError: 'There is no text the assistant can read.' }
-					: unchanged;
-		}
+		const planned = await planAssist(args);
+		if ('skip' in planned) return { ...unchanged, assistantError: planned.skip };
 		claimLlmCall(userId);
-		const input = empty ? await llmParseRecipe(source, args.input) : await fixRecipe(args.input);
-		return { input, assisted: true, assistantError: null };
+		return await runAssist(planned.plan);
 	} catch (err) {
-		if (err instanceof AppError) return { ...unchanged, assistantError: err.message };
-		console.warn('llm: import assist failed', err instanceof Error ? err.name : typeof err);
-		return { ...unchanged, assistantError: 'The assistant could not read this recipe.' };
+		return { ...unchanged, assistantError: assistFailure(err) };
 	}
 }

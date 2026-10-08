@@ -7,6 +7,7 @@ import { setLlmForTests } from './client';
 import {
 	LLM_MAX_INPUT_CHARS,
 	assistImport,
+	assistWanted,
 	cleanSourceText,
 	formInputToPlainText,
 	llmParseRecipe,
@@ -189,6 +190,39 @@ describe('llmParseRecipe', () => {
 		const { requests } = stubLlm([modelReply()]);
 		await expect(llmParseRecipe('<script>x()</script>')).rejects.toMatchObject({ status: 422 });
 		expect(requests).toHaveLength(0);
+	});
+});
+
+describe('assistWanted', () => {
+	it('is false whatever the parse is when the assistant is off', () => {
+		setLlmForTests({ config: null });
+		expect(assistWanted(emptyRecipeFormInput(), false)).toBe(false);
+		expect(assistWanted(fullInput(), true)).toBe(false);
+	});
+
+	it('is true for an empty parse, forced or not', () => {
+		stubLlm([modelReply()]);
+		expect(assistWanted(emptyRecipeFormInput(), false)).toBe(true);
+		expect(assistWanted(emptyRecipeFormInput(), true)).toBe(true);
+	});
+
+	it('is true for a parse with only notes or blank rows', () => {
+		stubLlm([modelReply()]);
+		const input = { ...emptyRecipeFormInput(), notes: 'A whole page of text' };
+		expect(assistWanted(input, false)).toBe(true);
+	});
+
+	it('is false for a full parse unless the user asked for the assistant', () => {
+		stubLlm([modelReply()]);
+		expect(assistWanted(fullInput(), false)).toBe(false);
+		expect(assistWanted(fullInput(), true)).toBe(true);
+	});
+
+	it('does not call the model or read the source', () => {
+		const { requests } = stubLlm([modelReply()]);
+		assistWanted(emptyRecipeFormInput(), false);
+		expect(requests).toHaveLength(0);
+		expect(sourceText).not.toHaveBeenCalled();
 	});
 });
 

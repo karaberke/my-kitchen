@@ -25,11 +25,27 @@ export type LlmFetch = typeof fetch;
 
 /** One request may run this long before it is a 504. */
 export const LLM_TIMEOUT_MS = 120_000;
+/** The limit for work nobody waits on, such as an import that runs in the background. */
+export const LLM_BACKGROUND_TIMEOUT_MS = 600_000;
 /** Low, so structured output copies the source instead of inventing. */
 export const LLM_JSON_TEMPERATURE = 0.1;
 export const LLM_TEXT_TEMPERATURE = 0.3;
-/** Calls allowed to wait behind the running one before a caller is told to come back. */
+/** Interactive calls allowed to wait behind the running one before a caller is told to come back. */
 export const LLM_MAX_WAITING = 3;
+
+/**
+ * How one call waits and how long it may run. A `background` call has no
+ * person waiting on it: it gets `LLM_BACKGROUND_TIMEOUT_MS`, it is never told
+ * the queue is full, and every interactive call waiting goes before it.
+ */
+export interface LlmCallOptions {
+	timeoutMs?: number;
+	background?: boolean;
+}
+
+function timeoutFor(call: LlmCallOptions): number {
+	return call.timeoutMs ?? (call.background ? LLM_BACKGROUND_TIMEOUT_MS : LLM_TIMEOUT_MS);
+}
 
 let override: { config: LlmConfig | null; fetch?: LlmFetch } | null = null;
 let cached: { key: string; openai: OpenAI } | null = null;
@@ -99,20 +115,34 @@ export function claimLlmCall(userId: string): void {
 /* One request at a time                                                 */
 /* -------------------------------------------------------------------- */
 
-let tail: Promise<unknown> = Promise.resolve();
-let waiting = 0;
+/** Calls not started yet, one lane per kind; interactive calls go first. */
+const lanes = {
+	interactive: [] as (() => Promise<void>)[],
+	background: [] as (() => Promise<void>)[]
+};
+let running = false;
 
-function enqueue<T>(job: () => Promise<T>): Promise<T> {
-	if (waiting >= LLM_MAX_WAITING)
+function pump() {
+	if (running) return;
+	const next = lanes.interactive.shift() ?? lanes.background.shift();
+	if (!next) return;
+	running = true;
+	void next().finally(() => {
+		running = false;
+		pump();
+	});
+}
+
+function enqueue<T>(job: () => Promise<T>, background = false): Promise<T> {
+	if (!background && lanes.interactive.length >= LLM_MAX_WAITING)
 		throw new AppError(503, 'The assistant is busy. Try again in a minute.');
-	waiting++;
-	const start = () => {
-		waiting--;
-		return job();
-	};
-	const run = tail.then(start, start);
-	tail = run.catch(() => undefined);
-	return run;
+	return new Promise<T>((resolve, reject) => {
+		(background ? lanes.background : lanes.interactive).push(() =>
+			Promise.resolve().then(job).then(resolve, reject)
+		);
+		// Started on the next tick, so a burst of callers is counted before the first one runs.
+		void Promise.resolve().then(pump);
+	});
 }
 
 /** Map a client failure to an error that is safe to show. Nothing from the server leaks. */
@@ -142,20 +172,24 @@ async function chat(
 		maxTokens: number;
 		temperature: number;
 		responseFormat?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'];
+		timeoutMs: number;
 	}
 ): Promise<Reply> {
 	const { openai, model } = client();
 	try {
-		const res = await openai.chat.completions.create({
-			model,
-			messages: [
-				{ role: 'system', content: system },
-				{ role: 'user', content: userText }
-			],
-			max_tokens: params.maxTokens,
-			temperature: params.temperature,
-			...(params.responseFormat ? { response_format: params.responseFormat } : {})
-		});
+		const res = await openai.chat.completions.create(
+			{
+				model,
+				messages: [
+					{ role: 'system', content: system },
+					{ role: 'user', content: userText }
+				],
+				max_tokens: params.maxTokens,
+				temperature: params.temperature,
+				...(params.responseFormat ? { response_format: params.responseFormat } : {})
+			},
+			{ timeout: params.timeoutMs }
+		);
 		const choice = res.choices?.[0];
 		return {
 			content: typeof choice?.message?.content === 'string' ? choice.message.content : '',
@@ -188,7 +222,7 @@ export async function completeJson<T>(
 	schema: ZodType<T>,
 	system: string,
 	userText: string,
-	options: { maxTokens: number; name?: string }
+	options: { maxTokens: number; name?: string } & LlmCallOptions
 ): Promise<T> {
 	const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
 	// Draft markers mean nothing to the server's grammar builder.
@@ -202,7 +236,8 @@ export async function completeJson<T>(
 			const reply = await chat(system, userText, {
 				maxTokens: options.maxTokens,
 				temperature: LLM_JSON_TEMPERATURE,
-				responseFormat
+				responseFormat,
+				timeoutMs: timeoutFor(options)
 			});
 			if (reply.finishReason === 'length')
 				throw new AppError(502, 'The recipe is too long for the assistant.');
@@ -216,22 +251,23 @@ export async function completeJson<T>(
 			if (parsed.success) return parsed.data;
 		}
 		throw new AppError(502, 'The assistant gave an answer that could not be read.');
-	});
+	}, options.background);
 }
 
 /** Ask for plain text, such as the answer to a question. */
 export async function completeText(
 	system: string,
 	userText: string,
-	options: { maxTokens: number }
+	options: { maxTokens: number } & LlmCallOptions
 ): Promise<string> {
 	return enqueue(async () => {
 		const reply = await chat(system, userText, {
 			maxTokens: options.maxTokens,
-			temperature: LLM_TEXT_TEMPERATURE
+			temperature: LLM_TEXT_TEMPERATURE,
+			timeoutMs: timeoutFor(options)
 		});
 		const text = reply.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 		if (!text) throw new AppError(502, 'The assistant gave no answer.');
 		return text;
-	});
+	}, options.background);
 }

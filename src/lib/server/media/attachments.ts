@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, notInArray, sql } from 'drizzle-orm';
 import { db, type DbOrTx } from '$lib/server/db';
 import { recipeAttachments, recipes } from '$lib/server/db/schema';
 import { recipeReadableBy } from '$lib/server/access';
@@ -101,9 +101,13 @@ export async function attachToRecipe(
 
 /**
  * Drop attachments no recipe claimed — an import the user started and abandoned.
- * Mirrors the unreferenced-image sweep.
+ * Mirrors the unreferenced-image sweep. `keep` holds ids a running background
+ * import will still link, however long it waits.
  */
-export async function cleanupUnreferencedAttachments(olderThanMinutes = 60): Promise<number> {
+export async function cleanupUnreferencedAttachments(
+	olderThanMinutes = 60,
+	keep: string[] = []
+): Promise<number> {
 	const rows = await db
 		.select({ id: recipeAttachments.id, objectKey: recipeAttachments.objectKey })
 		.from(recipeAttachments)
@@ -111,7 +115,8 @@ export async function cleanupUnreferencedAttachments(olderThanMinutes = 60): Pro
 		.where(
 			and(
 				isNull(recipes.id),
-				lt(recipeAttachments.createdAt, sql`now() - make_interval(mins => ${olderThanMinutes})`)
+				lt(recipeAttachments.createdAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
+				keep.length ? notInArray(recipeAttachments.id, keep) : undefined
 			)
 		)
 		.limit(500);

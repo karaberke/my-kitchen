@@ -157,20 +157,35 @@ export async function resolveIngredientName(
 	userId: string,
 	name: string
 ): Promise<IdentityHit | null> {
+	return (await resolveIngredientNames(dbx, userId, [name])).get(name) ?? null;
+}
+
+/** `resolveIngredientName` for many names, with one read of the identities. */
+export async function resolveIngredientNames(
+	dbx: DbOrTx,
+	userId: string,
+	names: string[]
+): Promise<Map<string, IdentityHit | null>> {
+	const out = new Map<string, IdentityHit | null>(names.map((n) => [n, null]));
 	// Too long to be a name; the caller's own validation rejects it.
-	if (name.trim().length > INGREDIENT_NAME_MAX) return null;
-	const candidates = matchCandidates(name);
-	if (!candidates.length) return null;
+	const open = names
+		.filter((n) => n.trim().length <= INGREDIENT_NAME_MAX)
+		.map((n) => [n, matchCandidates(n)] as const)
+		.filter(([, candidates]) => candidates.length);
+	if (!open.length) return out;
 	const rows = await loadIdentities(dbx, userId);
-	const found = new Map<string, IdentityRow>();
-	for (const candidate of candidates) {
-		const equal = rows.filter((r) => r.text === candidate);
-		const catalog = equal.filter((r) => r.fromCatalog);
-		for (const r of catalog.length ? catalog : equal) found.set(r.id, r);
+	for (const [name, candidates] of open) {
+		const found = new Map<string, IdentityRow>();
+		for (const candidate of candidates) {
+			const equal = rows.filter((r) => r.text === candidate);
+			const catalog = equal.filter((r) => r.fromCatalog);
+			for (const r of catalog.length ? catalog : equal) found.set(r.id, r);
+		}
+		if (found.size !== 1) continue;
+		const [hit] = found.values();
+		out.set(name, { ingredientId: hit.id, name: hit.name });
 	}
-	if (found.size !== 1) return null;
-	const [hit] = found.values();
-	return { ingredientId: hit.id, name: hit.name };
+	return out;
 }
 
 /** Where `run` appears in `words` as a contiguous sequence, or -1. */
