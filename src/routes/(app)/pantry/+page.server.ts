@@ -1,9 +1,17 @@
 import { fail } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import {
+	actionError,
+	formText,
+	formTextOrNull,
+	guard,
+	expectedRevision,
+	lotFields,
+	requiredAmount
+} from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { householdActor, memberHousehold, requireHousehold, revisionsOf } from '$lib/server/access';
+import { householdActor, requireMemberHousehold, revisionsOf } from '$lib/server/access';
 import {
 	addStock,
 	correctLot,
@@ -13,17 +21,15 @@ import {
 	updateLotMetadata,
 	wasteLot
 } from '$lib/server/pantry';
-import { parseAmount } from '$lib/shared/amount-parse';
 import { identifyAs, identifyManual, SYMBOLOGIES, type Symbology } from '$lib/shared/gtin';
 import { pantryAmount } from '$lib/shared/package-size';
 import { operationIdFrom } from '$lib/server/operations';
 import { llmEnabled } from '$lib/server/llm/client';
 import { LOCATION_MAX_CHARS } from '$lib/shared/text';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
-	const { user, household } = requireHousehold(event);
+export const load = guard(async (event: PageServerLoadEvent) => {
 	event.depends('app:pantry');
-	const h = await memberHousehold(db, household.id, user.id);
+	const { household } = await requireMemberHousehold(db, event);
 	const filterRaw = event.url.searchParams.get('filter');
 	const filters = {
 		q: (event.url.searchParams.get('q') ?? '').trim().slice(0, 60),
@@ -38,22 +44,21 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		title: 'Pantry',
 		overview,
 		filters,
-		revisions: revisionsOf(h),
+		revisions: revisionsOf(household),
 		operationId: randomUUID(),
 		aiEnabled: llmEnabled()
 	};
-};
+});
 
 export const actions: Actions = {
 	add: async (event) => {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const qty = parseAmount(String(fd.get('quantity') ?? ''));
-			if (!qty.ok || !qty.value)
-				return fail(400, { message: qty.ok ? 'Enter the amount' : qty.error, form: 'add' });
-			const ingredientId = String(fd.get('ingredientId') ?? '') || null;
-			const newName = String(fd.get('name') ?? '').trim();
+			const qty = requiredAmount(fd, 'quantity', 'Enter the amount', 'add');
+			if (!qty.ok) return qty.failure;
+			const ingredientId = formTextOrNull(fd, 'ingredientId');
+			const newName = formText(fd, 'name').trim();
 			const create = fd.get('createIdentity') === '1' || (!ingredientId && !!newName);
 			const out = await addStock(ctx, {
 				operationId: operationIdFrom(fd),
@@ -61,10 +66,8 @@ export const actions: Actions = {
 				newIngredientName: !ingredientId && create ? newName : null,
 				category: String(fd.get('category') ?? 'Other'),
 				quantity: qty.value,
-				unit: String(fd.get('unit') ?? ''),
-				location: String(fd.get('location') ?? ''),
-				expiresOn: String(fd.get('expiresOn') ?? '') || null,
-				note: String(fd.get('note') ?? '')
+				unit: formText(fd, 'unit'),
+				...lotFields(fd)
 			});
 			return { ok: true, action: 'add', eventId: out.result.eventId, replayed: out.replayed };
 		} catch (err) {
@@ -83,27 +86,23 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const code = String(fd.get('code') ?? '').slice(0, 40);
-			const rawSymbology = String(fd.get('symbology') ?? '');
+			const code = formText(fd, 'code').slice(0, 40);
+			const rawSymbology = formText(fd, 'symbology');
 			const symbology = SYMBOLOGIES.includes(rawSymbology as Symbology)
 				? (rawSymbology as Symbology)
 				: null;
 			const identified = symbology ? identifyAs(code, symbology) : identifyManual(code);
 			if (!identified.ok) return fail(400, { message: identified.message, form: 'scan' });
 
-			const per = parseAmount(String(fd.get('packageQuantity') ?? ''));
-			if (!per.ok || !per.value)
-				return fail(400, {
-					message: per.ok ? 'Enter what one package holds' : per.error,
-					form: 'scan'
-				});
-			const unit = String(fd.get('unit') ?? '');
+			const per = requiredAmount(fd, 'packageQuantity', 'Enter what one package holds', 'scan');
+			if (!per.ok) return per.failure;
+			const unit = formText(fd, 'unit');
 			const packageCount = Number(fd.get('packageCount') ?? '1');
 			const total = pantryAmount({ amount: per.value, unit }, packageCount);
 			if (!total.ok) return fail(400, { message: total.error, form: 'scan' });
 
-			const ingredientId = String(fd.get('ingredientId') ?? '') || null;
-			const newName = String(fd.get('name') ?? '').trim();
+			const ingredientId = formTextOrNull(fd, 'ingredientId');
+			const newName = formText(fd, 'name').trim();
 
 			const out = await addStock(ctx, {
 				operationId: operationIdFrom(fd),
@@ -111,24 +110,22 @@ export const actions: Actions = {
 				newIngredientName: scanNewIngredientName({
 					ingredientId,
 					name: newName,
-					providerTitle: String(fd.get('providerTitle') ?? ''),
+					providerTitle: formText(fd, 'providerTitle'),
 					createIdentity: fd.get('createIdentity') === '1'
 				}),
 				category: String(fd.get('category') ?? 'Other'),
 				quantity: total.quantity,
 				unit: total.unit,
-				location: String(fd.get('location') ?? ''),
-				expiresOn: String(fd.get('expiresOn') ?? '') || null,
-				note: String(fd.get('note') ?? ''),
+				...lotFields(fd),
 				barcode: {
 					gtin: identified.identity.gtin,
-					displayName: String(fd.get('displayName') ?? '') || newName,
-					brand: String(fd.get('brand') ?? ''),
+					displayName: formText(fd, 'displayName') || newName,
+					brand: formText(fd, 'brand'),
 					packageQuantity: per.value,
 					packageUnit: unit,
 					packageCount,
-					packageLabelText: String(fd.get('labelText') ?? ''),
-					origin: scanOrigin(String(fd.get('origin') ?? ''))
+					packageLabelText: formText(fd, 'labelText'),
+					origin: scanOrigin(formText(fd, 'origin'))
 				}
 			});
 			return {
@@ -146,18 +143,14 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const qty = parseAmount(String(fd.get('checkedQuantity') ?? ''));
-			if (!qty.ok || !qty.value)
-				return fail(400, {
-					message: qty.ok ? 'Enter the counted amount' : qty.error,
-					form: 'correct'
-				});
+			const qty = requiredAmount(fd, 'checkedQuantity', 'Enter the counted amount', 'correct');
+			if (!qty.ok) return qty.failure;
 			const out = await correctLot(ctx, {
 				operationId: operationIdFrom(fd),
-				lotId: String(fd.get('lotId') ?? ''),
+				lotId: formText(fd, 'lotId'),
 				checkedQuantity: qty.value,
-				expectedRevision: Number(fd.get('expectedRevision') ?? -1),
-				note: String(fd.get('note') ?? '')
+				expectedRevision: expectedRevision(fd),
+				note: formText(fd, 'note')
 			});
 			return {
 				ok: true,
@@ -173,14 +166,13 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			const qty = parseAmount(String(fd.get('quantity') ?? ''));
-			if (!qty.ok || !qty.value)
-				return fail(400, { message: qty.ok ? 'Enter the amount' : qty.error, form: 'waste' });
+			const qty = requiredAmount(fd, 'quantity', 'Enter the amount', 'waste');
+			if (!qty.ok) return qty.failure;
 			const out = await wasteLot(ctx, {
 				operationId: operationIdFrom(fd),
-				lotId: String(fd.get('lotId') ?? ''),
+				lotId: formText(fd, 'lotId'),
 				quantity: qty.value,
-				reason: String(fd.get('reason') ?? '')
+				reason: formText(fd, 'reason')
 			});
 			return { ok: true, action: 'waste', eventId: out.result.eventId };
 		} catch (err) {
@@ -192,11 +184,9 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		try {
 			await updateLotMetadata(ctx, {
-				lotId: String(fd.get('lotId') ?? ''),
-				expectedRevision: Number(fd.get('expectedRevision') ?? -1),
-				location: String(fd.get('location') ?? ''),
-				expiresOn: String(fd.get('expiresOn') ?? '') || null,
-				note: String(fd.get('note') ?? '')
+				lotId: formText(fd, 'lotId'),
+				expectedRevision: expectedRevision(fd),
+				...lotFields(fd)
 			});
 			return { ok: true, action: 'metadata' };
 		} catch (err) {
@@ -204,5 +194,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-export const load = guard(loadImpl);

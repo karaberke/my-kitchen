@@ -1,8 +1,8 @@
 import { redirect } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { householdActor, memberHousehold, requireHousehold, revisionsOf } from '$lib/server/access';
+import { householdActor, requireMemberHousehold, revisionsOf } from '$lib/server/access';
 import {
 	addPlanEntry,
 	getWeekPlan,
@@ -13,10 +13,9 @@ import {
 import { listRecipeOptions } from '$lib/server/recipes';
 import { todayIso } from '$lib/server/pantry';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
-	const { user, household } = requireHousehold(event);
+export const load = guard(async (event: PageServerLoadEvent) => {
 	event.depends('app:plan');
-	const h = await memberHousehold(db, household.id, user.id);
+	const { user, household } = await requireMemberHousehold(db, event);
 	const today = todayIso();
 	const start = mondayOf(today);
 	const [days, recipes] = await Promise.all([
@@ -30,20 +29,20 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		start,
 		days,
 		recipes,
-		revisions: revisionsOf(h)
+		revisions: revisionsOf(household)
 	};
-};
+});
 
 export const actions: Actions = {
 	add: async (event) => {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
-		const recipeId = String(fd.get('recipeId') ?? '').trim();
+		const recipeId = formText(fd, 'recipeId').trim();
 		try {
 			await addPlanEntry(ctx, {
-				plannedOn: String(fd.get('plannedOn') ?? ''),
+				plannedOn: formText(fd, 'plannedOn'),
 				recipeId: recipeId || null,
-				title: String(fd.get('title') ?? '')
+				title: formText(fd, 'title')
 			});
 		} catch (err) {
 			return actionError(err);
@@ -54,7 +53,7 @@ export const actions: Actions = {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			await removePlanEntry(ctx, String(fd.get('entryId') ?? ''));
+			await removePlanEntry(ctx, formText(fd, 'entryId'));
 		} catch (err) {
 			return actionError(err);
 		}
@@ -65,12 +64,10 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		let listId: string;
 		try {
-			listId = await planWeekToGrocery(ctx, String(fd.get('start') ?? ''));
+			listId = await planWeekToGrocery(ctx, formText(fd, 'start'));
 		} catch (err) {
 			return actionError(err);
 		}
 		throw redirect(303, `/grocery/${listId}`);
 	}
 };
-
-export const load = guard(loadImpl);

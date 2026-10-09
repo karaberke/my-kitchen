@@ -166,25 +166,21 @@
 </PageHeader>
 
 {#if f?.message && !f.form && !dirty()}
-	<div class="mb-3">
-		<Alert kind={f.review ? 'warn' : 'error'}
-			>{f.message}{#if f.review?.changedRecipes?.length}
-				({f.review.changedRecipes.join(', ')}){/if}</Alert
-		>
-	</div>
+	<Alert class="mb-3" kind={f.review ? 'warn' : 'error'}
+		>{f.message}{#if f.review?.changedRecipes?.length}
+			({f.review.changedRecipes.join(', ')}){/if}</Alert
+	>
 {/if}
 {#if list.status === 'draft'}
 	{#if list.pantryChanged || list.anyRecipeChanged}
-		<div class="mb-3">
-			<Alert kind="warn"
-				>{list.pantryChanged ? 'The pantry changed since this preview.' : ''}
-				{list.anyRecipeChanged ? 'A planned recipe changed since it was added.' : ''} Recalculate to see
-				current numbers; starting shopping checks this again.
-				<form method="post" action="?/refresh" class="mt-2" use:enhance={mutate()}>
-					<button class="btn-secondary btn-sm">Recalculate</button>
-				</form></Alert
-			>
-		</div>
+		<Alert class="mb-3" kind="warn"
+			>{list.pantryChanged ? 'The pantry changed since this preview.' : ''}
+			{list.anyRecipeChanged ? 'A planned recipe changed since it was added.' : ''} Recalculate to see
+			current numbers; starting shopping checks this again.
+			<form method="post" action="?/refresh" class="mt-2" use:enhance={mutate()}>
+				<button class="btn-secondary btn-sm">Recalculate</button>
+			</form></Alert
+		>
 	{/if}
 	<div class="card mb-4 p-3.5">
 		<div class="flex items-center justify-between gap-2">
@@ -328,7 +324,7 @@
 				Reading your list with the assistant… this can take a minute.
 			</p>
 		{/if}
-		{#if tidyError}<div class="mb-2"><Alert kind="error">{tidyError}</Alert></div>{/if}
+		{#if tidyError}<Alert class="mb-2" kind="error">{tidyError}</Alert>{/if}
 	</div>
 {/if}
 

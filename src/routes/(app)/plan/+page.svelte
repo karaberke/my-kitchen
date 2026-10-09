@@ -5,7 +5,7 @@
 	import Sheet from '$lib/components/Sheet.svelte';
 	import PollRevisions from '$lib/components/PollRevisions.svelte';
 	import { recipeMetaLine } from '$lib/client/format';
-	import { keepForm } from '$lib/client/enhance';
+	import { keepForm, onSuccess } from '$lib/client/enhance';
 
 	let { data, form } = $props();
 
@@ -29,6 +29,11 @@
 	const anyRecipe = $derived(data.days.some((d) => d.entries.some((e) => e.recipeId)));
 </script>
 
+{#snippet titleAndMeta(x: Parameters<typeof recipeMetaLine>[0] & { title: string })}
+	<div class="text-[13px] leading-tight">{x.title}</div>
+	{#if recipeMetaLine(x)}<div class="mt-1 text-[11px] text-sage">{recipeMetaLine(x)}</div>{/if}
+{/snippet}
+
 <PageHeader title="This week" subtitle={data.household?.name ?? ''}>
 	{#if data.household}<PollRevisions
 			householdId={data.household.id}
@@ -39,7 +44,7 @@
 		/>{/if}
 </PageHeader>
 
-{#if form?.message}<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>{/if}
+{#if form?.message}<Alert class="mb-3" kind="error">{form.message}</Alert>{/if}
 
 <form method="post" action="?/toGrocery" use:enhance={keepForm}>
 	<input type="hidden" name="start" value={data.start} />
@@ -78,10 +83,7 @@
 					>
 						{#if e.recipeId}
 							<a href="/recipes/{e.recipeId}" class="min-w-0 flex-1 text-ink hover:text-ink">
-								<div class="text-[13px] leading-tight">{e.title}</div>
-								{#if recipeMetaLine(e)}<div class="mt-1 text-[11px] text-sage">
-										{recipeMetaLine(e)}
-									</div>{/if}
+								{@render titleAndMeta(e)}
 							</a>
 						{:else}
 							<div class="min-w-0 flex-1">
@@ -135,10 +137,7 @@
 							<button
 								class="w-full rounded-[12px] border border-sand-dark bg-card px-3 py-2.5 text-left hover:bg-parchment"
 							>
-								<div class="text-[13px] leading-tight">{r.title}</div>
-								{#if recipeMetaLine(r)}<div class="mt-1 text-[11px] text-sage">
-										{recipeMetaLine(r)}
-									</div>{/if}
+								{@render titleAndMeta(r)}
 							</button>
 						</form>
 					</li>
@@ -154,14 +153,12 @@
 			method="post"
 			action="?/add"
 			class="flex flex-col gap-2"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					if (result.type === 'success') {
-						addOpen = false;
-						noteText = '';
-					}
-				}}
+			use:enhance={onSuccess(undefined, {
+				then: () => {
+					addOpen = false;
+					noteText = '';
+				}
+			})}
 		>
 			<input type="hidden" name="plannedOn" value={addDay} />
 			<label class="label" for="plan-note">Or type a meal</label>

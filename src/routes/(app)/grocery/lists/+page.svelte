@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import NewListForm from '$lib/components/NewListForm.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { fmtDateTime } from '$lib/client/format';
-	let { data, form } = $props();
+	let { data } = $props();
 	const label: Record<string, string> = {
 		draft: 'Draft',
 		shopping: 'Shopping',
@@ -20,17 +20,13 @@
 	subtitle="{data.household?.name} · drafts, trips in progress and archived trips"
 	back="/grocery"
 />
-<form method="post" action="?/create" use:enhance class="mb-4 flex gap-2">
-	<input
-		class="field flex-1"
-		name="name"
-		placeholder="New list name (e.g. Party shop)"
-		maxlength="80"
-		aria-label="List name"
-	/>
-	<button class="btn-primary">New draft</button>
-</form>
-{#if form?.message}<p class="error-text mb-3">{form.message}</p>{/if}
+<NewListForm
+	class="mb-4"
+	inputClass="flex-1"
+	placeholder="New list name (e.g. Party shop)"
+	submitLabel="New draft"
+	errorClass="mb-3"
+/>
 <p class="mb-3 text-[12px] text-sage">
 	Separate lists do not reserve pantry stock from each other; each draft is recalculated from
 	current stock when you open it.

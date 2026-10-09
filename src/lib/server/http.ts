@@ -1,17 +1,10 @@
 import { error, fail, type ActionFailure, type RequestEvent } from '@sveltejs/kit';
 import { getRequestEvent } from '$app/server';
 import { asAppError, ReviewConflict, type ReviewDetail } from '$lib/server/errors';
+import { parseAmount } from '$lib/shared/amount-parse';
+import type { Dec } from '$lib/shared/decimal';
 import { match as isUuid } from '../../params/uuid';
 
-/**
- * Explicit caching policy per response type.
- *
- * - Hashed immutable assets under /_app/immutable/ are emitted by SvelteKit with
- *   `public, max-age=31536000, immutable`; we leave them untouched.
- * - Everything dynamic (HTML, data, auth, API, exports) is `private, no-store`.
- * - The private media endpoint sets its own `private, max-age=300` + ETag policy.
- * - Unversioned public static files get a short revalidating policy.
- */
 /**
  * How long a viewer's own browser may reuse media it already fetched.
  *
@@ -20,11 +13,40 @@ import { match as isUuid } from '../../params/uuid';
  * about freshness but about authorisation: it bounds how long someone who has lost access
  * keeps seeing a file already in their cache. Short on purpose, for the same reason the
  * session cookie cache is disabled in auth.ts.
- *
- * Previously `no-cache`, which forced a revalidation — and a full auth preamble plus a
- * correlated EXISTS — for every image on every page view.
  */
 export const MEDIA_CACHE_CONTROL = 'private, max-age=300';
+
+/** The default for every dynamic response: HTML, data, auth, exports. */
+export const NO_STORE = 'private, no-store';
+
+/** The headers of a private media response: past the shared policy, varied by cookie. */
+export function mediaHeaders(etag: string, extra: Record<string, string> = {}): Headers {
+	return new Headers({
+		'cache-control': MEDIA_CACHE_CONTROL,
+		etag,
+		vary: 'Cookie',
+		'x-cache-policy': 'media',
+		...extra
+	});
+}
+
+/** A 304 when the request already holds `etag`, else null. Call it only after the access check. */
+export function notModified(event: RequestEvent, etag: string, headers: Headers): Response | null {
+	const inm = event.request.headers.get('if-none-match');
+	if (inm && inm.split(',').some((t) => t.trim() === etag))
+		return new Response(null, { status: 304, headers });
+	return null;
+}
+
+/** An uncached text download; with `filename`, the browser saves it as an attachment. */
+export function downloadResponse(body: string, contentType: string, filename?: string): Response {
+	const headers: Record<string, string> = {
+		'content-type': contentType,
+		'cache-control': NO_STORE
+	};
+	if (filename) headers['content-disposition'] = `attachment; filename="${filename}"`;
+	return new Response(body, { headers });
+}
 
 export function applyResponsePolicy(event: RequestEvent, response: Response): Response {
 	const headers = response.headers;
@@ -39,11 +61,11 @@ export function applyResponsePolicy(event: RequestEvent, response: Response): Re
 		headers.delete('x-cache-policy');
 	} else if (path.startsWith('/media/')) {
 		// media route sets its own headers; make sure nothing shared sneaks through
-		if (!headers.has('cache-control')) headers.set('cache-control', 'private, no-store');
+		if (!headers.has('cache-control')) headers.set('cache-control', NO_STORE);
 	} else if (isPublicStaticAsset(path)) {
 		headers.set('cache-control', 'public, max-age=600, must-revalidate');
 	} else {
-		headers.set('cache-control', 'private, no-store');
+		headers.set('cache-control', NO_STORE);
 		headers.set('pragma', 'no-cache');
 	}
 
@@ -69,9 +91,7 @@ function isCookPage(path: string): boolean {
 }
 
 function isPublicStaticAsset(path: string): boolean {
-	return /^\/(robots\.txt|favicon\.ico|favicon-\d+x\d+\.png|apple-touch-icon\.png|android-chrome-\d+x\d+\.png|site\.webmanifest)$/.test(
-		path
-	);
+	return /^\/(robots\.txt|favicon\.ico|favicon-\d+x\d+\.png|apple-touch-icon\.png)$/.test(path);
 }
 
 /** Rethrow an application error as the matching HTTP error; anything else unchanged. */
@@ -138,6 +158,46 @@ export function actionError(err: unknown, form?: string): ActionFailure<ActionEr
 	const app = asAppError(err);
 	if (app) return fail(app.status, { message: app.message, ...tag });
 	throw err;
+}
+
+/** A form field as text, '' when it is missing. */
+export function formText(fd: FormData, name: string): string {
+	return String(fd.get(name) ?? '');
+}
+
+/** A form field as text, null when it is missing or blank. */
+export function formTextOrNull(fd: FormData, name: string): string | null {
+	return formText(fd, name) || null;
+}
+
+/** The `expectedRevision` field; -1, which no row has, when it is missing. */
+export function expectedRevision(fd: FormData): number {
+	return Number(fd.get('expectedRevision') ?? -1);
+}
+
+/** The location, use-by date and note fields of a pantry lot form. */
+export function lotFields(fd: FormData) {
+	return {
+		location: formText(fd, 'location'),
+		expiresOn: formTextOrNull(fd, 'expiresOn'),
+		note: formText(fd, 'note')
+	};
+}
+
+/**
+ * A required amount field: the amount, or the 400 failure to return, with
+ * `emptyMessage` for a blank field and the parser's message for a bad one.
+ */
+export function requiredAmount(
+	fd: FormData,
+	name: string,
+	emptyMessage: string,
+	form?: string
+): { ok: true; value: Dec } | { ok: false; failure: ActionFailure<ActionErrorData> } {
+	const parsed = parseAmount(formText(fd, name));
+	if (parsed.ok && parsed.value) return { ok: true, value: parsed.value };
+	const message = parsed.ok ? emptyMessage : parsed.error;
+	return { ok: false, failure: fail(400, form === undefined ? { message } : { message, form }) };
 }
 
 /** Throwaway origin `safeNext` resolves against; any other origin means `raw` escaped the site. */

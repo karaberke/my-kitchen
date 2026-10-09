@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { Dec } from '$lib/shared/decimal';
 import { providerGtin, type BarcodeIdentity } from '$lib/shared/gtin';
 import type { FetchImpl } from '$lib/server/fetch-capped';
-import { failedLookup, fetchJson } from './http';
+import { fetchProvider } from './http';
 import {
 	nutritionBasisOf,
 	type NutritionBasis,
@@ -28,7 +28,6 @@ import {
 	type ProviderResult
 } from './types';
 
-const TIMEOUT_MS = 4000;
 const MAX_BYTES = 500_000;
 
 /** Keep in step with package.json; Open Food Facts asks for an app version. */
@@ -149,21 +148,15 @@ export function offAdapter(config: OffConfig, fetchImpl?: FetchImpl): ProviderAd
 				`${config.baseUrl}/api/v2/product/${encodeURIComponent(identity.expanded)}.json` +
 				`?fields=${encodeURIComponent(FIELDS)}`;
 
-			const res = await fetchJson(url, {
-				timeoutMs: TIMEOUT_MS,
+			const res = await fetchProvider(url, envelopeSchema, 'Open Food Facts', {
 				maxBytes: MAX_BYTES,
 				headers,
 				signal,
 				fetchImpl
 			});
+			if (!res.ok) return res.result;
 
-			if (!res.ok) return failedLookup(res, 'Open Food Facts');
-
-			const parsed = envelopeSchema.safeParse(res.body);
-			if (!parsed.success)
-				return { status: 'unavailable', reason: 'Open Food Facts sent an unexpected shape' };
-
-			const envelope = parsed.data;
+			const envelope = res.data;
 			const found = Number(envelope.status) === 1 && res.status !== 404;
 			if (!found || !envelope.product) return { status: 'missing' };
 

@@ -1,16 +1,15 @@
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
-import { assertMember, householdActor, requireHousehold } from '$lib/server/access';
+import { householdActor, requireMember } from '$lib/server/access';
 import { getHistory } from '$lib/server/pantry';
 import { undoEvent } from '$lib/server/undo';
 import { operationIdFrom } from '$lib/server/operations';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
-	const { user, household } = requireHousehold(event);
+export const load = guard(async (event: PageServerLoadEvent) => {
 	event.depends('app:history');
-	await assertMember(db, household.id, user.id);
+	const { household } = await requireMember(db, event);
 	const before = event.url.searchParams.get('before');
 	let cursor: { occurredAt: string; id: string } | null = null;
 	if (before) {
@@ -19,7 +18,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 	}
 	const history = await getHistory(db, household.id, cursor, 30);
 	return { title: 'Inventory history', history, operationId: randomUUID() };
-};
+});
 
 export const actions: Actions = {
 	undo: async (event) => {
@@ -27,12 +26,10 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		try {
 			const operationId = operationIdFrom(fd);
-			await undoEvent(actor, { operationId, eventId: String(fd.get('eventId') ?? '') });
+			await undoEvent(actor, { operationId, eventId: formText(fd, 'eventId') });
 			return { ok: true };
 		} catch (err) {
 			return actionError(err);
 		}
 	}
 };
-
-export const load = guard(loadImpl);

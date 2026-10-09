@@ -5,10 +5,8 @@ import { jobsForUser } from '$lib/server/llm/jobs';
 import type { LayoutServerLoadEvent } from './$types';
 
 /** Layout guard for the signed-in area. Every page and action re-checks permissions itself. */
-const loadImpl = (event: LayoutServerLoadEvent) => {
+export const load = guard((event: LayoutServerLoadEvent) => {
 	const user = requireUser(event);
 	// In memory, so cheap: the job list renders without a first request.
 	return { assistantJobs: llmEnabled() ? jobsForUser(user.id) : [] };
-};
-
-export const load = guard(loadImpl);
+});

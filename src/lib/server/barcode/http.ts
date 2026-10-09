@@ -7,6 +7,7 @@
  * streams, and every call carries its own timeout.
  */
 
+import type { ZodType } from 'zod';
 import { discardBody, readCappedOrNull, type FetchImpl } from '$lib/server/fetch-capped';
 import type { ProviderResult } from './types';
 
@@ -25,6 +26,9 @@ export type JsonFetch =
 	| { ok: false; kind: 'rate_limited'; retryAfterSeconds: number }
 	| { ok: false; kind: 'status'; status: number }
 	| { ok: false; kind: 'network' | 'timeout' | 'redirect' | 'too_large' | 'not_json' };
+
+/** How long one provider request may take. */
+export const TIMEOUT_MS = 4000;
 
 /** Both providers answer 429, and sometimes 403, when this address asked too often. */
 const RATE_LIMIT_STATUSES = new Set([429, 403]);
@@ -99,4 +103,25 @@ export function failedLookup(res: Exclude<JsonFetch, { ok: true }>, label: strin
 	if (res.kind === 'rate_limited')
 		return { status: 'rate_limited', retryAfterSeconds: res.retryAfterSeconds };
 	return { status: 'unavailable', reason: `${label} ${res.kind}` };
+}
+
+/**
+ * `fetchJson` with `TIMEOUT_MS`, then `schema` on the body: the parsed body,
+ * or the `ProviderResult` for a failed fetch or a body of another shape.
+ */
+export async function fetchProvider<T>(
+	url: string,
+	schema: ZodType<T>,
+	label: string,
+	options: Omit<JsonFetchOptions, 'timeoutMs'>
+): Promise<{ ok: true; status: number; data: T } | { ok: false; result: ProviderResult }> {
+	const res = await fetchJson(url, { ...options, timeoutMs: TIMEOUT_MS });
+	if (!res.ok) return { ok: false, result: failedLookup(res, label) };
+	const parsed = schema.safeParse(res.body);
+	if (!parsed.success)
+		return {
+			ok: false,
+			result: { status: 'unavailable', reason: `${label} sent an unexpected shape` }
+		};
+	return { ok: true, status: res.status, data: parsed.data };
 }

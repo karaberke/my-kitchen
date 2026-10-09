@@ -1,4 +1,4 @@
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, householdActor, requireUser } from '$lib/server/access';
@@ -11,7 +11,7 @@ import {
 	renameCategory
 } from '$lib/server/recipe-categories';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:recipes');
 	const params = parseListParams(event.url);
@@ -31,13 +31,13 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		categories,
 		categoryNameMax: CATEGORY_NAME_MAX
 	};
-};
+});
 
 export const actions: Actions = {
 	favorite: async (event) => {
 		const user = requireUser(event);
 		const fd = await event.request.formData();
-		const recipeId = String(fd.get('recipeId') ?? '');
+		const recipeId = formText(fd, 'recipeId');
 		const favorite = fd.get('favorite') === '1';
 		try {
 			await setFavorite(user.id, recipeId, favorite);
@@ -60,7 +60,7 @@ export const actions: Actions = {
 		const actor = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			await renameCategory(actor, String(fd.get('categoryId') ?? ''), fd.get('name'));
+			await renameCategory(actor, formText(fd, 'categoryId'), fd.get('name'));
 		} catch (err) {
 			return actionError(err);
 		}
@@ -70,12 +70,10 @@ export const actions: Actions = {
 		const actor = householdActor(event);
 		const fd = await event.request.formData();
 		try {
-			await deleteCategory(actor, String(fd.get('categoryId') ?? ''));
+			await deleteCategory(actor, formText(fd, 'categoryId'));
 		} catch (err) {
 			return actionError(err);
 		}
 		return { ok: true };
 	}
 };
-
-export const load = guard(loadImpl);

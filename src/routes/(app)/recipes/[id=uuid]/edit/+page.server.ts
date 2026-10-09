@@ -11,7 +11,7 @@ import { AppError } from '$lib/server/errors';
 import { claimLlmCall, llmEnabled } from '$lib/server/llm/client';
 import { fixRecipe } from '$lib/server/llm/recipe';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	const recipe = await getRecipeDetail(db, user.id, event.params.id, null);
 	if (!recipe.isOwner)
@@ -30,7 +30,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		identityLabels: Object.fromEntries([...meta].map(([id, m]) => [id, m.name])),
 		aiEnabled: llmEnabled()
 	};
-};
+});
 
 export const actions: Actions = {
 	// Named, not `default`: SvelteKit refuses every POST to a page that mixes the two.
@@ -65,5 +65,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-export const load = guard(loadImpl);

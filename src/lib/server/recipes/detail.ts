@@ -67,6 +67,32 @@ export interface RecipeDetail {
 	cookable: boolean;
 }
 
+/** The recipe columns (with the owner's name, so join `user`) that detail, export and duplicate read. */
+export const recipeColumns = {
+	id: recipes.id,
+	ownerUserId: recipes.ownerUserId,
+	ownerName: user.name,
+	title: recipes.title,
+	description: recipes.description,
+	baseServings: recipes.baseServings,
+	yieldNote: recipes.yieldNote,
+	prepMinutes: recipes.prepMinutes,
+	cookMinutes: recipes.cookMinutes,
+	source: recipes.source,
+	notes: recipes.notes,
+	tags: recipes.tags,
+	convention: recipes.convention,
+	status: recipes.status
+};
+
+/** The revision, attribution and timestamps that detail and export read too. */
+export const recipeRevisionColumns = {
+	revision: recipes.revision,
+	sourceAttribution: recipes.sourceAttribution,
+	createdAt: recipes.createdAt,
+	updatedAt: recipes.updatedAt
+};
+
 export async function getRecipeDetail(
 	dbx: DbOrTx,
 	userId: string,
@@ -75,24 +101,8 @@ export async function getRecipeDetail(
 ): Promise<RecipeDetail> {
 	const [row] = await dbx
 		.select({
-			id: recipes.id,
-			ownerUserId: recipes.ownerUserId,
-			ownerName: user.name,
-			title: recipes.title,
-			description: recipes.description,
-			baseServings: recipes.baseServings,
-			yieldNote: recipes.yieldNote,
-			prepMinutes: recipes.prepMinutes,
-			cookMinutes: recipes.cookMinutes,
-			source: recipes.source,
-			notes: recipes.notes,
-			tags: recipes.tags,
-			convention: recipes.convention,
-			status: recipes.status,
-			revision: recipes.revision,
-			sourceAttribution: recipes.sourceAttribution,
-			createdAt: recipes.createdAt,
-			updatedAt: recipes.updatedAt,
+			...recipeColumns,
+			...recipeRevisionColumns,
 			imageId: images.id,
 			imageVersion: images.version,
 			imageVariants: images.variants,

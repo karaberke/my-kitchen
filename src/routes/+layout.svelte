@@ -1,5 +1,6 @@
 <script lang="ts">
 	import './layout.css';
+	import '$lib/fonts/fonts.css';
 	import { page } from '$app/state';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import Toasts from '$lib/components/Toasts.svelte';

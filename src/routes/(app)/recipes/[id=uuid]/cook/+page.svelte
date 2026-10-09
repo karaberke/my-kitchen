@@ -6,7 +6,8 @@
 	import Alert from '$lib/components/Alert.svelte';
 	import CookItems from '$lib/components/CookItems.svelte';
 	import RecipeChat from '$lib/components/RecipeChat.svelte';
-	import { pushToast } from '$lib/client/toast.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { onSuccess } from '$lib/client/enhance';
 	import { fmtNum, fmtQty, scaledIngredientLine } from '$lib/client/format';
 	import { Dec } from '$lib/shared/decimal';
 	import { unitSystem } from '$lib/client/unit-system.svelte';
@@ -99,52 +100,44 @@
 	>
 {:else}
 	{#if f?.ok}
-		<div class="mb-4">
-			<Alert kind="success">
-				Pantry updated: {f.deductions}
-				{f.deductions === 1 ? 'deduction' : 'deductions'}.
-				{#if f.plannedServingsFulfilled && Dec.from(f.plannedServingsFulfilled).isPositive()}
-					{fmtNum(f.plannedServingsFulfilled)} planned servings fulfilled.{/if}
-				{#if f.unplannedServings && Dec.from(f.unplannedServings).isPositive()}
-					{fmtNum(f.unplannedServings)} servings recorded as unplanned.{/if}
-				<form
-					method="post"
-					action="?/undo"
-					class="mt-2 inline"
-					use:enhance={() =>
-						async ({ result, update }) => {
-							await update({ reset: false });
-							if (result.type === 'success')
-								pushToast('Cooking undone. Pantry restored.', { kind: 'success' });
-							// A failed undo changes nothing on the page, so reload the preview.
-							else if (result.type === 'failure') await invalidate('app:cook');
-						}}
-				>
-					<input type="hidden" name="operationId" value={data.undoOperationId} />
-					<input type="hidden" name="eventId" value={f.eventId} />
-					<button class="btn-secondary btn-sm">Undo this cooking</button>
-					<a href="/pantry/history" class="btn-ghost btn-sm">View history</a>
-				</form>
-			</Alert>
-		</div>
-	{:else if f?.undone}
-		<div class="mb-4">
-			<Alert kind="info">The cooking event was undone; its pantry deductions were reversed.</Alert>
-		</div>
-	{:else if f?.message}
-		<div class="mb-4">
-			<Alert kind="error"
-				>{f.message}{#if f.review?.insufficient?.length}
-					— {#each f.review.insufficient as s (s.lotId)}<span
-							>{fmtQty(s.available, s.unit)} available where {fmtQty(s.requested, s.unit)} was requested.
-						</span>{/each}{/if}
-				<button
-					class="font-bold underline"
-					onclick={() => invalidate('app:cook').then(() => (finishOpen = true))}
-					>Refresh the preview</button
-				></Alert
+		<Alert class="mb-4" kind="success">
+			Pantry updated: {f.deductions}
+			{f.deductions === 1 ? 'deduction' : 'deductions'}.
+			{#if f.plannedServingsFulfilled && Dec.from(f.plannedServingsFulfilled).isPositive()}
+				{fmtNum(f.plannedServingsFulfilled)} planned servings fulfilled.{/if}
+			{#if f.unplannedServings && Dec.from(f.unplannedServings).isPositive()}
+				{fmtNum(f.unplannedServings)} servings recorded as unplanned.{/if}
+			<!-- A failed undo changes nothing on the page, so reload the preview. -->
+			<form
+				method="post"
+				action="?/undo"
+				class="mt-2 inline"
+				use:enhance={onSuccess('Cooking undone. Pantry restored.', {
+					invalidateOnFailure: 'app:cook'
+				})}
 			>
-		</div>
+				<input type="hidden" name="operationId" value={data.undoOperationId} />
+				<input type="hidden" name="eventId" value={f.eventId} />
+				<button class="btn-secondary btn-sm">Undo this cooking</button>
+				<a href="/pantry/history" class="btn-ghost btn-sm">View history</a>
+			</form>
+		</Alert>
+	{:else if f?.undone}
+		<Alert class="mb-4" kind="info"
+			>The cooking event was undone; its pantry deductions were reversed.</Alert
+		>
+	{:else if f?.message}
+		<Alert class="mb-4" kind="error"
+			>{f.message}{#if f.review?.insufficient?.length}
+				— {#each f.review.insufficient as s (s.lotId)}<span
+						>{fmtQty(s.available, s.unit)} available where {fmtQty(s.requested, s.unit)} was requested.
+					</span>{/each}{/if}
+			<button
+				class="font-bold underline"
+				onclick={() => invalidate('app:cook').then(() => (finishOpen = true))}
+				>Refresh the preview</button
+			></Alert
+		>
 	{/if}
 
 	<div class="mb-3.5 flex items-center justify-end gap-3.5">
@@ -171,20 +164,7 @@
 			aria-controls="cook-settings"
 			onclick={() => (settingsOpen = !settingsOpen)}
 		>
-			<svg
-				width="17"
-				height="17"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.8"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				aria-hidden="true"
-				><circle cx="12" cy="12" r="3"></circle><path
-					d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
-				></path></svg
-			>
+			<Icon name="gear" size={17} />
 		</button>
 	</div>
 	{#if settingsOpen}
@@ -349,18 +329,7 @@
 			aria-haspopup="dialog"
 			onclick={() => (chatOpen = true)}
 		>
-			<svg
-				width="18"
-				height="18"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.8"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				aria-hidden="true"
-				><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"></path></svg
-			>
+			<Icon name="chat" size={18} />
 			Ask
 		</button>
 		<Sheet
@@ -389,14 +358,7 @@
 			method="post"
 			action="?/finish"
 			class="flex flex-col gap-4"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					if (result.type === 'success') {
-						finishOpen = false;
-						pushToast('Pantry updated.', { kind: 'success' });
-					}
-				}}
+			use:enhance={onSuccess('Pantry updated.', { then: () => (finishOpen = false) })}
 		>
 			<input type="hidden" name="operationId" value={data.operationId} />
 			<input type="hidden" name="expectedRecipeRevision" value={preview.revision} />

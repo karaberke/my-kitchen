@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
-import { db, type DbOrTx } from '$lib/server/db';
+import type { DbOrTx } from '$lib/server/db';
 import {
 	barcodeLinks,
 	ingredients,
@@ -18,15 +18,13 @@ import {
 	createLot,
 	insertEvent,
 	lockHousehold,
-	lockLots
+	lockLot
 } from '$lib/server/inventory';
-import { runOperation } from '$lib/server/operations';
+import { runOperation, withTransaction } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
 import { convertAmount, isUnitId, unitInfo, unitsCompatible } from '$lib/shared/units';
 import { addDays, isIsoDate } from '$lib/shared/time';
 import { LOCATION_MAX_CHARS, NOTE_MAX_CHARS, cleanText } from '$lib/shared/text';
-
-/** Moved to access.ts; re-exported until every importer is updated. */
 
 export interface PantryFilters {
 	q: string;
@@ -373,12 +371,10 @@ export async function updateLotMetadata(
 	}
 ) {
 	const expiresOn = validateDate(input.expiresOn);
-	return db.transaction(async (tx) => {
+	return withTransaction(async (tx) => {
 		await assertMember(tx, ctx.householdId, ctx.userId);
 		await lockHousehold(tx, ctx.householdId, { pantry: true });
-		const lots = await lockLots(tx, ctx.householdId, [input.lotId]);
-		const lot = lots.get(input.lotId);
-		if (!lot) throw new AppError(404, 'Pantry lot not found');
+		const lot = await lockLot(tx, ctx.householdId, input.lotId);
 		if (lot.revision !== input.expectedRevision)
 			throw new ReviewConflict('This lot changed since you opened it', {
 				lot: { ...lot, quantity: lot.quantity.toString() }
@@ -425,8 +421,7 @@ export async function correctLot(
 		async (tx) => {
 			await assertMember(tx, ctx.householdId, ctx.userId);
 			await lockHousehold(tx, ctx.householdId, { pantry: true });
-			const lot = (await lockLots(tx, ctx.householdId, [input.lotId])).get(input.lotId);
-			if (!lot) throw new AppError(404, 'Pantry lot not found');
+			const lot = await lockLot(tx, ctx.householdId, input.lotId);
 			if (lot.revision !== input.expectedRevision) {
 				throw new ReviewConflict(
 					'This lot was updated by someone else. Check the shelf again before correcting.',
@@ -493,8 +488,7 @@ export async function wasteLot(
 		async (tx) => {
 			await assertMember(tx, ctx.householdId, ctx.userId);
 			await lockHousehold(tx, ctx.householdId, { pantry: true });
-			const lot = (await lockLots(tx, ctx.householdId, [input.lotId])).get(input.lotId);
-			if (!lot) throw new AppError(404, 'Pantry lot not found');
+			const lot = await lockLot(tx, ctx.householdId, input.lotId);
 			if (input.quantity.gt(lot.quantity)) {
 				throw new ReviewConflict(
 					`Only ${lot.quantity.toHuman()} ${lot.unit} is tracked in this lot`,

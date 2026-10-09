@@ -2,8 +2,9 @@
 	import type { Snippet } from 'svelte';
 	let {
 		kind = 'info',
+		class: className = '',
 		children
-	}: { kind?: 'info' | 'warn' | 'error' | 'success'; children: Snippet } = $props();
+	}: { kind?: 'info' | 'warn' | 'error' | 'success'; class?: string; children: Snippet } = $props();
 	const styles = {
 		info: 'bg-sky/60 border-mist text-ink-soft',
 		warn: 'bg-honey-soft border-honey-line text-honey-dark',
@@ -13,7 +14,7 @@
 </script>
 
 <div
-	class="rounded-[14px] border px-3.5 py-3 text-[13px] leading-relaxed {styles[kind]}"
+	class="rounded-[14px] border px-3.5 py-3 text-[13px] leading-relaxed {styles[kind]} {className}"
 	role={kind === 'error' ? 'alert' : 'status'}
 >
 	{@render children()}

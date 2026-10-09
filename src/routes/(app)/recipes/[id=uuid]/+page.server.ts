@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, formTextOrNull, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, householdActor, requireUser } from '$lib/server/access';
@@ -21,12 +21,11 @@ import {
 	type CategoryView
 } from '$lib/server/recipe-categories';
 import { addBatchesToDraft, getCurrentList } from '$lib/server/grocery';
-import { Dec } from '$lib/shared/decimal';
-import { parseAmount } from '$lib/shared/amount-parse';
+import { parsePositiveAmount } from '$lib/shared/amount-parse';
 import { randomUUID } from 'node:crypto';
 import { llmEnabled } from '$lib/server/llm/client';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:recipe');
 	const householdId = event.locals.household?.id ?? null;
@@ -59,7 +58,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		categoryNameMax: CATEGORY_NAME_MAX,
 		aiEnabled: llmEnabled()
 	};
-};
+});
 
 export const actions: Actions = {
 	favorite: async (event) => {
@@ -75,7 +74,7 @@ export const actions: Actions = {
 	share: async (event) => {
 		const user = requireUser(event);
 		const fd = await event.request.formData();
-		const householdId = String(fd.get('householdId') ?? '');
+		const householdId = formText(fd, 'householdId');
 		try {
 			await setRecipeShare(user.id, event.params.id, householdId, fd.get('shared') === '1');
 		} catch (err) {
@@ -92,7 +91,7 @@ export const actions: Actions = {
 			const { sharedNow } = await setRecipeCategory(
 				actor,
 				event.params.id,
-				String(fd.get('categoryId') ?? ''),
+				formText(fd, 'categoryId'),
 				on === '1'
 			);
 			return { ok: true, sharedNow };
@@ -142,23 +141,21 @@ export const actions: Actions = {
 	addToList: async (event) => {
 		const ctx = householdActor(event);
 		const fd = await event.request.formData();
-		const servingsRaw = String(fd.get('servings') ?? '');
-		const parsed = parseAmount(servingsRaw);
-		if (!parsed.ok || !parsed.value || !parsed.value.isPositive())
-			return fail(400, { message: 'Enter the number of servings to plan' });
+		const servings = parsePositiveAmount(formText(fd, 'servings'));
+		if (!servings) return fail(400, { message: 'Enter the number of servings to plan' });
 		const includeOptional = fd
 			.getAll('includeOptional')
 			.map((v) => Number(v))
 			.filter((n) => Number.isInteger(n));
-		const clientKey = String(fd.get('clientKey') ?? '').slice(0, 100);
+		const clientKey = formText(fd, 'clientKey').slice(0, 100);
 		try {
 			const { listId, batches } = await addBatchesToDraft(ctx, {
-				listId: String(fd.get('listId') ?? '') || null,
+				listId: formTextOrNull(fd, 'listId'),
 				newListName: 'Shopping list',
 				batches: [
 					{
 						recipeId: event.params.id,
-						servings: parsed.value,
+						servings,
 						clientKey: clientKey || randomUUID(),
 						includeOptional
 					}
@@ -168,12 +165,10 @@ export const actions: Actions = {
 				ok: true,
 				listId,
 				duplicate: batches[0].duplicate,
-				servings: Dec.from(parsed.value).toString()
+				servings: servings.toString()
 			};
 		} catch (err) {
 			return actionError(err);
 		}
 	}
 };
-
-export const load = guard(loadImpl);

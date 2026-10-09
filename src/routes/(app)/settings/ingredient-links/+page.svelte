@@ -65,7 +65,7 @@
 	back="/settings"
 />
 
-{#if errorMessage}<div class="mt-3"><Alert kind="error">{errorMessage}</Alert></div>{/if}
+{#if errorMessage}<Alert class="mt-3" kind="error">{errorMessage}</Alert>{/if}
 
 {#if data.groups.length === 0}
 	<EmptyState

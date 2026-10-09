@@ -16,7 +16,7 @@
 	<button class="btn-secondary btn-sm" onclick={() => (newOpen = true)}>Create household</button>
 </PageHeader>
 
-{#if form?.message}<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>{/if}
+{#if form?.message}<Alert class="mb-3" kind="error">{form.message}</Alert>{/if}
 
 {#if data.memberships.length}
 	<ul class="flex flex-col gap-2">

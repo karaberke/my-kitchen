@@ -9,7 +9,7 @@ import { UNITS } from '$lib/shared/units';
 import { ingredientLine } from '$lib/shared/ingredient-line';
 import { scaleAmount } from '$lib/shared/scaling';
 import { prepareStepIngredients, scaledStepLine } from '$lib/shared/step-amounts';
-import type { RecipeDetail } from './detail';
+import { recipeColumns, recipeRevisionColumns, type RecipeDetail } from './detail';
 
 /* ---------------------------- export ---------------------------- */
 
@@ -24,26 +24,7 @@ export async function exportRecipes(
 	if (opts.scope === 'mine') conds.push(eq(recipes.ownerUserId, userId));
 	if (opts.recipeIds) conds.push(inArray(recipes.id, opts.recipeIds));
 	const rows = await dbx
-		.select({
-			id: recipes.id,
-			title: recipes.title,
-			description: recipes.description,
-			baseServings: recipes.baseServings,
-			yieldNote: recipes.yieldNote,
-			prepMinutes: recipes.prepMinutes,
-			cookMinutes: recipes.cookMinutes,
-			source: recipes.source,
-			notes: recipes.notes,
-			tags: recipes.tags,
-			convention: recipes.convention,
-			status: recipes.status,
-			revision: recipes.revision,
-			sourceAttribution: recipes.sourceAttribution,
-			ownerUserId: recipes.ownerUserId,
-			ownerName: user.name,
-			createdAt: recipes.createdAt,
-			updatedAt: recipes.updatedAt
-		})
+		.select({ ...recipeColumns, ...recipeRevisionColumns })
 		.from(recipes)
 		.innerJoin(user, eq(user.id, recipes.ownerUserId))
 		.where(and(...conds))

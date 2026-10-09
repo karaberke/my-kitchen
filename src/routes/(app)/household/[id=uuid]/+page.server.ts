@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent, RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 import { assertMember, loadHouseholdOrThrow, requireUser } from '$lib/server/access';
@@ -23,7 +23,7 @@ import { requestOrigin } from '$lib/server/auth';
  * Manage one household — not necessarily the active one. The id comes from the URL,
  * so the load and every action authorise against it rather than event.locals.household.
  */
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:household');
 	const householdId = event.params.id;
@@ -44,7 +44,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		canLeave: role === 'member' || others,
 		origin: inviteBase(event)
 	};
-};
+});
 
 /**
  * Absolute base for an invitation link. ORIGIN is empty in auto-origin mode (the
@@ -66,7 +66,7 @@ export const actions: Actions = {
 		const { user, householdId } = actor(event);
 		const fd = await event.request.formData();
 		try {
-			await renameHousehold(db, user.id, householdId, String(fd.get('name') ?? ''));
+			await renameHousehold(db, user.id, householdId, formText(fd, 'name'));
 		} catch (err) {
 			return actionError(err);
 		}
@@ -90,7 +90,7 @@ export const actions: Actions = {
 		const { user, householdId } = actor(event);
 		const fd = await event.request.formData();
 		try {
-			await revokeInvite(db, user.id, householdId, String(fd.get('inviteId') ?? ''));
+			await revokeInvite(db, user.id, householdId, formText(fd, 'inviteId'));
 		} catch (err) {
 			return actionError(err);
 		}
@@ -101,7 +101,7 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		const role = fd.get('role') === 'owner' ? 'owner' : 'member';
 		try {
-			await setMemberRole(user.id, householdId, String(fd.get('userId') ?? ''), role);
+			await setMemberRole(user.id, householdId, formText(fd, 'userId'), role);
 		} catch (err) {
 			return actionError(err);
 		}
@@ -110,7 +110,7 @@ export const actions: Actions = {
 	remove: async (event) => {
 		const { user, householdId } = actor(event);
 		const fd = await event.request.formData();
-		const target = String(fd.get('userId') ?? '');
+		const target = formText(fd, 'userId');
 		try {
 			await removeMember(user.id, householdId, target);
 		} catch (err) {
@@ -123,7 +123,7 @@ export const actions: Actions = {
 	deleteHousehold: async (event) => {
 		const { user, householdId } = actor(event);
 		const fd = await event.request.formData();
-		const confirmName = String(fd.get('confirmName') ?? '').trim();
+		const confirmName = formText(fd, 'confirmName').trim();
 		try {
 			// Authorise before anything else, so a non-member learns nothing about this household.
 			await assertMember(db, householdId, user.id);
@@ -140,5 +140,3 @@ export const actions: Actions = {
 		throw redirect(303, '/household');
 	}
 };
-
-export const load = guard(loadImpl);

@@ -3,6 +3,7 @@
 	import { invalidate } from '$app/navigation';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
+	import ConfirmSheet from '$lib/components/ConfirmSheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import FavoriteButton from '$lib/components/FavoriteButton.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
@@ -123,6 +124,15 @@
 	// svelte-ignore state_referenced_locally
 	let planServings = $state(data.recipe.baseServings ?? '4');
 	let fav = $derived(data.recipe.isFavorite);
+	const metaPills = $derived(
+		[
+			r.prepMinutes ? `Prep ${fmtMinutes(r.prepMinutes)}` : null,
+			r.cookMinutes ? `Cook ${fmtMinutes(r.cookMinutes)}` : null,
+			r.baseServings
+				? `${fmtNum(r.baseServings)} servings${r.yieldNote ? ` · ${r.yieldNote}` : ''}`
+				: r.yieldNote
+		].filter((t): t is string => !!t)
+	);
 	const optionalIngredients = $derived(r.ingredients.filter((i) => i.optional));
 	const cookHref = $derived(
 		`/recipes/${r.id}/cook?servings=${encodeURIComponent(servings.toString())}`
@@ -138,7 +148,7 @@
 </PageHeader>
 
 {#if f?.message}
-	<div class="mb-4"><Alert kind="error">{f.message}</Alert></div>
+	<Alert class="mb-4" kind="error">{f.message}</Alert>
 {/if}
 {#if f?.ok && f?.listId}
 	<div class="no-print mb-4">
@@ -151,16 +161,14 @@
 	</div>
 {/if}
 {#if r.status === 'draft'}
-	<div class="mb-4">
-		<Alert kind="warn"
-			>This is a draft. Add servings, ingredients and steps to use it for grocery planning and
-			cooking.</Alert
-		>
-	</div>
+	<Alert class="mb-4" kind="warn"
+		>This is a draft. Add servings, ingredients and steps to use it for grocery planning and
+		cooking.</Alert
+	>
 {:else if r.status === 'archived'}
-	<div class="mb-4">
-		<Alert kind="info">This recipe is archived. It stays available here and in history.</Alert>
-	</div>
+	<Alert class="mb-4" kind="info"
+		>This recipe is archived. It stays available here and in history.</Alert
+	>
 {/if}
 
 <article class="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
@@ -188,16 +196,8 @@
 				{r.description}
 			</p>{/if}
 		<div class="mt-3 flex flex-wrap gap-2 text-[12px] text-moss-soft">
-			{#if r.prepMinutes}<span class="rounded-lg bg-linen px-2.5 py-1.5"
-					>Prep {fmtMinutes(r.prepMinutes)}</span
-				>{/if}
-			{#if r.cookMinutes}<span class="rounded-lg bg-linen px-2.5 py-1.5"
-					>Cook {fmtMinutes(r.cookMinutes)}</span
-				>{/if}
-			{#if r.baseServings}<span class="rounded-lg bg-linen px-2.5 py-1.5"
-					>{fmtNum(r.baseServings)} servings{r.yieldNote ? ` · ${r.yieldNote}` : ''}</span
-				>{:else if r.yieldNote}<span class="rounded-lg bg-linen px-2.5 py-1.5">{r.yieldNote}</span
-				>{/if}
+			{#each metaPills as pill (pill)}<span class="rounded-lg bg-linen px-2.5 py-1.5">{pill}</span
+				>{/each}
 			{#each r.tags as tag (tag)}<a
 					href="/recipes?tag={encodeURIComponent(tag)}"
 					class="rounded-lg bg-parchment px-2.5 py-1.5 text-sage">#{tag}</a
@@ -595,15 +595,10 @@
 	</form>
 </Sheet>
 
-<Sheet
+<ConfirmSheet
 	bind:open={deleteOpen}
 	title="Delete this recipe?"
 	description="Cooking and purchase history keeps the recipe title and quantities. Shared members lose access right away. This cannot be undone."
->
-	<form method="post" action="?/delete" class="flex gap-2.5" use:enhance>
-		<button type="button" class="btn-secondary flex-1" onclick={() => (deleteOpen = false)}
-			>Cancel</button
-		>
-		<button class="btn-danger flex-1">Delete recipe</button>
-	</form>
-</Sheet>
+	action="?/delete"
+	confirmLabel="Delete recipe"
+/>

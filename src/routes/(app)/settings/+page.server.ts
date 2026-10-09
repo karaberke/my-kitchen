@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
@@ -7,12 +7,12 @@ import { db } from '$lib/server/db';
 import { assertMember, requireHousehold, requireUser } from '$lib/server/access';
 import { serverEnv } from '$lib/server/env';
 import { llmEnabled } from '$lib/server/llm/client';
-import { AUTH_LIMITS, consume } from '$lib/server/ratelimit';
+import { AUTH_LIMITS, consume, tooManyAttempts } from '$lib/server/ratelimit';
 import { consistencyCheck } from '$lib/server/pantry';
 import { getConvention, setConvention } from '$lib/server/households';
 import { PERSON_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	const env = serverEnv();
 	const providers = enabledSocialProviders();
@@ -42,13 +42,13 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		// pollMs comes from the root layout data.
 		aiEnabled: llmEnabled()
 	};
-};
+});
 
 export const actions: Actions = {
 	link: async (event) => {
 		requireUser(event);
 		const fd = await event.request.formData();
-		const provider = String(fd.get('provider') ?? '');
+		const provider = formText(fd, 'provider');
 		if (!enabledSocialProviders().includes(provider))
 			return fail(400, { message: 'That sign-in method is not available here.' });
 		let url: string | null | undefined;
@@ -68,7 +68,7 @@ export const actions: Actions = {
 	unlink: async (event) => {
 		requireUser(event);
 		const fd = await event.request.formData();
-		const accountId = String(fd.get('accountId') ?? '');
+		const accountId = formText(fd, 'accountId');
 		if (!accountId) return fail(400, { message: 'Nothing to remove.' });
 		try {
 			await auth.api.unlinkAccount({
@@ -88,7 +88,7 @@ export const actions: Actions = {
 	name: async (event) => {
 		requireUser(event);
 		const fd = await event.request.formData();
-		const name = cleanText(String(fd.get('name') ?? ''), PERSON_NAME_MAX_CHARS);
+		const name = cleanText(formText(fd, 'name'), PERSON_NAME_MAX_CHARS);
 		if (name.length < 2) return fail(400, { message: 'Enter your name', form: 'name' });
 		try {
 			await auth.api.updateUser({ body: { name }, headers: event.request.headers });
@@ -101,16 +101,16 @@ export const actions: Actions = {
 	password: async (event) => {
 		requireUser(event);
 		const fd = await event.request.formData();
-		const currentPassword = String(fd.get('currentPassword') ?? '');
-		const newPassword = String(fd.get('newPassword') ?? '');
+		const currentPassword = formText(fd, 'currentPassword');
+		const newPassword = formText(fd, 'newPassword');
 		if (newPassword.length < 8)
 			return fail(400, { message: 'Use at least 8 characters', form: 'password' });
-		if (newPassword !== String(fd.get('confirm') ?? ''))
+		if (newPassword !== formText(fd, 'confirm'))
 			return fail(400, { message: 'The two passwords do not match', form: 'password' });
 		const limit = consume(`password:${event.locals.user!.id}`, AUTH_LIMITS.password);
 		if (!limit.allowed)
 			return fail(429, {
-				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,
+				message: tooManyAttempts(limit.retryAfterSeconds),
 				form: 'password'
 			});
 		try {
@@ -153,5 +153,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-export const load = guard(loadImpl);

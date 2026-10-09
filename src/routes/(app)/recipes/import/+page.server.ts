@@ -1,5 +1,5 @@
 import { isRedirect } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
@@ -15,12 +15,12 @@ const TITLES = {
 	html: 'Import a recipe'
 } as const;
 
-const loadImpl = (event: PageServerLoadEvent) => {
+export const load = guard((event: PageServerLoadEvent) => {
 	requireUser(event);
 	const asked = event.url.searchParams.get('kind');
 	const kind = asked === 'pdf' ? 'pdf' : asked === 'url' ? 'url' : 'html';
 	return { title: TITLES[kind], kind, aiEnabled: llmEnabled() };
-};
+});
 
 export const actions: Actions = {
 	parse: async (event) => {
@@ -28,9 +28,9 @@ export const actions: Actions = {
 			const user = requireUser(event);
 			const fd = await event.request.formData();
 			const file = fd.get('file');
-			const link = String(fd.get('url') ?? '').trim();
+			const link = formText(fd, 'url').trim();
 			const common = {
-				titleOverride: String(fd.get('title') ?? '').trim(),
+				titleOverride: formText(fd, 'title').trim(),
 				// The checkbox asks the assistant to read even a page the app read itself.
 				forced: fd.get('useAssistant') === 'on',
 				clientParsed: fd.get('clientParsed')
@@ -47,7 +47,7 @@ export const actions: Actions = {
 						}
 					: link
 						? { ...common, kind: 'link', url: link }
-						: { ...common, kind: 'pasted', html: String(fd.get('html') ?? '') }
+						: { ...common, kind: 'pasted', html: formText(fd, 'html') }
 			);
 		} catch (err) {
 			// An unreadable file is the user's problem to fix, not a crash.
@@ -70,5 +70,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-export const load = guard(loadImpl);

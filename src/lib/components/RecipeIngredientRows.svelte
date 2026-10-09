@@ -120,9 +120,7 @@
 			>Amounts like 2, 1.5, 1/2 or 1 ½ · leave empty for “to taste”</span
 		>
 	</div>
-	{#if errors.ingredients}<div class="mb-2">
-			<Alert kind="error">{errors.ingredients}</Alert>
-		</div>{/if}
+	{#if errors.ingredients}<Alert class="mb-2" kind="error">{errors.ingredients}</Alert>{/if}
 	<ol class="flex flex-col gap-2.5">
 		{#each rows as row, i (row.key)}
 			<li

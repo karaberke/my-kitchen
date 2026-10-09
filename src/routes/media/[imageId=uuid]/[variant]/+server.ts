@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { guard, MEDIA_CACHE_CONTROL } from '$lib/server/http';
+import { guard, mediaHeaders, notModified } from '$lib/server/http';
 import type { RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUserApi } from '$lib/server/access';
@@ -16,7 +16,7 @@ import { storage } from '$lib/server/media/storage';
  * returned; the ETag is never a substitute for it. Browser may cache privately
  * but must revalidate every time; Cloudflare must bypass.
  */
-const GETImpl = async (event: RequestEvent) => {
+export const GET = guard(async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	const variant = event.params.variant as ImageVariant;
 	if (!(variant in IMAGE_VARIANTS)) throw error(404, 'Not found');
@@ -24,16 +24,9 @@ const GETImpl = async (event: RequestEvent) => {
 	if (!image) throw error(404, 'Not found');
 
 	const etag = `"${image.id}:${image.version}:${variant}"`;
-	const headers = new Headers({
-		'cache-control': MEDIA_CACHE_CONTROL,
-		etag,
-		vary: 'Cookie',
-		'x-cache-policy': 'media'
-	});
-	const inm = event.request.headers.get('if-none-match');
-	if (inm && inm.split(',').some((t) => t.trim() === etag)) {
-		return new Response(null, { status: 304, headers });
-	}
+	const headers = mediaHeaders(etag);
+	const unchanged = notModified(event, etag, headers);
+	if (unchanged) return unchanged;
 	const obj = await storage().get(variantKey(image.objectKey, variant));
 	if (!obj) throw error(404, 'Not found');
 	const meta = image.variants[variant];
@@ -41,6 +34,4 @@ const GETImpl = async (event: RequestEvent) => {
 	if (obj.size !== null) headers.set('content-length', String(obj.size));
 	headers.set('content-disposition', 'inline');
 	return new Response(obj.stream, { status: 200, headers });
-};
-
-export const GET = guard(GETImpl);
+});

@@ -12,12 +12,10 @@
 		You get a personal household right away. Invite others later.
 	</p>
 	{#if !data.registrationOpen}
-		<div class="mt-4">
-			<Alert kind="warn">
-				Registration is closed on this installation. Ask a household owner for an invitation link;
-				it lets you create an account.
-			</Alert>
-		</div>
+		<Alert class="mt-4" kind="warn">
+			Registration is closed on this installation. Ask a household owner for an invitation link; it
+			lets you create an account.
+		</Alert>
 	{:else}
 		<form
 			method="post"

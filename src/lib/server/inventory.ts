@@ -78,6 +78,13 @@ export async function lockLots(
 	return new Map(rows.map((r) => [r.id, { ...r, quantity: Dec.from(r.quantity) }]));
 }
 
+/** Lock one lot of the household, or 404. */
+export async function lockLot(tx: Tx, householdId: string, lotId: string): Promise<LockedLot> {
+	const lot = (await lockLots(tx, householdId, [lotId])).get(lotId);
+	if (!lot) throw new AppError(404, 'Pantry lot not found');
+	return lot;
+}
+
 export interface EventInput {
 	householdId: string;
 	kind: EventKind;

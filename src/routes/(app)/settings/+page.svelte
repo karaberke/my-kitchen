@@ -2,7 +2,8 @@
 	import { enhance } from '$app/forms';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
-	import { clearToasts, pushToast } from '$lib/client/toast.svelte';
+	import { onSuccess } from '$lib/client/enhance';
+	import { clearToasts } from '$lib/client/toast.svelte';
 	import { PERSON_NAME_MAX_CHARS } from '$lib/shared/text';
 	let { data, form } = $props();
 	const msg = (f: string) => (form?.form === f ? form : null);
@@ -14,20 +15,12 @@
 <div class="grid gap-4 md:grid-cols-2">
 	<section class="card p-4">
 		<h2 class="text-[16px]">Your name</h2>
-		{#if msg('name')?.message}<div class="mt-2">
-				<Alert kind="error">{msg('name')?.message}</Alert>
-			</div>{/if}
+		{#if msg('name')?.message}<Alert class="mt-2" kind="error">{msg('name')?.message}</Alert>{/if}
 		<form
 			method="post"
 			action="?/name"
 			class="mt-3 flex gap-2"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					if (result.type === 'success') {
-						pushToast('Name updated.', { kind: 'success' });
-					}
-				}}
+			use:enhance={onSuccess('Name updated.')}
 		>
 			<input
 				class="field flex-1"
@@ -48,19 +41,13 @@
 
 	<section class="card p-4">
 		<h2 class="text-[16px]">Password</h2>
-		{#if msg('password')?.message}<div class="mt-2">
-				<Alert kind="error">{msg('password')?.message}</Alert>
-			</div>{/if}
+		{#if msg('password')?.message}<Alert class="mt-2" kind="error">{msg('password')?.message}</Alert
+			>{/if}
 		<form
 			method="post"
 			action="?/password"
 			class="mt-3 flex flex-col gap-3"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update();
-					if (result.type === 'success')
-						pushToast('Password updated. Other sessions were signed out.', { kind: 'success' });
-				}}
+			use:enhance={onSuccess('Password updated. Other sessions were signed out.', { reset: true })}
 		>
 			<div>
 				<label class="label" for="cur">Current password</label><input
@@ -108,11 +95,7 @@
 			method="post"
 			action="?/convention"
 			class="mt-3 flex gap-2"
-			use:enhance={() =>
-				async ({ result, update }) => {
-					await update({ reset: false });
-					if (result.type === 'success') pushToast('Saved.', { kind: 'success' });
-				}}
+			use:enhance={onSuccess('Saved.')}
 		>
 			<select
 				class="field flex-1"
@@ -153,13 +136,12 @@
 			<button class="btn-ghost btn-sm">Run pantry consistency check</button>
 		</form>
 		{#if report}
-			<div class="mt-2">
-				<Alert
-					kind={report.lotMismatches.length || report.lineMismatches.length ? 'warn' : 'success'}
-					>Checked {report.lotsChecked} lots: {report.lotMismatches.length} balance mismatches, {report
-						.lineMismatches.length} purchase credit mismatches.</Alert
-				>
-			</div>
+			<Alert
+				class="mt-2"
+				kind={report.lotMismatches.length || report.lineMismatches.length ? 'warn' : 'success'}
+				>Checked {report.lotsChecked} lots: {report.lotMismatches.length} balance mismatches, {report
+					.lineMismatches.length} purchase credit mismatches.</Alert
+			>
 		{/if}
 	</section>
 

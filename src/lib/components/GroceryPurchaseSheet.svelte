@@ -51,9 +51,7 @@
 		: ''}
 >
 	{#if line}
-		{#if error}<div class="mb-3">
-				<Alert kind="error">{error}</Alert>
-			</div>{/if}
+		{#if error}<Alert class="mb-3" kind="error">{error}</Alert>{/if}
 		<form method="post" action="?/purchase" class="flex flex-col gap-3.5" use:enhance={mutate()}>
 			<input type="hidden" name="operationId" value={operationId} />
 			<input type="hidden" name="lineId" value={line.id} />

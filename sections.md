@@ -610,7 +610,7 @@ pnpm test:e2e`); the app starts on port 4173 against the test database
 - `scripts/` — `migrate.mjs` (70), `seed-perf.mjs` (230),
   `delete-user.mjs` (190), `catalog-data.mjs` (165),
   `consistency-check.mjs` (backs `pnpm db:check`), `measure.mjs`,
-  `explain.mjs`, `db-ssl.mjs`, `start.mjs`, `build-catalog-migration.mjs`
+  `explain.mjs`, `db-ssl.mjs`, `start.mjs`
 - `compose.dev.yaml` (PostgreSQL 17 on 127.0.0.1:5433), `vitest.config.ts`,
   `playwright.config.ts`, `eslint.config.js`, `package.json`
 - `docs/` — `design-decisions.md` (read before changing ownership,
