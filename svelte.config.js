@@ -18,9 +18,9 @@ const config = {
 		 * Containment layer, not the primary defence — the app renders no
 		 * user HTML (no {@html}, no innerHTML anywhere in src/). SvelteKit adds a
 		 * nonce to its own hydration script; everything else is same-origin.
-		 *   style-src      Google Fonts serves the stylesheet linked in app.html
+		 *   style-src      same-origin stylesheets only (fonts are self-hosted)
 		 *   style-src-attr the two static `style=` attributes (app.html, recipe page)
-		 *   font-src       where that stylesheet fetches the font files from
+		 *   font-src       the self-hosted font files under /_app/immutable/
 		 *   connect-src    the remote functions under /_app/remote/ (revision poll,
 		 *                  barcode lookup, autocomplete)
 		 *   script-src     'wasm-unsafe-eval' lets the barcode reader compile its
@@ -35,9 +35,9 @@ const config = {
 			directives: {
 				'default-src': ['self'],
 				'script-src': ['self', 'wasm-unsafe-eval'],
-				'style-src': ['self', 'https://fonts.googleapis.com'],
+				'style-src': ['self'],
 				'style-src-attr': ['unsafe-inline'],
-				'font-src': ['self', 'https://fonts.gstatic.com'],
+				'font-src': ['self'],
 				'img-src': ['self', 'data:'],
 				'connect-src': ['self'],
 				'object-src': ['none'],

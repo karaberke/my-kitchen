@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { RequestEvent } from '@sveltejs/kit';
-import { db as appDb, type DbOrTx } from '$lib/server/db';
+import { db as appDb, type DbOrTx, type Tx } from '$lib/server/db';
 import {
 	householdInvites,
 	householdMembers,
@@ -17,6 +17,7 @@ import {
 	assertMember,
 	assertOwner,
 	memberHousehold,
+	memberRowOf,
 	pickActiveMembership,
 	requireHousehold,
 	requireUserApi,
@@ -305,37 +306,31 @@ async function ownerCount(db: DbOrTx, householdId: string): Promise<number> {
 	return n;
 }
 
+/** Lock a member row of the household, or 404. */
+async function lockMember(tx: Tx, householdId: string, userId: string) {
+	const [member] = await tx
+		.select({ role: householdMembers.role })
+		.from(householdMembers)
+		.where(memberRowOf(householdId, userId))
+		.for('update');
+	if (!member) throw new AppError(404, 'Member not found');
+	return member;
+}
+
 /** Owners can remove members; anyone can leave. The final owner must transfer ownership first. */
 export async function removeMember(actorId: string, householdId: string, targetUserId: string) {
 	await withTransaction(async (tx) => {
 		const actorRole = await assertMember(tx, householdId, actorId);
 		if (actorId !== targetUserId && actorRole !== 'owner')
 			throw forbidden('Only owners can remove other members');
-		const [target] = await tx
-			.select({ role: householdMembers.role })
-			.from(householdMembers)
-			.where(
-				and(
-					eq(householdMembers.householdId, householdId),
-					eq(householdMembers.userId, targetUserId)
-				)
-			)
-			.for('update');
-		if (!target) throw new AppError(404, 'Member not found');
+		const target = await lockMember(tx, householdId, targetUserId);
 		if (target.role === 'owner' && (await ownerCount(tx, householdId)) <= 1) {
 			throw new AppError(
 				409,
 				'Transfer ownership to another member before removing the last owner'
 			);
 		}
-		await tx
-			.delete(householdMembers)
-			.where(
-				and(
-					eq(householdMembers.householdId, householdId),
-					eq(householdMembers.userId, targetUserId)
-				)
-			);
+		await tx.delete(householdMembers).where(memberRowOf(householdId, targetUserId));
 	});
 }
 
@@ -347,29 +342,11 @@ export async function setMemberRole(
 ) {
 	await withTransaction(async (tx) => {
 		await assertOwner(tx, householdId, actorId);
-		const [target] = await tx
-			.select({ role: householdMembers.role })
-			.from(householdMembers)
-			.where(
-				and(
-					eq(householdMembers.householdId, householdId),
-					eq(householdMembers.userId, targetUserId)
-				)
-			)
-			.for('update');
-		if (!target) throw new AppError(404, 'Member not found');
+		const target = await lockMember(tx, householdId, targetUserId);
 		if (target.role === 'owner' && role === 'member' && (await ownerCount(tx, householdId)) <= 1) {
 			throw new AppError(409, 'Promote another member to owner first');
 		}
-		await tx
-			.update(householdMembers)
-			.set({ role })
-			.where(
-				and(
-					eq(householdMembers.householdId, householdId),
-					eq(householdMembers.userId, targetUserId)
-				)
-			);
+		await tx.update(householdMembers).set({ role }).where(memberRowOf(householdId, targetUserId));
 	});
 }
 

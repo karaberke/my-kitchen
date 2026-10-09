@@ -149,7 +149,7 @@
 		back="/recipes/add"
 	/>
 
-	{#if form?.message}<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>{/if}
+	{#if form?.message}<Alert class="mb-3" kind="error">{form.message}</Alert>{/if}
 
 	<form
 		method="post"

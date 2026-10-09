@@ -4,6 +4,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
+	import ConfirmSheet from '$lib/components/ConfirmSheet.svelte';
 	import { clearToasts, pushToast } from '$lib/client/toast.svelte';
 	import { fmtDateTime, initials } from '$lib/client/format';
 	import { keepForm } from '$lib/client/enhance';
@@ -38,7 +39,7 @@
 	{/if}
 </PageHeader>
 
-{#if form?.message}<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>{/if}
+{#if form?.message}<Alert class="mb-3" kind="error">{form.message}</Alert>{/if}
 
 <section>
 	<h2 class="mb-2 text-[16px]">Members</h2>
@@ -202,42 +203,33 @@
 	</form>
 </Sheet>
 
-<Sheet
+<ConfirmSheet
 	bind:open={deleteOpen}
 	title="Delete this household?"
 	description="The pantry, grocery lists and history for “{data.managed
 		.name}” will be erased. Other members lose access right away. Your recipes stay with you. This cannot be undone."
+	action="?/deleteHousehold"
+	confirmLabel="Delete household"
+	disabled={!confirmMatches}
+	submit={() => {
+		clearToasts();
+		return async ({ update }) => {
+			await update({ reset: false });
+			deleteOpen = false;
+		};
+	}}
 >
-	<form
-		method="post"
-		action="?/deleteHousehold"
-		class="flex flex-col gap-3.5"
-		use:enhance={() => {
-			clearToasts();
-			return async ({ update }) => {
-				await update({ reset: false });
-				deleteOpen = false;
-			};
-		}}
-	>
-		<div>
-			<label class="label" for="hh-delete-confirm"
-				>Type <strong>{data.managed.name}</strong> to confirm</label
-			>
-			<input
-				class="field"
-				id="hh-delete-confirm"
-				name="confirmName"
-				autocomplete="off"
-				spellcheck="false"
-				bind:value={confirmText}
-			/>
-		</div>
-		<div class="flex gap-2.5">
-			<button type="button" class="btn-secondary flex-1" onclick={() => (deleteOpen = false)}
-				>Cancel</button
-			>
-			<button class="btn-danger flex-1" disabled={!confirmMatches}>Delete household</button>
-		</div>
-	</form>
-</Sheet>
+	<div>
+		<label class="label" for="hh-delete-confirm"
+			>Type <strong>{data.managed.name}</strong> to confirm</label
+		>
+		<input
+			class="field"
+			id="hh-delete-confirm"
+			name="confirmName"
+			autocomplete="off"
+			spellcheck="false"
+			bind:value={confirmText}
+		/>
+	</div>
+</ConfirmSheet>

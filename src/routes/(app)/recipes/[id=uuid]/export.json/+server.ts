@@ -1,19 +1,15 @@
 import type { RequestEvent } from './$types';
-import { guard } from '$lib/server/http';
+import { downloadResponse, guard } from '$lib/server/http';
 import { db } from '$lib/server/db';
 import { requireUserApi } from '$lib/server/access';
 import { exportRecipes } from '$lib/server/recipes';
 
-const GETImpl = async (event: RequestEvent) => {
+export const GET = guard(async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	const data = await exportRecipes(db, user.id, { recipeIds: [event.params.id], scope: 'all' });
-	return new Response(JSON.stringify(data, null, 2), {
-		headers: {
-			'content-type': 'application/json; charset=utf-8',
-			'cache-control': 'private, no-store',
-			'content-disposition': `attachment; filename="recipe-${event.params.id}.json"`
-		}
-	});
-};
-
-export const GET = guard(GETImpl);
+	return downloadResponse(
+		JSON.stringify(data, null, 2),
+		'application/json; charset=utf-8',
+		`recipe-${event.params.id}.json`
+	);
+});

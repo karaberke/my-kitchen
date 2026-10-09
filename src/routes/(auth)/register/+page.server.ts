@@ -1,14 +1,20 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard, safeNext } from '$lib/server/http';
+import { formText, guard, safeNext } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { registrationAllowed } from '$lib/server/registration';
-import { AUTH_LIMITS, clientKey, consume } from '$lib/server/ratelimit';
+import {
+	AUTH_LIMITS,
+	TOO_MANY_ATTEMPTS_WAIT,
+	clientKey,
+	consume,
+	tooManyAttempts
+} from '$lib/server/ratelimit';
 import { PERSON_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
 
-const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
+export const load = guard(async ({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, '/recipes');
 	const next = safeNext(url.searchParams.get('next'));
 	return {
@@ -19,13 +25,13 @@ const loadImpl = async ({ locals, url }: PageServerLoadEvent) => {
 		providers: (await registrationAllowed(db, next)) ? enabledSocialProviders() : [],
 		next
 	};
-};
+});
 
 export const actions: Actions = {
 	social: async (event) => {
 		const fd = await event.request.formData();
-		const next = safeNext(String(fd.get('next') ?? ''));
-		const provider = String(fd.get('provider') ?? '');
+		const next = safeNext(formText(fd, 'next'));
+		const provider = formText(fd, 'provider');
 		if (!enabledSocialProviders().includes(provider) || !(await registrationAllowed(db, next)))
 			return fail(400, { message: 'That sign-in method is not available here.' });
 		let url: string | null | undefined;
@@ -43,12 +49,10 @@ export const actions: Actions = {
 	},
 	signup: async (event) => {
 		const fd = await event.request.formData();
-		const name = cleanText(String(fd.get('name') ?? ''), PERSON_NAME_MAX_CHARS);
-		const email = String(fd.get('email') ?? '')
-			.trim()
-			.slice(0, 200);
-		const password = String(fd.get('password') ?? '').slice(0, 200);
-		const next = safeNext(String(fd.get('next') ?? ''));
+		const name = cleanText(formText(fd, 'name'), PERSON_NAME_MAX_CHARS);
+		const email = formText(fd, 'email').trim().slice(0, 200);
+		const password = formText(fd, 'password').slice(0, 200);
+		const next = safeNext(formText(fd, 'next'));
 		if (!(await registrationAllowed(db, next)))
 			return fail(403, {
 				message: 'Registration is closed on this installation.',
@@ -63,7 +67,7 @@ export const actions: Actions = {
 		const limit = consume(`signup:${clientKey(event)}`, AUTH_LIMITS.signUp);
 		if (!limit.allowed)
 			return fail(429, {
-				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,
+				message: tooManyAttempts(limit.retryAfterSeconds),
 				name,
 				email
 			});
@@ -76,7 +80,7 @@ export const actions: Actions = {
 			if (err instanceof APIError) {
 				const msg =
 					err.statusCode === 429
-						? 'Too many attempts. Wait a minute and try again.'
+						? TOO_MANY_ATTEMPTS_WAIT
 						: err.message.includes('exist')
 							? 'An account with this email already exists'
 							: err.message;
@@ -87,5 +91,3 @@ export const actions: Actions = {
 		throw redirect(303, next);
 	}
 };
-
-export const load = guard(loadImpl);

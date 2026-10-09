@@ -86,6 +86,20 @@ export function householdActor(event: RequestEvent): ActorContext {
 	return { userId: user.id, actorName: user.name, householdId: household.id };
 }
 
+/** The `household_member` row of this user in this household. */
+export function memberRowOf(householdId: string, userId: string) {
+	return and(eq(householdMembers.householdId, householdId), eq(householdMembers.userId, userId));
+}
+
+/** The household columns `memberHousehold` and `loadHouseholdOrThrow` return. */
+const householdColumns = {
+	id: households.id,
+	name: households.name,
+	pantryRevision: households.pantryRevision,
+	groceryRevision: households.groceryRevision,
+	planRevision: households.planRevision
+};
+
 /**
  * Authoritative membership check against the database (not the request cache)
  * for every write and for every read of household data. Returns the role.
@@ -98,7 +112,7 @@ export async function assertMember(
 	const [row] = await db
 		.select({ role: householdMembers.role })
 		.from(householdMembers)
-		.where(and(eq(householdMembers.householdId, householdId), eq(householdMembers.userId, userId)))
+		.where(memberRowOf(householdId, userId))
 		.limit(1);
 	if (!row) throw forbidden('You are not a member of this household');
 	return row.role;
@@ -115,20 +129,26 @@ export async function assertOwner(db: DbOrTx, householdId: string, userId: strin
  */
 export async function memberHousehold(db: DbOrTx, householdId: string, userId: string) {
 	const [row] = await db
-		.select({
-			id: households.id,
-			name: households.name,
-			role: householdMembers.role,
-			pantryRevision: households.pantryRevision,
-			groceryRevision: households.groceryRevision,
-			planRevision: households.planRevision
-		})
+		.select({ ...householdColumns, role: householdMembers.role })
 		.from(householdMembers)
 		.innerJoin(households, eq(households.id, householdMembers.householdId))
-		.where(and(eq(householdMembers.householdId, householdId), eq(householdMembers.userId, userId)))
+		.where(memberRowOf(householdId, userId))
 		.limit(1);
 	if (!row) throw forbidden('You are not a member of this household');
 	return row;
+}
+
+/** The load opening of a household page: the user, and their active household from `memberHousehold`. */
+export async function requireMemberHousehold(db: DbOrTx, event: RequestEvent) {
+	const { user, household } = requireHousehold(event);
+	return { user, household: await memberHousehold(db, household.id, user.id) };
+}
+
+/** `requireHousehold`, then `assertMember` against the database. */
+export async function requireMember(db: DbOrTx, event: RequestEvent) {
+	const { user, household } = requireHousehold(event);
+	await assertMember(db, household.id, user.id);
+	return { user, household };
 }
 
 /** The `{ pantry, grocery, plan }` counters a page hands to `PollRevisions`. */
@@ -142,13 +162,7 @@ export function revisionsOf(h: {
 
 export async function loadHouseholdOrThrow(db: DbOrTx, householdId: string) {
 	const [row] = await db
-		.select({
-			id: households.id,
-			name: households.name,
-			pantryRevision: households.pantryRevision,
-			groceryRevision: households.groceryRevision,
-			planRevision: households.planRevision
-		})
+		.select(householdColumns)
 		.from(households)
 		.where(eq(households.id, householdId))
 		.limit(1);

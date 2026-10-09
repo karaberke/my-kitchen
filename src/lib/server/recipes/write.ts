@@ -9,14 +9,19 @@ import {
 	recipes,
 	user
 } from '$lib/server/db/schema';
-import { assertRecipeOwner, assertRecipeReadable, recipeReadableBy } from '$lib/server/access';
+import {
+	assertRecipeOwner,
+	assertRecipeReadable,
+	memberRowOf,
+	recipeReadableBy
+} from '$lib/server/access';
 import { getActiveHouseholdId } from '$lib/server/households';
 import { assertIngredientsVisible } from '$lib/server/ingredients';
 import { AppError, ReviewConflict, notFound } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
 import type { RecipeFormInput, ValidRecipe } from '$lib/shared/recipe-input';
 import { withTransaction } from '$lib/server/operations';
-import type { RecipeDetail } from './detail';
+import { recipeColumns, type RecipeDetail } from './detail';
 
 /** A stored recipe as the edit form's input, ready to save back unchanged. */
 export function recipeToFormInput(recipe: RecipeDetail): RecipeFormInput {
@@ -193,23 +198,7 @@ export async function updateRecipe(
 export async function duplicateRecipe(userId: string, recipeId: string): Promise<string> {
 	return withTransaction(async (tx) => {
 		const [src] = await tx
-			.select({
-				id: recipes.id,
-				ownerUserId: recipes.ownerUserId,
-				ownerName: user.name,
-				title: recipes.title,
-				description: recipes.description,
-				baseServings: recipes.baseServings,
-				yieldNote: recipes.yieldNote,
-				prepMinutes: recipes.prepMinutes,
-				cookMinutes: recipes.cookMinutes,
-				source: recipes.source,
-				notes: recipes.notes,
-				tags: recipes.tags,
-				convention: recipes.convention,
-				status: recipes.status,
-				imageId: recipes.imageId
-			})
+			.select({ ...recipeColumns, imageId: recipes.imageId })
 			.from(recipes)
 			.innerJoin(user, eq(user.id, recipes.ownerUserId))
 			.where(and(eq(recipes.id, recipeId), recipeReadableBy(userId)))
@@ -283,9 +272,7 @@ export async function setRecipeShare(
 		const [member] = await tx
 			.select({ role: householdMembers.role })
 			.from(householdMembers)
-			.where(
-				and(eq(householdMembers.householdId, householdId), eq(householdMembers.userId, userId))
-			)
+			.where(memberRowOf(householdId, userId))
 			.limit(1);
 		if (!member) throw new AppError(403, 'You can only share with households you belong to');
 		if (shared)

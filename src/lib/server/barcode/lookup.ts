@@ -138,38 +138,25 @@ export function configuredAdapters(): ProviderAdapter[] {
 /* Cache reads and writes                                                */
 /* -------------------------------------------------------------------- */
 
-function productView(row: typeof barcodeProducts.$inferSelect): ProductView {
-	return {
-		source: row.source,
-		sourceRef: row.sourceRef,
-		sourceVersion: row.sourceVersion,
-		sourceDate: row.sourceDate,
-		retrievedAt: row.retrievedAt,
-		brand: row.brand,
-		name: row.name,
-		packageAmount: row.packageAmount === null ? null : Dec.from(row.packageAmount).toString(),
-		packageUnit: row.packageUnit,
-		packageLabelText: row.packageLabelText,
-		servingAmount: row.servingAmount === null ? null : Dec.from(row.servingAmount).toString(),
-		servingUnit: row.servingUnit,
-		servingBasis: row.servingBasis
-	};
-}
-
-/** The same view for a record that has just arrived and not been re-read. */
-function liveView(p: ProviderProduct): ProductView {
+/** The client view of a product: a cached row, or a record that has just arrived and not been re-read. */
+function productView(
+	p: Omit<ProductView, 'retrievedAt' | 'packageAmount' | 'servingAmount'>,
+	retrievedAt: string,
+	packageAmount: Dec | null,
+	servingAmount: Dec | null
+): ProductView {
 	return {
 		source: p.source,
 		sourceRef: p.sourceRef,
 		sourceVersion: p.sourceVersion,
 		sourceDate: p.sourceDate,
-		retrievedAt: new Date().toISOString(),
+		retrievedAt,
 		brand: p.brand,
 		name: p.name,
-		packageAmount: p.packageAmount?.toString() ?? null,
+		packageAmount: packageAmount?.toString() ?? null,
 		packageUnit: p.packageUnit,
 		packageLabelText: p.packageLabelText,
-		servingAmount: p.servingAmount?.toString() ?? null,
+		servingAmount: servingAmount?.toString() ?? null,
 		servingUnit: p.servingUnit,
 		servingBasis: p.servingBasis
 	};
@@ -192,44 +179,26 @@ async function freshMisses(gtin: string): Promise<Set<BarcodeSource>> {
 
 /** Store a product and its nutrients, replacing any earlier record of it. */
 async function storeProduct(product: ProviderProduct): Promise<void> {
+	const fields = {
+		sourceRef: product.sourceRef,
+		sourceVersion: product.sourceVersion,
+		sourceDate: product.sourceDate,
+		brand: product.brand,
+		name: product.name,
+		packageAmount: product.packageAmount?.toDb() ?? null,
+		packageUnit: product.packageUnit,
+		packageLabelText: product.packageLabelText,
+		servingAmount: product.servingAmount?.toDb() ?? null,
+		servingUnit: product.servingUnit,
+		servingBasis: product.servingBasis,
+		retrievedAt: sql`now()`,
+		expiresAt: sql`now() + make_interval(days => ${PRODUCT_TTL_DAYS})`
+	};
 	await withTransaction(async (tx) => {
 		const [row] = await tx
 			.insert(barcodeProducts)
-			.values({
-				gtin: product.gtin,
-				source: product.source,
-				sourceRef: product.sourceRef,
-				sourceVersion: product.sourceVersion,
-				sourceDate: product.sourceDate,
-				brand: product.brand,
-				name: product.name,
-				packageAmount: product.packageAmount?.toDb() ?? null,
-				packageUnit: product.packageUnit,
-				packageLabelText: product.packageLabelText,
-				servingAmount: product.servingAmount?.toDb() ?? null,
-				servingUnit: product.servingUnit,
-				servingBasis: product.servingBasis,
-				retrievedAt: sql`now()`,
-				expiresAt: sql`now() + make_interval(days => ${PRODUCT_TTL_DAYS})`
-			})
-			.onConflictDoUpdate({
-				target: [barcodeProducts.gtin, barcodeProducts.source],
-				set: {
-					sourceRef: product.sourceRef,
-					sourceVersion: product.sourceVersion,
-					sourceDate: product.sourceDate,
-					brand: product.brand,
-					name: product.name,
-					packageAmount: product.packageAmount?.toDb() ?? null,
-					packageUnit: product.packageUnit,
-					packageLabelText: product.packageLabelText,
-					servingAmount: product.servingAmount?.toDb() ?? null,
-					servingUnit: product.servingUnit,
-					servingBasis: product.servingBasis,
-					retrievedAt: sql`now()`,
-					expiresAt: sql`now() + make_interval(days => ${PRODUCT_TTL_DAYS})`
-				}
-			})
+			.values({ gtin: product.gtin, source: product.source, ...fields })
+			.onConflictDoUpdate({ target: [barcodeProducts.gtin, barcodeProducts.source], set: fields })
 			.returning({ id: barcodeProducts.id });
 
 		await tx.delete(barcodeProductNutrients).where(eq(barcodeProductNutrients.productId, row.id));
@@ -255,22 +224,15 @@ async function storeProduct(product: ProviderProduct): Promise<void> {
 
 /** Record that one source confirmed it does not hold this product. */
 async function storeMiss(gtin: string, source: BarcodeSource): Promise<void> {
+	const fields = {
+		confirmedAt: sql`now()`,
+		expiresAt: sql`now() + make_interval(hours => ${MISS_TTL_HOURS})`
+	};
 	await withTransaction(async (tx) => {
 		await tx
 			.insert(barcodeMisses)
-			.values({
-				gtin,
-				source,
-				confirmedAt: sql`now()`,
-				expiresAt: sql`now() + make_interval(hours => ${MISS_TTL_HOURS})`
-			})
-			.onConflictDoUpdate({
-				target: [barcodeMisses.gtin, barcodeMisses.source],
-				set: {
-					confirmedAt: sql`now()`,
-					expiresAt: sql`now() + make_interval(hours => ${MISS_TTL_HOURS})`
-				}
-			});
+			.values({ gtin, source, ...fields })
+			.onConflictDoUpdate({ target: [barcodeMisses.gtin, barcodeMisses.source], set: fields });
 		await tx
 			.delete(barcodeProducts)
 			.where(and(eq(barcodeProducts.gtin, gtin), eq(barcodeProducts.source, source)));
@@ -486,9 +448,17 @@ export async function lookupBarcode(
 	const product =
 		ORDER.map((s) => {
 			const live = fetched.get(s);
-			if (live) return liveView(live);
+			if (live)
+				return productView(live, new Date().toISOString(), live.packageAmount, live.servingAmount);
 			const row = cached.get(s);
-			return row ? productView(row) : null;
+			return row
+				? productView(
+						row,
+						row.retrievedAt,
+						Dec.fromNullable(row.packageAmount),
+						Dec.fromNullable(row.servingAmount)
+					)
+				: null;
 		}).find((v) => v !== null) ?? null;
 
 	const enabled = reports.filter((r) => r.status !== 'disabled' && r.status !== 'not_asked');

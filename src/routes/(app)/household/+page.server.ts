@@ -1,16 +1,16 @@
 import { redirect } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
 import { createHousehold, setActiveHousehold } from '$lib/server/households';
 
 /** The list of households. Managing one happens on /household/[id]. */
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	requireUser(event);
 	event.depends('app:household');
 	return { title: 'Households' };
-};
+});
 
 export const actions: Actions = {
 	// Posted to by HouseholdSwitcher in the app shell as well as this page.
@@ -18,7 +18,7 @@ export const actions: Actions = {
 		const user = requireUser(event);
 		const fd = await event.request.formData();
 		try {
-			await setActiveHousehold(db, user.id, String(fd.get('householdId') ?? ''));
+			await setActiveHousehold(db, user.id, formText(fd, 'householdId'));
 		} catch (err) {
 			return actionError(err);
 		}
@@ -29,12 +29,10 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		let id: string;
 		try {
-			id = await createHousehold(db, user.id, String(fd.get('name') ?? ''));
+			id = await createHousehold(db, user.id, formText(fd, 'name'));
 		} catch (err) {
 			return actionError(err);
 		}
 		throw redirect(303, `/household/${id}`);
 	}
 };
-
-export const load = guard(loadImpl);

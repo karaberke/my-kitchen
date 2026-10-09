@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, guard } from '$lib/server/http';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUser } from '$lib/server/access';
@@ -7,12 +7,12 @@ import { linkIngredientNames, listUnlinkedIngredients } from '$lib/server/ingred
 import { createCustomIngredient } from '$lib/server/ingredients';
 import { llmEnabled } from '$lib/server/llm/client';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const user = requireUser(event);
 	event.depends('app:ingredient-links');
 	const groups = await listUnlinkedIngredients(db, user.id);
 	return { title: 'Pantry links', groups, aiEnabled: llmEnabled() };
-};
+});
 
 /** Reads the rows the page posted: link.<i>.name plus the combobox fields. */
 function parseRows(fd: FormData) {
@@ -24,10 +24,10 @@ function parseRows(fd: FormData) {
 	return [...indexes]
 		.sort((a, b) => a - b)
 		.map((i) => ({
-			name: String(fd.get(`link.${i}.name`) ?? '').trim(),
-			ingredientId: String(fd.get(`link.${i}.match.ingredientId`) ?? '').trim(),
+			name: formText(fd, `link.${i}.name`).trim(),
+			ingredientId: formText(fd, `link.${i}.match.ingredientId`).trim(),
 			createIdentity: fd.get(`link.${i}.match.createIdentity`) === '1',
-			typedName: String(fd.get(`link.${i}.match.name`) ?? '').trim()
+			typedName: formText(fd, `link.${i}.match.name`).trim()
 		}))
 		.filter((r) => r.name);
 }
@@ -53,5 +53,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-export const load = guard(loadImpl);

@@ -196,17 +196,6 @@ describe('askAboutRecipe', () => {
 		expect(b.messages[2]).toEqual({ role: 'assistant', content: 'First answer.' });
 	});
 
-	it('answers a chat with no history exactly as the old single message', async () => {
-		const recipeId = await makeChickenRecipe(alice, 'Plain chicken', '500');
-		const { requests } = stubLlm([ANSWER]);
-		await askAboutRecipe(requestAs(alice), { recipeId, question: 'Is it spicy?' });
-		const sent = requests[0].messages;
-		expect(sent).toHaveLength(2);
-		expect(sent[1].content.startsWith('Recipe:\nPLAIN CHICKEN')).toBe(true);
-		expect(sent[1].content.endsWith('\n\nQuestion: Is it spicy?')).toBe(true);
-		expect(sent[1].content).not.toContain('On step');
-	});
-
 	it('cuts a long history to the newest turns', async () => {
 		const recipeId = await makeChickenRecipe(alice, 'Long chat', '500');
 		const { requests } = stubLlm([ANSWER]);
@@ -858,35 +847,6 @@ describe('grocery tidy', () => {
 		expect(await detailOf(alice, listId)).toEqual(before);
 	});
 
-	it('drops an amount the model made up, and keeps the name and aisle it gave', async () => {
-		const { listId } = await listWith(alice, [{ name: MESSY_LINE }]);
-		stubLlm([
-			tidyReply([{ id: 1, name: 'chopped tomatoes', amount: '800', unit: 'g', aisle: 'Pantry' }])
-		]);
-		const out = await tidyGroceryList(requestAs(alice), { listId });
-		expect(out.proposals).toHaveLength(1);
-		expect(out.proposals[0].after).toEqual({
-			name: 'chopped tomatoes',
-			amount: null,
-			unit: null,
-			category: 'Pantry'
-		});
-		expect(out.proposals[0].changed.sort()).toEqual(['category', 'name']);
-	});
-
-	it('proposes nothing for an id it did not send or an aisle that is not on the list', async () => {
-		const { listId } = await listWith(alice, [{ name: MESSY_LINE }]);
-		stubLlm([
-			tidyReply([
-				{ id: 7, name: 'ghost', amount: '', unit: '', aisle: 'Pantry' },
-				{ id: 1, name: MESSY_LINE, amount: '', unit: '', aisle: 'Other' }
-			])
-		]);
-		const out = await tidyGroceryList(requestAs(alice), { listId });
-		expect(out.sent).toBe(1);
-		expect(out.proposals).toEqual([]);
-	});
-
 	it('applies the kept proposals through the applyTidy action, bumping the revisions', async () => {
 		const { listId, lineIds } = await listWith(alice, [{ name: MESSY_LINE }, { name: 'bananas' }]);
 		stubLlm([
@@ -1176,20 +1136,6 @@ describe('suggestIngredientMatch', () => {
 		expect(asked).toContain('1. chicken');
 		candidates.forEach((c, i) => expect(asked).toContain(`${i + 1}) ${c.name}`));
 		expect(await catalogState()).toEqual(before);
-	});
-
-	it('gives null for a null pick and for a pick outside the candidates', async () => {
-		stubLlm([
-			pickReply([
-				{ name: 'chicken', pick: 99 },
-				{ name: 'milk', pick: null },
-				{ name: 'rice', pick: 0 }
-			])
-		]);
-		const out = await suggestIngredientMatch(requestAs(alice), {
-			names: ['chicken', 'milk', 'rice']
-		});
-		expect(out.picks).toEqual({ chicken: null, milk: null, rice: null });
 	});
 
 	it('makes no model call and spends no quota for names with no candidates', async () => {

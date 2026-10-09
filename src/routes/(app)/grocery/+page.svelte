@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import NewListForm from '$lib/components/NewListForm.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { fmtDateTime } from '$lib/client/format';
@@ -11,16 +11,7 @@
 	title="No open list"
 	body="Start a draft, add recipes with servings, review what is missing from the pantry, then start shopping."
 >
-	<form method="post" action="?/create" use:enhance class="flex gap-2">
-		<input
-			class="field w-44"
-			name="name"
-			placeholder="Weekly shop"
-			maxlength="80"
-			aria-label="List name"
-		/>
-		<button class="btn-primary">Start a list</button>
-	</form>
+	<NewListForm inputClass="w-44" placeholder="Weekly shop" submitLabel="Start a list" />
 </EmptyState>
 {#if form?.message}<p class="error-text mt-2 text-center">{form.message}</p>{/if}
 {#if data.lists.length}

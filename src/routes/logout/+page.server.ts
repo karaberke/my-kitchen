@@ -3,9 +3,9 @@ import { guard } from '$lib/server/http';
 import type { Actions } from './$types';
 import { auth } from '$lib/server/auth';
 
-const loadImpl = () => {
+export const load = guard(() => {
 	throw redirect(303, '/login');
-};
+});
 
 export const actions: Actions = {
 	default: async (event) => {
@@ -13,5 +13,3 @@ export const actions: Actions = {
 		throw redirect(303, '/login');
 	}
 };
-
-export const load = guard(loadImpl);

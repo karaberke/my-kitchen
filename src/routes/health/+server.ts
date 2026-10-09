@@ -4,7 +4,7 @@ import type { RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 
 /** Liveness + readiness: `?ready=1` also checks the database. */
-const GETImpl = async ({ url }: RequestEvent) => {
+export const GET = guard(async ({ url }: RequestEvent) => {
 	const headers = { 'cache-control': 'no-store', 'content-type': 'application/json' };
 	if (url.searchParams.get('ready') !== '1')
 		return new Response(JSON.stringify({ status: 'ok' }), { headers });
@@ -17,6 +17,4 @@ const GETImpl = async ({ url }: RequestEvent) => {
 			{ status: 503, headers }
 		);
 	}
-};
-
-export const GET = guard(GETImpl);
+});

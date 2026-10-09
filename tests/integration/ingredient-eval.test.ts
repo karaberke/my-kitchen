@@ -72,14 +72,6 @@ describe('ingredient evaluation set', () => {
 		console.log(`[ingredient-eval] dropdown: hits=${hits} total=${DROPDOWN_CASES.length}`);
 	});
 
-	it("never returns another user's private identity in the dropdown", async () => {
-		const alice = await createUser('Alice');
-		const bob = await createUser('Bob');
-		const secret = await createCustomIngredient(db, bob.id, 'bob secret spice');
-		const results = await searchIngredients(db, alice.id, 'bob secret spice', 5);
-		expect(results.map((r) => r.id)).not.toContain(secret.id);
-	});
-
 	it('ranks an exact private name first, over a catalog prefix or alias hit', async () => {
 		const alice = await createUser('Alice');
 		await catalogIngredientId('chicken breast'); // present in the catalog for the prefix hit

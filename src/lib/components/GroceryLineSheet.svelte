@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import Sheet from '$lib/components/Sheet.svelte';
+	import CategoryField from '$lib/components/CategoryField.svelte';
 	import type { MutateEnhance } from '$lib/client/enhance';
 	import { GROCERY_CATEGORIES } from '$lib/shared/grocery-categories';
 	import { NOTE_MAX_CHARS } from '$lib/shared/text';
@@ -61,12 +62,12 @@
 				</div>
 			{/if}
 			<div class="grid grid-cols-2 gap-3">
-				<div>
-					<label class="label" for="edit-category">Category</label>
-					<select class="field" id="edit-category" name="category" value={line.category}
-						>{#each GROCERY_CATEGORIES as c (c)}<option value={c}>{c}</option>{/each}</select
-					>
-				</div>
+				<CategoryField
+					id="edit-category"
+					categories={GROCERY_CATEGORIES}
+					label="Category"
+					value={line.category}
+				/>
 				<div>
 					<label class="label" for="edit-note">Note</label>
 					<input

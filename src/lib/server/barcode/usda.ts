@@ -21,7 +21,7 @@ import { Dec } from '$lib/shared/decimal';
 import { normalizeUnitInput } from '$lib/shared/units';
 import { providerGtin, type BarcodeIdentity } from '$lib/shared/gtin';
 import type { FetchImpl } from '$lib/server/fetch-capped';
-import { failedLookup, fetchJson } from './http';
+import { fetchProvider } from './http';
 import {
 	nutritionBasisOf,
 	type NutritionBasis,
@@ -30,7 +30,6 @@ import {
 	type ProviderResult
 } from './types';
 
-const TIMEOUT_MS = 4000;
 const MAX_BYTES = 1_000_000;
 const PAGE_SIZE = 25;
 
@@ -124,21 +123,15 @@ export function usdaAdapter(config: UsdaConfig, fetchImpl?: FetchImpl): Provider
 				`${config.baseUrl}/fdc/v1/foods/search?api_key=${encodeURIComponent(key)}` +
 				`&query=${encodeURIComponent(identity.expanded)}&dataType=Branded&pageSize=${PAGE_SIZE}`;
 
-			const res = await fetchJson(url, {
-				timeoutMs: TIMEOUT_MS,
+			const res = await fetchProvider(url, searchSchema, 'USDA', {
 				maxBytes: MAX_BYTES,
 				headers: {},
 				signal,
 				fetchImpl
 			});
+			if (!res.ok) return res.result;
 
-			if (!res.ok) return failedLookup(res, 'USDA');
-
-			const parsed = searchSchema.safeParse(res.body);
-			if (!parsed.success)
-				return { status: 'unavailable', reason: 'USDA sent an unexpected shape' };
-
-			const matches = (parsed.data.foods ?? [])
+			const matches = (res.data.foods ?? [])
 				.filter((f) => (f.dataType ?? 'Branded') === 'Branded')
 				.filter((f) => providerGtin(f.gtinUpc ?? null) === identity.gtin);
 

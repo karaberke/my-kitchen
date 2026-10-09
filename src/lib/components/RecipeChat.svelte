@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import Alert from '$lib/components/Alert.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import { remoteErrorMessage } from '$lib/client/remote';
 	import {
 		listen,
@@ -272,20 +273,7 @@
 					aria-pressed={listening}
 					onclick={toggleMic}
 				>
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="1.8"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						aria-hidden="true"
-						><rect x="9" y="3" width="6" height="11" rx="3"></rect><path
-							d="M5 11a7 7 0 0 0 14 0M12 18v3"
-						></path></svg
-					>
+					<Icon name="mic" size={16} />
 					{listening ? 'Listening… tap to stop' : 'Speak'}
 				</button>
 			{/if}

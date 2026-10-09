@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { guard, MEDIA_CACHE_CONTROL } from '$lib/server/http';
+import { guard, mediaHeaders, notModified } from '$lib/server/http';
 import type { RequestEvent } from './$types';
 import { db } from '$lib/server/db';
 import { requireUserApi } from '$lib/server/access';
@@ -40,32 +40,24 @@ function contentDisposition(filename: string): string {
 	return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
-const GETImpl = async (event: RequestEvent) => {
+export const GET = guard(async (event: RequestEvent) => {
 	const user = requireUserApi(event);
 	const att = await loadReadableAttachment(db, user.id, event.params.attachmentId);
 	if (!att) throw error(404, 'Not found');
 
 	const etag = `"${att.id}"`;
 	const isPdf = att.mime === 'application/pdf';
-	const headers = new Headers({
-		'cache-control': MEDIA_CACHE_CONTROL,
-		etag,
-		vary: 'Cookie',
-		'x-cache-policy': 'media',
+	const headers = mediaHeaders(etag, {
 		'content-type': isPdf ? 'application/pdf' : 'text/html; charset=utf-8',
 		'content-disposition': contentDisposition(att.filename),
 		'content-security-policy': SANDBOX_CSP,
 		'x-content-type-options': 'nosniff',
 		'referrer-policy': 'no-referrer'
 	});
-	const inm = event.request.headers.get('if-none-match');
-	if (inm && inm.split(',').some((t) => t.trim() === etag)) {
-		return new Response(null, { status: 304, headers });
-	}
+	const unchanged = notModified(event, etag, headers);
+	if (unchanged) return unchanged;
 	const obj = await storage().get(att.objectKey);
 	if (!obj) throw error(404, 'Not found');
 	if (obj.size !== null) headers.set('content-length', String(obj.size));
 	return new Response(obj.stream, { status: 200, headers });
-};
-
-export const GET = guard(GETImpl);
+});

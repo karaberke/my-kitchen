@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
+	import SearchBar from '$lib/components/SearchBar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import RecipeCard from '$lib/components/RecipeCard.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
@@ -8,11 +9,9 @@
 	import FilterMenu from '$lib/components/FilterMenu.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
-	import { pushToast } from '$lib/client/toast.svelte';
-	import { debouncedSubmit } from '$lib/client/debounced-search';
+	import { onSuccess } from '$lib/client/enhance';
 
 	let { data, form } = $props();
-	let q = $derived(data.params.q);
 	const f = $derived(form);
 
 	/** The current URL with one repeated `key=value` pair removed, and `page` dropped. */
@@ -115,8 +114,6 @@
 		)
 	);
 
-	const submit = debouncedSubmit();
-
 	let manageOpen = $state(false);
 	let deleteConfirm = $state<string | null>(null);
 	let newCategoryName = $state('');
@@ -135,43 +132,28 @@
 	<a href="/recipes/add" class="btn-primary btn-sm rounded-full">+ Add</a>
 </PageHeader>
 
-<form
-	method="get"
+<SearchBar
 	action="/recipes"
-	role="search"
-	data-sveltekit-keepfocus
-	data-sveltekit-noscroll
-	data-sveltekit-replacestate
-	onsubmit={() => submit.cancel()}
+	id="recipe-search"
+	label="Search recipes"
+	placeholder="Search recipes by title"
+	value={data.params.q}
 >
-	<div class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5">
-		<span class="text-sage-soft" aria-hidden="true">⌕</span>
-		<label class="sr-only" for="recipe-search">Search recipes</label>
-		<input
-			id="recipe-search"
-			name="q"
-			class="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-sage-soft"
-			placeholder="Search recipes by title"
-			bind:value={q}
-			oninput={(e) => submit(e.currentTarget.form!)}
-			autocomplete="off"
-		/>
-		{#if data.params.tag}<input type="hidden" name="tag" value={data.params.tag} />{/if}
-		<noscript><button class="btn-secondary btn-sm">Search</button></noscript>
-	</div>
-
-	<div class="mt-3">
-		<FilterMenu {groups} {pills} {clearHref}>
-			{#if data.household}
-				<button
-					type="button"
-					class="btn-ghost btn-sm w-full justify-start"
-					onclick={() => (manageOpen = true)}>Manage categories…</button
-				>
-			{/if}
-		</FilterMenu>
-	</div>
-</form>
+	{#if data.params.tag}<input type="hidden" name="tag" value={data.params.tag} />{/if}
+	{#snippet below()}
+		<div class="mt-3">
+			<FilterMenu {groups} {pills} {clearHref}>
+				{#if data.household}
+					<button
+						type="button"
+						class="btn-ghost btn-sm w-full justify-start"
+						onclick={() => (manageOpen = true)}>Manage categories…</button
+					>
+				{/if}
+			</FilterMenu>
+		</div>
+	{/snippet}
+</SearchBar>
 
 {#if data.tags.length}
 	<div
@@ -215,7 +197,7 @@
 	onclose={() => (deleteConfirm = null)}
 >
 	{#if f?.message}
-		<div class="mb-3"><Alert kind="error">{f.message}</Alert></div>
+		<Alert class="mb-3" kind="error">{f.message}</Alert>
 	{/if}
 	<ul class="card overflow-hidden">
 		{#each data.categories as c (c.id)}
@@ -228,14 +210,7 @@
 					<form
 						method="post"
 						action="?/deleteCategory"
-						use:enhance={() =>
-							async ({ result, update }) => {
-								await update({ reset: false });
-								if (result.type === 'success') {
-									deleteConfirm = null;
-									pushToast('Category deleted.', { kind: 'success' });
-								}
-							}}
+						use:enhance={onSuccess('Category deleted.', { then: () => (deleteConfirm = null) })}
 					>
 						<input type="hidden" name="categoryId" value={c.id} />
 						<button class="btn-danger btn-sm">Delete</button>
@@ -245,11 +220,7 @@
 						method="post"
 						action="?/renameCategory"
 						class="flex flex-1 items-center gap-2"
-						use:enhance={() =>
-							async ({ result, update }) => {
-								await update({ reset: false });
-								if (result.type === 'success') pushToast('Category renamed.', { kind: 'success' });
-							}}
+						use:enhance={onSuccess('Category renamed.')}
 					>
 						<input type="hidden" name="categoryId" value={c.id} />
 						<label class="sr-only" for="cat-name-{c.id}">Category name</label>
@@ -276,14 +247,10 @@
 		method="post"
 		action="?/createCategory"
 		class="mt-3 flex items-center gap-2"
-		use:enhance={() =>
-			async ({ result, update }) => {
-				await update();
-				if (result.type === 'success') {
-					newCategoryName = '';
-					pushToast('Category created.', { kind: 'success' });
-				}
-			}}
+		use:enhance={onSuccess('Category created.', {
+			reset: true,
+			then: () => (newCategoryName = '')
+		})}
 	>
 		<label class="sr-only" for="new-cat-name">New category name</label>
 		<input

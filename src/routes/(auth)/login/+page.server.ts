@@ -1,12 +1,18 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { guard, safeNext } from '$lib/server/http';
+import { formText, guard, safeNext } from '$lib/server/http';
 import { APIError } from 'better-auth/api';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { auth, enabledSocialProviders } from '$lib/server/auth';
 import { serverEnv } from '$lib/server/env';
-import { AUTH_LIMITS, clientKey, consume } from '$lib/server/ratelimit';
+import {
+	AUTH_LIMITS,
+	TOO_MANY_ATTEMPTS_WAIT,
+	clientKey,
+	consume,
+	tooManyAttempts
+} from '$lib/server/ratelimit';
 
-const loadImpl = ({ locals, url }: PageServerLoadEvent) => {
+export const load = guard(({ locals, url }: PageServerLoadEvent) => {
 	if (locals.user) throw redirect(303, safeNext(url.searchParams.get('next')));
 	return {
 		title: 'Sign in',
@@ -14,18 +20,18 @@ const loadImpl = ({ locals, url }: PageServerLoadEvent) => {
 		providers: enabledSocialProviders(),
 		next: safeNext(url.searchParams.get('next'))
 	};
-};
+});
 
 export const actions: Actions = {
 	social: async (event) => {
 		const fd = await event.request.formData();
-		const provider = String(fd.get('provider') ?? '');
+		const provider = formText(fd, 'provider');
 		if (!enabledSocialProviders().includes(provider))
 			return fail(400, { message: 'That sign-in method is not available here.' });
 		let url: string | null | undefined;
 		try {
 			const res = await auth.api.signInSocial({
-				body: { provider, callbackURL: safeNext(String(fd.get('next') ?? '')) },
+				body: { provider, callbackURL: safeNext(formText(fd, 'next')) },
 				headers: event.request.headers
 			});
 			url = res?.url;
@@ -38,16 +44,14 @@ export const actions: Actions = {
 	},
 	signin: async (event) => {
 		const fd = await event.request.formData();
-		const email = String(fd.get('email') ?? '')
-			.trim()
-			.slice(0, 200);
-		const password = String(fd.get('password') ?? '').slice(0, 200);
-		const next = safeNext(String(fd.get('next') ?? ''));
+		const email = formText(fd, 'email').trim().slice(0, 200);
+		const password = formText(fd, 'password').slice(0, 200);
+		const next = safeNext(formText(fd, 'next'));
 		if (!email || !password) return fail(400, { message: 'Enter your email and password', email });
 		const limit = consume(`signin:${clientKey(event)}:${email.toLowerCase()}`, AUTH_LIMITS.signIn);
 		if (!limit.allowed)
 			return fail(429, {
-				message: `Too many attempts. Try again in ${limit.retryAfterSeconds} s.`,
+				message: tooManyAttempts(limit.retryAfterSeconds),
 				email
 			});
 		try {
@@ -56,9 +60,7 @@ export const actions: Actions = {
 			if (err instanceof APIError)
 				return fail(err.statusCode === 429 ? 429 : 400, {
 					message:
-						err.statusCode === 429
-							? 'Too many attempts. Wait a minute and try again.'
-							: 'Email or password is not right',
+						err.statusCode === 429 ? TOO_MANY_ATTEMPTS_WAIT : 'Email or password is not right',
 					email
 				});
 			throw err;
@@ -66,5 +68,3 @@ export const actions: Actions = {
 		throw redirect(303, next);
 	}
 };
-
-export const load = guard(loadImpl);

@@ -63,14 +63,12 @@
 	description="Suggestions from the assistant. Check them before you apply."
 >
 	{#if conflict}
-		<div class="mb-3">
-			<Alert kind="warn"
-				>{conflict.message}
-				{conflict.applied
-					? `${conflict.applied} ${conflict.applied === 1 ? 'change was' : 'changes were'} saved. `
-					: 'No other change was saved. '}Close this and ask the assistant again.</Alert
-			>
-		</div>
+		<Alert class="mb-3" kind="warn"
+			>{conflict.message}
+			{conflict.applied
+				? `${conflict.applied} ${conflict.applied === 1 ? 'change was' : 'changes were'} saved. `
+				: 'No other change was saved. '}Close this and ask the assistant again.</Alert
+		>
 		<button class="btn-secondary w-full" type="button" onclick={() => (open = false)}>Close</button>
 	{:else if proposals.length === 0}
 		<p class="mb-3 text-[13px] text-sage">
@@ -78,7 +76,7 @@
 		</p>
 		<button class="btn-secondary w-full" type="button" onclick={() => (open = false)}>Close</button>
 	{:else}
-		{#if error}<div class="mb-3"><Alert kind="error">{error}</Alert></div>{/if}
+		{#if error}<Alert class="mb-3" kind="error">{error}</Alert>{/if}
 		<form
 			method="post"
 			action="?/applyTidy"

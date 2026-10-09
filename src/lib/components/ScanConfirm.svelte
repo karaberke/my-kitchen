@@ -49,7 +49,7 @@
 >
 	{#if scan}
 		{#if form?.message}
-			<div class="mb-3"><Alert kind="error">{form.message}</Alert></div>
+			<Alert class="mb-3" kind="error">{form.message}</Alert>
 		{/if}
 		<!-- A different barcode builds a new form, so no value of the last one is kept. -->
 		{#key scan.lookup.gtin + scan.suggestion.from}

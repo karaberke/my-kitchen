@@ -100,6 +100,14 @@ export function consume(
 	return { allowed: true, retryAfterSeconds: 0 };
 }
 
+/** The message for a request `consume` refused. */
+export function tooManyAttempts(retryAfterSeconds: number): string {
+	return `Too many attempts. Try again in ${retryAfterSeconds} s.`;
+}
+
+/** The message for a sign-in or sign-up that Better Auth's own limiter refused. */
+export const TOO_MANY_ATTEMPTS_WAIT = 'Too many attempts. Wait a minute and try again.';
+
 /**
  * Client address for rate-limit keys.
  *

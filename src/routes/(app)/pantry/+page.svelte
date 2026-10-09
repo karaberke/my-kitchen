@@ -3,7 +3,7 @@
 	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { ActionResult } from '@sveltejs/kit';
-	import { debouncedSubmit } from '$lib/client/debounced-search';
+	import SearchBar from '$lib/components/SearchBar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Sheet from '$lib/components/Sheet.svelte';
 	import Alert from '$lib/components/Alert.svelte';
@@ -26,7 +26,6 @@
 
 	let { data, form } = $props();
 	const f = $derived(form);
-	let q = $derived(data.filters.q);
 
 	type Mode = 'add' | 'correct' | 'waste' | 'metadata';
 	let sheet = $state<{ mode: Mode; group?: PantryGroup; lot?: PantryLotView } | null>(null);
@@ -59,7 +58,6 @@
 		}
 		return u.pathname + u.search;
 	}
-	const submit = debouncedSubmit();
 	const filterChips = $derived([
 		{ id: 'all', label: 'All' },
 		{ id: 'use_soon', label: 'Review · use soon' },
@@ -160,43 +158,27 @@
 </PageHeader>
 
 {#if f?.message && !sheet && !scan}
-	<div class="mb-3"><Alert kind="error">{f.message}</Alert></div>
+	<Alert class="mb-3" kind="error">{f.message}</Alert>
 {/if}
 
-<form
-	method="get"
+<SearchBar
 	action="/pantry"
-	role="search"
-	data-sveltekit-keepfocus
-	data-sveltekit-noscroll
-	data-sveltekit-replacestate
-	onsubmit={() => submit.cancel()}
+	id="pantry-search"
+	label="Search pantry"
+	placeholder="Search pantry"
+	value={data.filters.q}
 >
-	<div class="flex h-11 items-center gap-2 rounded-[14px] border border-sand-dark bg-linen px-3.5">
-		<span class="text-sage-soft" aria-hidden="true">⌕</span>
-		<label class="sr-only" for="pantry-search">Search pantry</label>
-		<input
-			id="pantry-search"
-			name="q"
-			class="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-sage-soft"
-			placeholder="Search pantry"
-			bind:value={q}
-			oninput={(e) => submit(e.currentTarget.form!)}
-			autocomplete="off"
-		/>
-		{#if data.filters.filter !== 'all'}<input
-				type="hidden"
-				name="filter"
-				value={data.filters.filter}
-			/>{/if}
-		{#if data.filters.location}<input
-				type="hidden"
-				name="location"
-				value={data.filters.location}
-			/>{/if}
-		<noscript><button class="btn-secondary btn-sm">Search</button></noscript>
-	</div>
-</form>
+	{#if data.filters.filter !== 'all'}<input
+			type="hidden"
+			name="filter"
+			value={data.filters.filter}
+		/>{/if}
+	{#if data.filters.location}<input
+			type="hidden"
+			name="location"
+			value={data.filters.location}
+		/>{/if}
+</SearchBar>
 <div
 	class="-mx-4 mt-3 flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0"
 	role="group"
@@ -315,20 +297,18 @@
 >
 	{#if sheet}
 		{#if f?.message}
-			<div class="mb-3">
-				<Alert kind="error"
-					>{f.message}{#if f.review?.lot}
-						Now tracked: {fmtQty(f.review.lot.quantity, f.review.lot.unit)}.
-						<button
-							class="font-bold underline"
-							onclick={() => invalidate('app:pantry').then(() => (sheet = null))}>Reload</button
-						>{/if}</Alert
-				>
-			</div>
+			<Alert class="mb-3" kind="error"
+				>{f.message}{#if f.review?.lot}
+					Now tracked: {fmtQty(f.review.lot.quantity, f.review.lot.unit)}.
+					<button
+						class="font-bold underline"
+						onclick={() => invalidate('app:pantry').then(() => (sheet = null))}>Reload</button
+					>{/if}</Alert
+			>
 		{/if}
 		<form
 			method="post"
-			action="?/{sheet.mode === 'metadata' ? 'metadata' : sheet.mode}"
+			action="?/{sheet.mode}"
 			class="flex flex-col gap-3.5"
 			use:enhance={() => {
 				sheetBusy = true;

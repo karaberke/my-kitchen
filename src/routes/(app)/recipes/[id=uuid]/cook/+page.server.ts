@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { actionError, guard } from '$lib/server/http';
+import { actionError, formText, formTextOrNull, guard } from '$lib/server/http';
 import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoadEvent } from './$types';
 import { db } from '$lib/server/db';
@@ -13,7 +13,7 @@ import { operationIdFrom } from '$lib/server/operations';
 import { llmEnabled } from '$lib/server/llm/client';
 import { NOTE_MAX_CHARS } from '$lib/shared/text';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const ctx = householdActor(event);
 	event.depends('app:cook');
 	// Before the recipe read: it includes the household's pantry stock.
@@ -30,7 +30,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		undoOperationId: randomUUID(),
 		aiEnabled: llmEnabled()
 	};
-};
+});
 
 export const actions: Actions = {
 	finish: async (event) => {
@@ -38,11 +38,10 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		try {
 			const operationId = operationIdFrom(fd);
-			const servingsParsed = parseAmount(String(fd.get('servings') ?? ''));
-			if (!servingsParsed.ok || !servingsParsed.value?.isPositive())
-				return fail(400, { message: 'Servings must be a positive number' });
+			const servings = parsePositiveAmount(formText(fd, 'servings'));
+			if (!servings) return fail(400, { message: 'Servings must be a positive number' });
 			const expectedRecipeRevision = Number(fd.get('expectedRecipeRevision'));
-			const batchId = String(fd.get('batchId') ?? '') || null;
+			const batchId = formTextOrNull(fd, 'batchId');
 			const positions = new Set<number>();
 			for (const key of fd.keys()) {
 				const m = /^item\.(\d+)\.mode$/.exec(key);
@@ -51,12 +50,12 @@ export const actions: Actions = {
 			const items: CookItemInput[] = [];
 			for (const pos of [...positions].sort((a, b) => a - b)) {
 				const mode = fd.get(`item.${pos}.mode`) === 'deduct' ? 'deduct' : 'skip';
-				const ingredientId = String(fd.get(`item.${pos}.ingredientId`) ?? '') || null;
+				const ingredientId = formTextOrNull(fd, `item.${pos}.ingredientId`);
 				const allocations: CookItemInput['allocations'] = [];
 				for (let i = 0; i < 50; i++) {
 					const lotId = fd.get(`item.${pos}.alloc.${i}.lotId`);
 					if (!lotId) break;
-					const amtParsed = parseAmount(String(fd.get(`item.${pos}.alloc.${i}.amount`) ?? ''));
+					const amtParsed = parseAmount(formText(fd, `item.${pos}.alloc.${i}.amount`));
 					if (!amtParsed.ok)
 						return fail(400, {
 							message: `Check the amount for ${fd.get(`item.${pos}.name`) ?? 'an ingredient'}: ${amtParsed.error}`
@@ -73,14 +72,14 @@ export const actions: Actions = {
 					mode: mode === 'deduct' && allocations.length ? 'deduct' : 'skip',
 					ingredientId,
 					allocations,
-					note: String(fd.get(`item.${pos}.note`) ?? '').slice(0, NOTE_MAX_CHARS)
+					note: formText(fd, `item.${pos}.note`).slice(0, NOTE_MAX_CHARS)
 				});
 			}
 			const out = await finishCooking(ctx, {
 				operationId,
 				recipeId: event.params.id,
 				expectedRecipeRevision,
-				servings: servingsParsed.value,
+				servings,
 				batchId,
 				items
 			});
@@ -101,7 +100,7 @@ export const actions: Actions = {
 		const fd = await event.request.formData();
 		try {
 			const operationId = operationIdFrom(fd);
-			const eventId = String(fd.get('eventId') ?? '');
+			const eventId = formText(fd, 'eventId');
 			await undoEvent(ctx, { operationId, eventId });
 			return { undone: true };
 		} catch (err) {
@@ -109,5 +108,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-export const load = guard(loadImpl);

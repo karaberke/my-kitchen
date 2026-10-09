@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import Sheet from '$lib/components/Sheet.svelte';
+	import CategoryField from '$lib/components/CategoryField.svelte';
 	import Alert from '$lib/components/Alert.svelte';
 	import IngredientAutocomplete from '$lib/components/IngredientAutocomplete.svelte';
 	import { pushToast } from '$lib/client/toast.svelte';
@@ -37,9 +38,7 @@
 		? 'Manual items keep their own amount; the pantry is only subtracted if you ask for it.'
 		: 'Added to the trip in progress.'}
 >
-	{#if error}<div class="mb-3">
-			<Alert kind="error">{error}</Alert>
-		</div>{/if}
+	{#if error}<Alert class="mb-3" kind="error">{error}</Alert>{/if}
 	<form
 		method="post"
 		action="?/addLine"
@@ -81,14 +80,12 @@
 						>{/each}</select
 				>
 			</div>
-			<div>
-				<label class="label" for="line-category">Category</label>
-				<select class="field" id="line-category" name="category"
-					><option value="">Auto</option>{#each GROCERY_CATEGORIES as c (c)}<option value={c}
-							>{c}</option
-						>{/each}</select
-				>
-			</div>
+			<CategoryField
+				id="line-category"
+				categories={GROCERY_CATEGORIES}
+				label="Category"
+				emptyOption="Auto"
+			/>
 			<div>
 				<label class="label" for="line-note">Note</label>
 				<input class="field" id="line-note" name="note" maxlength={NOTE_MAX_CHARS} />

@@ -346,7 +346,7 @@
 				>Optional section titles group steps (“Night before”, “Baking day”)</span
 			>
 		</div>
-		{#if errors.steps}<div class="mb-2"><Alert kind="error">{errors.steps}</Alert></div>{/if}
+		{#if errors.steps}<Alert class="mb-2" kind="error">{errors.steps}</Alert>{/if}
 		<ol class="flex flex-col gap-2.5">
 			{#each steps as step, i (step.key)}
 				<li

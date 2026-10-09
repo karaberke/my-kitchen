@@ -6,7 +6,7 @@ import { acceptInvite, peekInvite } from '$lib/server/households';
 import { serverEnv } from '$lib/server/env';
 import { INVITE_COOKIE } from '$lib/server/registration';
 
-const loadImpl = async (event: PageServerLoadEvent) => {
+export const load = guard(async (event: PageServerLoadEvent) => {
 	const invite = await peekInvite(db, event.params.token);
 	// A social sign-in leaves the app and comes back through the provider's callback,
 	// which carries none of this URL. Park the token briefly so the callback can still
@@ -28,7 +28,7 @@ const loadImpl = async (event: PageServerLoadEvent) => {
 		registrationOpen: serverEnv().REGISTRATION_OPEN || !!invite?.valid,
 		next: `/invite/${event.params.token}`
 	};
-};
+});
 
 export const actions: Actions = {
 	default: async (event) => {
@@ -45,5 +45,3 @@ export const actions: Actions = {
 		throw redirect(303, `/household/${householdId}`);
 	}
 };
-
-export const load = guard(loadImpl);

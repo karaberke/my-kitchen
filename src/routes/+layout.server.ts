@@ -2,7 +2,7 @@ import type { LayoutServerLoadEvent } from './$types';
 import { guard } from '$lib/server/http';
 import { revisionPollMs } from '$lib/server/env';
 
-const loadImpl = async ({ locals, depends }: LayoutServerLoadEvent) => {
+export const load = guard(async ({ locals, depends }: LayoutServerLoadEvent) => {
 	depends('app:session');
 	return {
 		user: locals.user
@@ -12,6 +12,4 @@ const loadImpl = async ({ locals, depends }: LayoutServerLoadEvent) => {
 		memberships: locals.memberships,
 		pollMs: revisionPollMs()
 	};
-};
-
-export const load = guard(loadImpl);
+});

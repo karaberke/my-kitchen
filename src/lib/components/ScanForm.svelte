@@ -255,7 +255,7 @@
 							Asking the assistant… this can take a minute.
 						</p>
 					{/if}
-					{#if askError}<div class="mt-2"><Alert kind="error">{askError}</Alert></div>{/if}
+					{#if askError}<Alert class="mt-2" kind="error">{askError}</Alert>{/if}
 					{#if askedPick && askedPick.id === null}
 						<p class="mt-1 text-[12.5px] text-sage">
 							The assistant is not sure. Choose one or type a name.

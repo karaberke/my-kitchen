@@ -35,13 +35,11 @@
 	back="/pantry"
 />
 {#if f?.message}
-	<div class="mb-3">
-		<Alert kind="error"
-			>{f.message}{#if f.review?.reason === 'consumed'}
-				<a href="/pantry" class="font-bold underline">Record a correction in the pantry</a
-				>{/if}</Alert
-		>
-	</div>
+	<Alert class="mb-3" kind="error"
+		>{f.message}{#if f.review?.reason === 'consumed'}
+			<a href="/pantry" class="font-bold underline">Record a correction in the pantry</a
+			>{/if}</Alert
+	>
 {/if}
 {#if data.history.items.length === 0}
 	<EmptyState
