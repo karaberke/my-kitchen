@@ -15,6 +15,8 @@ docs
 # Worktrees hold whole extra checkouts (node_modules included). Without this
 # line `COPY . .` pulled ~370 MB of them into the build stage.
 .claude
+.codex
+.agents
 .vscode
 
 # Test and tooling files. None are read by `vite build`, and leaving them in

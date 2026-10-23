@@ -10,7 +10,6 @@ node_modules
 
 # OS
 .DS_Store
-.claude
 Thumbs.db
 
 # Env
@@ -43,17 +42,21 @@ pnpm-debug.log*
 # Editors
 .idea
 *.swp
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
+.vscode/
 
 # Local runtime data (see also data/.gitignore)
 /data/uploads
 /data/test-uploads
 /data/dev-uploads
 
-# Tooling worktrees (agent scratch checkouts), not project config
-/.claude/worktrees/
+# Local agent configuration and scratch files
+.claude/
+.codex/
+.agents/
+/AGENTS.md
+/CLAUDE.md
+/sections.md
+/scripts/tmp-parser-checks*
 
 # Local Docker Compose overrides
 compose.override.yaml
