@@ -53,6 +53,36 @@ export interface RecipeFormInput {
 	imageUrl: string;
 }
 
+/** A numeric serving count is different from a yield such as "8 pancakes". */
+export function servingsFromYield(yieldText: string): { baseServings: string; yieldNote: string } {
+	const value = yieldText.trim();
+	const servings = /^(\d+(?:\.\d+)?)\s*(?:servings?|portions?|people)?$/i.exec(value);
+	return servings
+		? { baseServings: servings[1], yieldNote: '' }
+		: { baseServings: '', yieldNote: value };
+}
+
+export function emptyRecipeFormInput(): RecipeFormInput {
+	return {
+		title: '',
+		description: '',
+		baseServings: '',
+		yieldNote: '',
+		prepMinutes: '',
+		cookMinutes: '',
+		source: '',
+		notes: '',
+		tags: '',
+		convention: 'metric',
+		ingredients: [],
+		steps: [],
+		intent: 'save',
+		expectedRevision: null,
+		removeImage: false,
+		imageUrl: ''
+	};
+}
+
 export interface ValidIngredient {
 	position: number;
 	name: string;

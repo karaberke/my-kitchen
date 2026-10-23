@@ -15,7 +15,7 @@ import {
 	type ActorContext
 } from '$lib/server/access';
 import { AppError, ReviewConflict } from '$lib/server/errors';
-import { getIngredientMeta } from '$lib/server/ingredients';
+import { assertIngredientsVisible, getIngredientMeta } from '$lib/server/ingredients';
 import { bumpList } from '$lib/server/grocery';
 import {
 	activeLotsForIngredients,
@@ -137,6 +137,7 @@ export async function previewCooking(
 		if (group) group.push(lot);
 		else lotsByIngredient.set(lot.ingredientId, [lot]);
 	}
+	const remainingByLot = new Map(lots.map((lot) => [lot.id, lot.quantity]));
 	const items: CookPreviewItem[] = rows.map((r) => {
 		const scaled = scaleAmount(r.amount ? Dec.from(r.amount) : null, base, servings);
 		const m = r.ingredientId ? meta.get(r.ingredientId) : undefined;
@@ -168,10 +169,16 @@ export async function previewCooking(
 			r.ingredientId,
 			scaled,
 			r.unit,
-			ingredientLots,
+			ingredientLots.map((lot) => ({ ...lot, quantity: remainingByLot.get(lot.id)! })),
 			convention,
 			m?.gramsPerMl ? Dec.from(m.gramsPerMl) : null
 		);
+		// Repeated ingredient rows share the same stock, even across recipe sections.
+		for (const suggestion of plan.suggestions)
+			remainingByLot.set(
+				suggestion.lotId,
+				remainingByLot.get(suggestion.lotId)!.sub(suggestion.take)
+			);
 		return {
 			position: r.position,
 			name: r.name,
@@ -201,7 +208,7 @@ export async function previewCooking(
 			defaultMode: tracked && plan.suggestions.length ? 'deduct' : 'skip',
 			reason: !tracked
 				? 'Not tracked in the pantry'
-				: plan.suggestions.length === 0
+				: plan.suggestions.length === 0 && plan.incompatible.length > 0
 					? 'Pantry lots use units that cannot be converted'
 					: plan.shortfall.isPositive()
 						? `Only ${plan.covered.toHuman()} ${r.unit} tracked`
@@ -253,9 +260,14 @@ export interface FinishCookingInput {
  */
 export async function finishCooking(ctx: ActorContext, input: FinishCookingInput) {
 	if (!input.servings.isPositive()) throw new AppError(400, 'Servings must be positive');
-	for (const item of input.items)
-		for (const a of item.allocations)
+	for (const item of input.items) {
+		if (item.ingredientId && !isUuid(item.ingredientId))
+			throw new AppError(400, 'Choose a valid ingredient');
+		for (const a of item.allocations) {
+			if (!isUuid(a.lotId)) throw new AppError(400, 'Choose a valid pantry lot');
 			if (!a.amount.isPositive()) throw new AppError(400, 'Deducted amounts must be positive');
+		}
+	}
 	const payload = {
 		recipeId: input.recipeId,
 		expectedRecipeRevision: input.expectedRecipeRevision,
@@ -302,10 +314,20 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 			await lockHousehold(tx, ctx.householdId, { pantry: true, grocery: !!input.batchId });
 			const lotIds = input.items.flatMap((i) => i.allocations.map((a) => a.lotId));
 			const lots = await lockLots(tx, ctx.householdId, lotIds);
+			const recipeIngredientIds = new Set(rows.map((row) => row.ingredientId));
+			await assertIngredientsVisible(
+				tx,
+				ctx.userId,
+				input.items
+					.map((item) => item.ingredientId)
+					.filter((id): id is string => !!id && !recipeIngredientIds.has(id)),
+				ctx.householdId
+			);
 			const stale: { lotId: string; currentRevision: number; quantity: string; unit: string }[] =
 				[];
 			const insufficient: { lotId: string; requested: string; available: string; unit: string }[] =
 				[];
+			const requestedByLot = new Map<string, Dec>();
 			for (const item of input.items) {
 				if (item.mode !== 'deduct') continue;
 				for (const a of item.allocations) {
@@ -318,16 +340,20 @@ export async function finishCooking(ctx: ActorContext, input: FinishCookingInput
 							quantity: lot.quantity.toString(),
 							unit: lot.unit
 						});
-					if (a.amount.gt(lot.quantity))
-						insufficient.push({
-							lotId: lot.id,
-							requested: a.amount.toString(),
-							available: lot.quantity.toString(),
-							unit: lot.unit
-						});
+					requestedByLot.set(lot.id, (requestedByLot.get(lot.id) ?? Dec.zero).add(a.amount));
 					if (item.ingredientId && lot.ingredientId !== item.ingredientId)
 						throw new AppError(400, 'Lot does not belong to the chosen ingredient');
 				}
+			}
+			for (const [lotId, requested] of requestedByLot) {
+				const lot = lots.get(lotId)!;
+				if (requested.gt(lot.quantity))
+					insufficient.push({
+						lotId,
+						requested: requested.toString(),
+						available: lot.quantity.toString(),
+						unit: lot.unit
+					});
 			}
 			if (stale.length || insufficient.length) {
 				throw new ReviewConflict(
@@ -462,6 +488,7 @@ export async function pantryLotsFor(
 	const householdId = requireHousehold(event).household.id;
 	await assertMember(db, householdId, user.id);
 	if (!isUuid(arg.ingredient)) throw new AppError(400, 'ingredient required');
+	await assertIngredientsVisible(db, user.id, [arg.ingredient], householdId);
 	return lotsForIngredient(
 		db,
 		householdId,

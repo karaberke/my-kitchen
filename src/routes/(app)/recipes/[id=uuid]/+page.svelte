@@ -139,6 +139,12 @@
 	);
 </script>
 
+{#snippet recipeError()}
+	{#if f?.message}
+		<Alert class="mb-4" kind="error">{f.message}</Alert>
+	{/if}
+{/snippet}
+
 <PageHeader
 	title={r.title}
 	subtitle={r.isOwner ? ownerShareLabel(r.shares) : `Shared by ${r.ownerName}`}
@@ -147,8 +153,8 @@
 	{#if r.isOwner}<a href="/recipes/{r.id}/edit" class="btn-secondary btn-sm">Edit</a>{/if}
 </PageHeader>
 
-{#if f?.message}
-	<Alert class="mb-4" kind="error">{f.message}</Alert>
+{#if !planOpen}
+	{@render recipeError()}
 {/if}
 {#if f?.ok && f?.listId}
 	<div class="no-print mb-4">
@@ -460,6 +466,9 @@
 		? `Adds a batch to “${data.currentList.name}”. Matching ingredients are combined and pantry stock is subtracted once when the list is recalculated.`
 		: 'Creates a new draft list for this household.'}
 >
+	{#if planOpen}
+		{@render recipeError()}
+	{/if}
 	<form
 		method="post"
 		action="?/addToList"

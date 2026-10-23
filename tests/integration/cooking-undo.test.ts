@@ -12,8 +12,9 @@ import {
 } from '$lib/server/grocery';
 import { undoEvent } from '$lib/server/undo';
 import { ReviewConflict } from '$lib/server/errors';
-import { updateRecipe, getRecipeDetail } from '$lib/server/recipes';
+import { createRecipe, updateRecipe, getRecipeDetail } from '$lib/server/recipes';
 import { recipeInput } from './helpers';
+import { createCustomIngredient } from '$lib/server/ingredients';
 
 async function chickenTotal(householdId: string) {
 	const o = await getPantryOverview(db, householdId, {
@@ -24,8 +25,131 @@ async function chickenTotal(householdId: string) {
 	return o.groups[0]?.totals.find((t) => t.unit === 'g')?.quantity ?? '0';
 }
 
+async function repeatedChickenRecipe() {
+	const alice = await createUser('Alice');
+	const chicken = await catalogIngredientId('chicken breast');
+	const recipe = await createRecipe(
+		alice.id,
+		recipeInput({
+			baseServings: d(1),
+			ingredients: [0, 1].map((position) => ({
+				position,
+				name: 'chicken breast',
+				ingredientId: chicken,
+				amount: d(60),
+				unit: 'g',
+				preparation: '',
+				groupName: position === 0 ? 'Filling' : 'Topping',
+				optional: false,
+				createIdentity: false
+			}))
+		})
+	);
+	return { alice, chicken, recipe };
+}
+
 describe('cooking, planned batches and undo', () => {
 	beforeEach(resetDb);
+
+	it('reserves pantry suggestions across repeated ingredient rows and can finish the suggested deductions', async () => {
+		const { alice, chicken, recipe } = await repeatedChickenRecipe();
+		await addStock(alice.ctx, {
+			operationId: opId(),
+			ingredientId: chicken,
+			newIngredientName: null,
+			quantity: d(100),
+			unit: 'g',
+			location: '',
+			expiresOn: null,
+			note: ''
+		});
+		const preview = await previewCooking(db, alice.ctx, recipe, d(1));
+		expect(preview.items.map((item) => item.suggestions.map((s) => s.take))).toEqual([
+			['60'],
+			['40']
+		]);
+		expect(preview.items.map((item) => item.shortfall)).toEqual([null, '20']);
+		await finishCooking(alice.ctx, {
+			operationId: opId(),
+			recipeId: recipe,
+			expectedRecipeRevision: preview.revision,
+			servings: d(1),
+			batchId: null,
+			items: preview.items.map((item) => ({
+				position: item.position,
+				mode: 'deduct',
+				ingredientId: chicken,
+				allocations: item.suggestions.map((s) => ({
+					lotId: s.lotId,
+					amount: d(s.take),
+					expectedRevision: s.revision
+				})),
+				note: ''
+			}))
+		});
+		expect(await chickenTotal(alice.householdId)).toBe('0');
+	});
+
+	it('reports cumulative lot shortages across cooking rows and preserves pantry stock', async () => {
+		const { alice, chicken, recipe } = await repeatedChickenRecipe();
+		const stock = await addStock(alice.ctx, {
+			operationId: opId(),
+			ingredientId: chicken,
+			newIngredientName: null,
+			quantity: d(100),
+			unit: 'g',
+			location: '',
+			expiresOn: null,
+			note: ''
+		});
+		const preview = await previewCooking(db, alice.ctx, recipe, d(1));
+		const suggestion = preview.items[0].suggestions[0];
+		const err = await finishCooking(alice.ctx, {
+			operationId: opId(),
+			recipeId: recipe,
+			expectedRecipeRevision: preview.revision,
+			servings: d(1),
+			batchId: null,
+			items: preview.items.map((item) => ({
+				position: item.position,
+				mode: 'deduct',
+				ingredientId: chicken,
+				allocations: [
+					{ lotId: stock.result.lotId, amount: d(60), expectedRevision: suggestion.revision }
+				],
+				note: ''
+			}))
+		}).catch((e) => e);
+		expect(err).toBeInstanceOf(ReviewConflict);
+		expect(err.review.insufficient).toEqual([
+			{ lotId: stock.result.lotId, requested: '120', available: '100', unit: 'g' }
+		]);
+		expect(await chickenTotal(alice.householdId)).toBe('100');
+	});
+
+	it('rejects another user’s private ingredient even when the cooking item is skipped', async () => {
+		const { alice, recipe } = await repeatedChickenRecipe();
+		const bob = await createUser('Bob');
+		const secret = await createCustomIngredient(db, bob.id, 'Private family spice blend');
+		const preview = await previewCooking(db, alice.ctx, recipe, d(1));
+		await expect(
+			finishCooking(alice.ctx, {
+				operationId: opId(),
+				recipeId: recipe,
+				expectedRecipeRevision: preview.revision,
+				servings: d(1),
+				batchId: null,
+				items: preview.items.map((item) => ({
+					position: item.position,
+					mode: 'skip',
+					ingredientId: secret.id,
+					allocations: [],
+					note: ''
+				}))
+			})
+		).rejects.toMatchObject({ status: 400 });
+		expect((await getHistory(db, alice.householdId, null)).items).toHaveLength(0);
+	});
 
 	it('cooking two of four planned servings leaves two planned; undo restores them without touching other events', async () => {
 		const alice = await createUser('Alice');

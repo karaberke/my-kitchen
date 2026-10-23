@@ -118,6 +118,14 @@ describe('importRecipeHtml with JSON-LD', () => {
 		expect(r.input.yieldNote).toBe('one loaf');
 	});
 
+	it('keeps a stated item yield alongside the servings count', () => {
+		const { input } = importRecipeHtml(
+			wrap({ ...RECIPE, recipeYield: ['4 servings', '8 crêpes', '8 crêpes'] })
+		);
+		expect(input.baseServings).toBe('4');
+		expect(input.yieldNote).toBe('8 crêpes');
+	});
+
 	it('decodes HTML entities in extracted text', () => {
 		const r = importRecipeHtml(
 			wrap({
@@ -130,9 +138,91 @@ describe('importRecipeHtml with JSON-LD', () => {
 		expect(r.input.ingredients[0].name).toBe('cheese — grated');
 		expect(r.input.ingredients[0].amount).toBe('200');
 	});
+
+	it('uses complete visible lists when structured ingredients are unreadable', () => {
+		const { input } = importRecipeHtml(
+			wrap(
+				{
+					...RECIPE,
+					name: 'Chickpea Curry',
+					prepTime: '15 minutes',
+					cookTime: '25 minutes',
+					recipeIngredient: '1 tbsp olive oil400 g chickpeas',
+					recipeInstructions: ['Soften the onion', 'then add the chickpeas.Simmer gently.']
+				},
+				'<main><article><h1>Chickpea Curry</h1><h2>Ingredients</h2><ul><li>1 tbsp olive oil</li><li>400 g chickpeas</li></ul><h2>Directions</h2><ol><li>Soften the onion, then add the chickpeas.</li><li>Simmer gently.</li></ol></article></main>'
+			)
+		);
+		expect(input.title).toBe('Chickpea Curry');
+		expect(input.prepMinutes).toBe('15');
+		expect(input.cookMinutes).toBe('25');
+		expect(input.ingredients.map((i) => [i.amount, i.unit, i.name])).toEqual([
+			['1', 'tbsp', 'olive oil'],
+			['400', 'g', 'chickpeas']
+		]);
+		expect(input.steps.map((s) => s.text)).toEqual([
+			'Soften the onion, then add the chickpeas.',
+			'Simmer gently.'
+		]);
+	});
 });
 
 describe('importRecipeHtml without JSON-LD', () => {
+	it('reads horizontal metadata and ingredient table rows without turning headers into ingredients', () => {
+		const { input } = importRecipeHtml(
+			`<main><article><h1>Tomato Chickpea Curry</h1>
+<table><tr><th>Prep Time</th><th>Cook Time</th><th>Servings</th></tr><tr><td>15 minutes</td><td>25 minutes</td><td>4</td></tr></table>
+<h2>Ingredients</h2><h3>For the sauce</h3><table><tr><th>Amount</th><th>Ingredient</th></tr>
+<tr><td>1 tablespoon</td><td>olive oil</td></tr><tr><td>400 g</td><td>chopped tomatoes</td></tr>
+<tr><td>1 can (400 g)</td><td>chickpeas</td></tr></table>
+<h2>Directions</h2><ol><li>Warm the oil.</li><li>Simmer the tomatoes and chickpeas.</li></ol></article></main>`
+		);
+		expect(input).toMatchObject({ prepMinutes: '15', cookMinutes: '25', baseServings: '4' });
+		expect(input.ingredients.map((i) => [i.amount, i.unit, i.name, i.group])).toEqual([
+			['1', 'tbsp', 'olive oil', 'For the sauce'],
+			['400', 'g', 'chopped tomatoes', 'For the sauce'],
+			['400', 'g', 'chickpeas', 'For the sauce']
+		]);
+		expect(input.steps.map((s) => s.text)).toEqual([
+			'Warm the oil.',
+			'Simmer the tomatoes and chickpeas.'
+		]);
+	});
+
+	it('reads recipe metadata and ordinary ingredient and direction lists without structured data', () => {
+		const { source, input } = importRecipeHtml(
+			`<html><head><title>Basic Crêpes</title></head><body>
+<h1>Basic Crêpes</h1><h2>Recipe Overview</h2>
+<dl><dt>Prep Time</dt><dd>10 mins</dd><dt>Cook Time</dt><dd>20 mins</dd>
+<dt>Total Time</dt><dd>30 mins</dd><dt>Servings</dt><dd>4</dd><dt>Yield</dt><dd>8 crêpes</dd></dl>
+<h2>Ingredients</h2><ul><li>2 large eggs</li><li>½ cup milk</li><li>½ cup water</li>
+<li>¼ teaspoon salt</li><li>1 cup all-purpose flour</li><li>2 tablespoons melted butter</li></ul>
+<h2>Directions</h2><ol><li>Whisk the batter.</li><li>Cook until golden.</li><li>Serve hot.</li></ol>
+</body></html>`
+		);
+		expect(source).toBe('text');
+		expect(input).toMatchObject({
+			title: 'Basic Crêpes',
+			prepMinutes: '10',
+			cookMinutes: '20',
+			baseServings: '4',
+			yieldNote: '8 crêpes'
+		});
+		expect(input.ingredients.map((i) => [i.amount, i.unit])).toEqual([
+			['2', ''],
+			['0.5', 'cup'],
+			['0.5', 'cup'],
+			['0.25', 'tsp'],
+			['1', 'cup'],
+			['2', 'tbsp']
+		]);
+		expect(input.steps.map((s) => s.text)).toEqual([
+			'Whisk the batter.',
+			'Cook until golden.',
+			'Serve hot.'
+		]);
+	});
+
 	it('falls back to readable text and takes a title from the document', () => {
 		const r = importRecipeHtml(
 			'<html><head><title>Grandma&#39;s stew</title></head><body><h1>Stew</h1><p>Very good.</p></body></html>'

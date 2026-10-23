@@ -1,7 +1,12 @@
 import { and, asc, eq, gte, lte } from 'drizzle-orm';
 import { db, type DbOrTx } from '$lib/server/db';
 import { mealPlanEntries, recipes } from '$lib/server/db/schema';
-import { assertMember, assertRecipeReadable, type ActorContext } from '$lib/server/access';
+import {
+	assertMember,
+	assertRecipeReadable,
+	recipeReadableBy,
+	type ActorContext
+} from '$lib/server/access';
 import { AppError, notFound } from '$lib/server/errors';
 import { lockHousehold } from '$lib/server/inventory';
 import { withTransaction } from '$lib/server/operations';
@@ -32,7 +37,7 @@ export function weekDates(startIso: string): string[] {
 export interface PlanEntryView {
 	id: string;
 	title: string;
-	/** null once the recipe is gone, or for a free-text note */
+	/** null when the recipe is gone or no longer readable, or for a free-text note */
 	recipeId: string | null;
 	prepMinutes: number | null;
 	cookMinutes: number | null;
@@ -49,7 +54,8 @@ export interface PlanDayView {
 export async function getWeekPlan(
 	dbx: DbOrTx,
 	householdId: string,
-	startIso: string
+	startIso: string,
+	userId: string
 ): Promise<PlanDayView[]> {
 	const dates = weekDates(startIso);
 	const rows = await dbx
@@ -57,14 +63,15 @@ export async function getWeekPlan(
 			id: mealPlanEntries.id,
 			plannedOn: mealPlanEntries.plannedOn,
 			title: mealPlanEntries.title,
-			recipeId: mealPlanEntries.recipeId,
+			recipeId: recipes.id,
 			prepMinutes: recipes.prepMinutes,
 			cookMinutes: recipes.cookMinutes,
 			baseServings: recipes.baseServings,
 			yieldNote: recipes.yieldNote
 		})
 		.from(mealPlanEntries)
-		.leftJoin(recipes, eq(recipes.id, mealPlanEntries.recipeId))
+		// Keep the stored meal title after unsharing, without exposing live recipe metadata.
+		.leftJoin(recipes, and(eq(recipes.id, mealPlanEntries.recipeId), recipeReadableBy(userId)))
 		.where(
 			and(
 				eq(mealPlanEntries.householdId, householdId),
@@ -146,7 +153,7 @@ export async function removePlanEntry(ctx: ActorContext, entryId: string): Promi
  */
 export async function planWeekToGrocery(ctx: ActorContext, startIso: string): Promise<string> {
 	await assertMember(db, ctx.householdId, ctx.userId);
-	const week = await getWeekPlan(db, ctx.householdId, startIso);
+	const week = await getWeekPlan(db, ctx.householdId, startIso, ctx.userId);
 	const planned = week
 		.flatMap((d) => d.entries)
 		.flatMap((e) => (e.recipeId ? [{ ...e, recipeId: e.recipeId }] : []));

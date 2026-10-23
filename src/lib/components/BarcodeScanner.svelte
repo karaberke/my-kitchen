@@ -296,11 +296,31 @@
 <svelte:document onvisibilitychange={onVisibility} />
 
 {#if open}
-	<div
-		class="fixed inset-0 z-50 flex flex-col bg-ink"
-		role="dialog"
-		aria-modal="true"
+	<dialog
+		{@attach (node) => {
+			const opener = document.activeElement;
+			node.showModal();
+			return () => {
+				node.close();
+				// Wait for removal and any confirmation dialog to finish mounting.
+				queueMicrotask(() => {
+					if (
+						opener instanceof HTMLElement &&
+						opener.isConnected &&
+						document.activeElement === document.body &&
+						!document.querySelector('dialog[open]')
+					) {
+						opener.focus();
+					}
+				});
+			};
+		}}
+		class="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none flex-col border-0 bg-ink p-0 open:flex"
 		aria-label="Scan a barcode"
+		oncancel={(e) => {
+			e.preventDefault();
+			close();
+		}}
 	>
 		<div class="flex items-center justify-between px-4 py-3 text-cream">
 			<h2 class="text-[15px] font-bold">Scan a barcode</h2>
@@ -389,5 +409,5 @@
 			</div>
 			<p class="hint">8, 12 or 13 digits. Spaces and hyphens are fine.</p>
 		</form>
-	</div>
+	</dialog>
 {/if}

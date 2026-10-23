@@ -177,8 +177,21 @@ that decision changes; nothing else needs to know.
 
 The fetched bytes are kept as an `html` attachment, named after the host and
 path, and the final URL (after redirects) goes into the recipe's Source field.
-A site that refuses the request is reported with the fallback: save the page in
-the browser, then use the HTML import.
+An ordinary request goes first. A site refusal (401/403) or a recognized
+challenge page gets one automatic retry of the original URL through `impit`'s
+Chrome profile. That profile supplies matching browser connection fingerprints
+and headers; changing only the User-Agent is insufficient for some sites.
+The retry uses the same redirect validation, timeout and byte cap. A 429,
+missing page, unsupported content, oversized page or network failure is not
+retried. Ordinary pages without structured recipe data keep the text-import
+behavior; they are not assumed to be challenges.
+
+`impit` is a server-only runtime dependency with platform-specific native
+binaries. The production image must retain its matching Linux package after
+dependency pruning. It needs no browser process, Python service, persistent
+cookies or paid proxy. Successful retrieval is still dependent on the site's
+protection and the server's network address. A challenge that remains after the
+retry is reported as a refusal instead of being imported as a recipe.
 
 ## Retention
 

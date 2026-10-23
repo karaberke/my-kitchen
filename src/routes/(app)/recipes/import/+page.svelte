@@ -96,8 +96,8 @@
 			</Alert>
 		{:else}
 			<Alert kind="warn">
-				That page carries no structured recipe data, so there was nothing reliable to read out of
-				it. Open the original alongside this form and copy across what you want tracked.
+				We read this page as plain text. Check the fields below against the original, correct any
+				mistakes, and fill in anything missing before saving.
 			</Alert>
 		{/if}
 		{#if review.url && review.source === 'text'}

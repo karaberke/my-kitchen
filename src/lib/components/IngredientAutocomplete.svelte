@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { fetchFresh } from '$lib/client/remote';
 	import { ingredientMatch, ingredientSuggestions } from '$lib/remote/ingredients.remote';
 
@@ -44,11 +45,27 @@
 	let active = $state(-1);
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let blurTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function cancelSearch() {
+		clearTimeout(timer);
+		seq++;
+	}
+
+	function closeSuggestions() {
+		cancelSearch();
+		clearTimeout(blurTimer);
+		open = false;
+		active = -1;
+	}
+
+	onDestroy(closeSuggestions);
 
 	function search(q: string) {
-		clearTimeout(timer);
 		// Every keystroke retires the answer still on its way.
-		const mine = ++seq;
+		cancelSearch();
+		const mine = seq;
+		active = -1;
 		if (q.trim().length < 2) {
 			suggestions = [];
 			open = false;
@@ -72,14 +89,14 @@
 		identityLabel = s.name;
 		createIdentity = false;
 		proposed = false;
-		open = false;
+		closeSuggestions();
 	}
 	function chooseNew() {
 		ingredientId = null;
 		identityLabel = null;
 		createIdentity = true;
 		proposed = false;
-		open = false;
+		closeSuggestions();
 	}
 	function clearIdentity() {
 		ingredientId = null;
@@ -116,7 +133,7 @@
 			open = true;
 			active = (active - 1 + total) % total;
 		} else if (e.key === 'Escape') {
-			open = false;
+			closeSuggestions();
 		} else if (e.key === 'Enter') {
 			if (open && active >= 0) {
 				e.preventDefault();
@@ -147,10 +164,12 @@
 		oninput={(e) => search(e.currentTarget.value)}
 		onkeydown={onKey}
 		onfocus={() => {
+			clearTimeout(blurTimer);
 			if (suggestions.length) open = true;
 		}}
 		onblur={() => {
-			setTimeout(() => (open = false), 150);
+			cancelSearch();
+			blurTimer = setTimeout(closeSuggestions, 150);
 			void proposeMatch();
 		}}
 	/>

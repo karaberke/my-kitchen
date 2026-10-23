@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql, inArray } from 'drizzle-orm';
+import { and, eq, exists, isNull, or, sql, inArray } from 'drizzle-orm';
 import type { RequestEvent } from '@sveltejs/kit';
 import { db as appDb, type DbOrTx } from '$lib/server/db';
 import { assertMember, requireUserApi } from '$lib/server/access';
@@ -172,12 +172,14 @@ export async function createCustomIngredient(
 
 /**
  * Validate that every referenced ingredient id is visible to the user
- * (catalog or own custom). Returns the visible ids.
+ * (catalog or own custom). Cooking can also use identities already recorded in
+ * its household's pantry by supplying `householdId`. Returns the visible ids.
  */
 export async function assertIngredientsVisible(
 	db: DbOrTx,
 	userId: string,
-	ids: string[]
+	ids: string[],
+	householdId: string | null = null
 ): Promise<Set<string>> {
 	const unique = [...new Set(ids)];
 	if (unique.length === 0) return new Set();
@@ -187,7 +189,15 @@ export async function assertIngredientsVisible(
 		.where(
 			and(
 				inArray(ingredients.id, unique),
-				or(isNull(ingredients.ownerUserId), eq(ingredients.ownerUserId, userId))
+				or(
+					isNull(ingredients.ownerUserId),
+					eq(ingredients.ownerUserId, userId),
+					householdId
+						? exists(
+								sql`(select 1 from ${stockLots} where ${stockLots.householdId} = ${householdId} and ${stockLots.ingredientId} = ${ingredients.id})`
+							)
+						: undefined
+				)
 			)
 		);
 	const visible = new Set(rows.map((r) => r.id));

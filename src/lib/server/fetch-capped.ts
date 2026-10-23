@@ -13,6 +13,14 @@ export type FetchImpl = (url: string, init: RequestInit) => Promise<Response>;
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+/** Fetch can fail before the headers arrive or while its body is being read. */
+function fetchError(err: unknown, timeoutMessage: string): AppError {
+	const name = (err as { name?: string } | null)?.name;
+	return name === 'TimeoutError' || name === 'AbortError'
+		? new AppError(504, timeoutMessage)
+		: new AppError(502, 'Could not reach that site. Check the link and your network.');
+}
+
 export interface FetchWithRedirectsOptions {
 	accept: string;
 	userAgent: string;
@@ -55,10 +63,7 @@ export async function fetchWithRedirects(
 				headers: { accept: options.accept, 'user-agent': options.userAgent }
 			});
 		} catch (err) {
-			const name = (err as { name?: string } | null)?.name;
-			if (name === 'TimeoutError' || name === 'AbortError')
-				throw new AppError(504, options.timeoutMessage);
-			throw new AppError(502, 'Could not reach that site. Check the link and your network.');
+			throw fetchError(err, options.timeoutMessage);
 		}
 
 		if (REDIRECT_STATUSES.has(res.status)) {
@@ -118,7 +123,14 @@ export async function readCappedOrNull(res: Response, maxBytes: number): Promise
 export async function readCapped(
 	res: Response,
 	maxBytes: number,
-	onTooLarge: (maxBytes: number) => never
+	onTooLarge: (maxBytes: number) => never,
+	timeoutMessage: string
 ): Promise<Buffer> {
-	return (await readCappedOrNull(res, maxBytes)) ?? onTooLarge(maxBytes);
+	let bytes: Buffer | null;
+	try {
+		bytes = await readCappedOrNull(res, maxBytes);
+	} catch (err) {
+		throw fetchError(err, timeoutMessage);
+	}
+	return bytes ?? onTooLarge(maxBytes);
 }

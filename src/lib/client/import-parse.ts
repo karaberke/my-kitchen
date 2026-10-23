@@ -1,6 +1,7 @@
 import { importRecipeHtml } from '$lib/shared/recipe-html';
 import { parseRecipeText } from '$lib/shared/recipe-text';
 import type { RecipeFormInput } from '$lib/shared/recipe-input';
+import { readPdfDocument } from '$lib/shared/pdf-text';
 
 /**
  * Read an imported recipe in the browser instead of on the server.
@@ -36,15 +37,14 @@ export async function parseFileInBrowser(file: File): Promise<ClientParse> {
 	if (await looksLikePdf(file)) {
 		// Loaded only when a PDF is actually chosen, so the bundle cost falls on the
 		// few imports that need it rather than every page view.
-		const { extractText, getDocumentProxy } = await import('unpdf');
+		const { getDocumentProxy } = await import('unpdf');
 		const doc = await getDocumentProxy(new Uint8Array(await file.arrayBuffer()));
-		const { text } = await extractText(doc, { mergePages: false });
-		const pages = (Array.isArray(text) ? text : [text]).map((p) => (p ?? '').trim());
+		const { pages, pageCount } = await readPdfDocument(doc);
 		const parsed = parseRecipeText(pages);
 		return {
 			source: parsed.empty ? 'pdf-empty' : 'pdf',
 			input: parsed.input,
-			pageCount: doc.numPages
+			pageCount
 		};
 	}
 	return parseHtmlInBrowser(await file.text());

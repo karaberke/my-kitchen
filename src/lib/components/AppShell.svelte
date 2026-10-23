@@ -3,6 +3,7 @@
 	import { enhance } from '$app/forms';
 	import type { Snippet } from 'svelte';
 	import HouseholdSwitcher from './HouseholdSwitcher.svelte';
+	import Icon from './Icon.svelte';
 	import { initials } from '$lib/client/format';
 
 	let {
@@ -18,13 +19,13 @@
 	} = $props();
 
 	const tabs = [
-		{ href: '/recipes', label: 'Recipes', icon: '❏' },
-		{ href: '/plan', label: 'Plan', icon: '▦' },
-		{ href: '/grocery', label: 'Grocery', icon: '☑' },
-		{ href: '/pantry', label: 'Pantry', icon: '▤' },
-		{ href: '/household', label: 'Household', icon: '⌂' },
-		{ href: '/settings', label: 'Settings', icon: '⚙' }
-	];
+		{ href: '/recipes', label: 'Recipes', icon: 'book' },
+		{ href: '/plan', label: 'Plan', icon: 'calendar' },
+		{ href: '/grocery', label: 'Grocery', icon: 'basket' },
+		{ href: '/pantry', label: 'Pantry', icon: 'fridge' },
+		{ href: '/household', label: 'Household', icon: 'cottage' },
+		{ href: '/settings', label: 'Settings', icon: 'cog' }
+	] as const;
 	const isActive = (href: string) =>
 		page.url.pathname === href || page.url.pathname.startsWith(href + '/');
 </script>
@@ -55,7 +56,7 @@
 						? 'bg-leaf-soft text-leaf'
 						: 'text-moss-soft hover:bg-linen'}"
 				>
-					<span class="w-5 text-center text-[15px]" aria-hidden="true">{t.icon}</span>
+					<Icon name={t.icon} size={20} />
 					<span>{t.label}</span>
 				</a>
 			{/each}
@@ -105,7 +106,7 @@
 						? 'text-leaf'
 						: 'text-moss-soft'}"
 				>
-					<span class="text-[17px] leading-none" aria-hidden="true">{t.icon}</span>
+					<Icon name={t.icon} size={22} />
 					<span>{t.label}</span>
 				</a>
 			{/each}

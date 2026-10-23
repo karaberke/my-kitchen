@@ -19,7 +19,7 @@ export const load = guard(async (event: PageServerLoadEvent) => {
 	const today = todayIso();
 	const start = mondayOf(today);
 	const [days, recipes] = await Promise.all([
-		getWeekPlan(db, household.id, start),
+		getWeekPlan(db, household.id, start, user.id),
 		// The picker in the "Add meal" sheet: the user's own and shared recipes.
 		listRecipeOptions(db, user.id)
 	]);

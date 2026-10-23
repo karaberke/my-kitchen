@@ -16,7 +16,7 @@ import { lockHousehold } from '$lib/server/inventory';
 import { withTransaction } from '$lib/server/operations';
 import { Dec } from '$lib/shared/decimal';
 import { computePlan, type PlanBatch, type StockLotInput } from '$lib/shared/grocery-math';
-import type { Convention } from '$lib/shared/units';
+import { convertAmount, type Convention } from '$lib/shared/units';
 import { match as isUuid } from '../../../params/uuid';
 import { lockList, bumpList } from './shared';
 
@@ -203,14 +203,39 @@ export async function recalculateDraft(
 			where line.id = v.id and line.list_id = ${listId}::uuid
 		`);
 
-	const sources = prepared.flatMap(({ line }) =>
-		line.sources.map((source) => ({
+	const conventionByBatch = new Map(batches.map((batch) => [batch.batchId, batch.convention]));
+	const sources = prepared.flatMap(({ line }) => {
+		// A recipe can repeat an ingredient in several sections, but a line keeps
+		// one source per batch. Combine amounts only when their units are known.
+		const byBatch = new Map<string, { amount: Dec | null; unit: string | null }>();
+		for (const source of line.sources) {
+			const amount = source.amount === null ? null : Dec.from(source.amount);
+			const previous = byBatch.get(source.batchId);
+			if (!previous) {
+				byBatch.set(source.batchId, { amount, unit: source.unit });
+				continue;
+			}
+			const convention = conventionByBatch.get(source.batchId)!;
+			const options = { gramsPerMl: line.ingredientId ? densities[line.ingredientId] : null };
+			const previousAmount =
+				previous.amount !== null && previous.unit && line.unit
+					? convertAmount(previous.amount, previous.unit, line.unit, convention, options)
+					: null;
+			const nextAmount =
+				amount !== null && source.unit && line.unit
+					? convertAmount(amount, source.unit, line.unit, convention, options)
+					: null;
+			previous.amount =
+				previousAmount !== null && nextAmount !== null ? previousAmount.add(nextAmount) : null;
+			previous.unit = line.unit;
+		}
+		return [...byBatch].map(([batchId, source]) => ({
 			lineId: lineIds.get(line.key)!,
-			batchId: source.batchId,
-			amount: source.amount ? Dec.from(source.amount).toDb() : null,
+			batchId,
+			amount: source.amount?.toDb() ?? null,
 			unit: source.unit
-		}))
-	);
+		}));
+	});
 	if (sources.length) await tx.insert(groceryLineSources).values(sources);
 
 	const stale = existing

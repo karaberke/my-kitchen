@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { expect, test } from '@playwright/test';
 import { createRecipe, register } from './helpers';
@@ -33,10 +33,11 @@ const PLAIN_PAGE = `<!DOCTYPE html><html><head><title>Nan's stew</title></head>
 async function servePage(
 	body: string,
 	status = 200,
-	contentType = 'text/html; charset=utf-8'
+	contentType = 'text/html; charset=utf-8',
+	statusFor?: (req: IncomingMessage) => number
 ): Promise<{ url: string; close: () => Promise<void> }> {
-	const server = createServer((_req, res) => {
-		res.writeHead(status, { 'content-type': contentType });
+	const server = createServer((req, res) => {
+		res.writeHead(statusFor?.(req) ?? status, { 'content-type': contentType });
 		res.end(body);
 	});
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -423,6 +424,52 @@ test('a link the site will not serve leaves the form usable to try again', async
 
 		// Nothing is saved, and the address is still there to correct.
 		await expect(page.locator('#import-url')).toHaveValue(fixture.url);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('a blocked link imports through the browser profile and keeps the recipe source', async ({
+	page
+}) => {
+	const userAgents: string[] = [];
+	const fixture = await servePage(JSONLD_PAGE, 200, 'text/html; charset=utf-8', (req) => {
+		const agent = req.headers['user-agent'] ?? '';
+		userAgents.push(agent);
+		return /Chrome\//.test(agent) ? 200 : 403;
+	});
+	try {
+		await register(page, 'Luca');
+		await page.goto('/recipes/import?kind=url');
+		await page.locator('#import-url').fill(fixture.url);
+		await page.getByRole('button', { name: 'Read the recipe' }).click();
+
+		await expect(page.getByRole('heading', { name: 'Check the import' })).toBeVisible();
+		await expect(page.getByLabel('Title')).toHaveValue('Red lentil dal');
+		await expect(page.getByLabel('Base servings')).toHaveValue('4');
+		await expect(page.getByLabel('Prep (min)')).toHaveValue('15');
+		await expect(page.getByLabel('Cook (min)')).toHaveValue('45');
+		await expect(page.locator('#ing-0-name')).toHaveValue('red lentils');
+		await expect(page.locator('#ing-0-amount')).toHaveValue('200');
+		await expect(page.locator('#ing-0-unit')).toHaveValue('g');
+		await expect(page.locator('#step-0-text')).toHaveValue('Rinse the lentils.');
+		await expect(page.getByLabel('Source')).toHaveValue(fixture.url);
+		const attachment = page.getByRole('link', { name: /127\.0\.0\.1.*\.html/ });
+		await expect(attachment).toBeVisible();
+		expect(userAgents).toHaveLength(2);
+		expect(userAgents[0]).toBe('my-kitchen (recipe import)');
+		expect(userAgents[1]).toMatch(/Chrome\//);
+
+		await page.getByRole('button', { name: 'Save recipe' }).click();
+		await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
+		await expect(page.getByRole('heading', { name: 'Red lentil dal' })).toBeVisible();
+		await expect(page.getByText(`Source: ${fixture.url}`, { exact: true })).toBeVisible();
+		const savedAttachment = page.getByRole('link', { name: /127\.0\.0\.1.*\.html/ });
+		await expect(savedAttachment).toBeVisible();
+		const source = await page.request.get((await savedAttachment.getAttribute('href'))!);
+		expect(source.status()).toBe(200);
+		expect(source.headers()['content-type']).toContain('text/html');
+		expect(await source.text()).toBe(JSONLD_PAGE);
 	} finally {
 		await fixture.close();
 	}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import { page } from '$app/state';
@@ -92,21 +93,33 @@
 	let scanOpId = $state(newOperationId());
 	let looking = $state(false);
 	let scanner: BarcodeScanner | undefined = $state();
+	let lookupSequence = 0;
+
+	function setScannerOpen(open: boolean) {
+		lookupSequence++;
+		looking = false;
+		scannerOpen = open;
+	}
+
+	onDestroy(() => lookupSequence++);
 
 	/**
 	 * A decoded or typed number goes to the server, which validates it again and
 	 * answers what it means for this household. Nothing is stored by this call.
 	 */
 	async function lookUp(code: { raw: string; symbology: string | null }) {
+		if (!scannerOpen || looking) return;
+		const mine = ++lookupSequence;
 		looking = true;
 		try {
 			const body = await fetchFresh(barcodeLookup({ code: code.raw, symbology: code.symbology }));
+			if (mine !== lookupSequence || !scannerOpen) return;
 			if (!body.ok) {
 				pushToast(body.message, { kind: 'error' });
 				scanner?.resume();
 				return;
 			}
-			scannerOpen = false;
+			setScannerOpen(false);
 			scan = {
 				code: code.raw,
 				symbology: code.symbology,
@@ -114,12 +127,13 @@
 				suggestion: body.suggestion
 			};
 		} catch (err) {
+			if (mine !== lookupSequence || !scannerOpen) return;
 			pushToast(remoteErrorMessage(err, 'Could not reach the server. Check your connection.'), {
 				kind: 'error'
 			});
 			scanner?.resume();
 		} finally {
-			looking = false;
+			if (mine === lookupSequence) looking = false;
 		}
 	}
 
@@ -134,7 +148,7 @@
 			action: eventId ? { label: 'Undo', onClick: () => undoEventNow(eventId) } : undefined
 		});
 		// Straight back to the viewfinder for the next item in the trolley.
-		scannerOpen = true;
+		setScannerOpen(true);
 	}
 
 	const undoEventNow = createUndo({
@@ -151,7 +165,7 @@
 		: 'lots'} in stock"
 >
 	<a href="/pantry/history" class="btn-ghost btn-sm hidden sm:inline-flex">History</a>
-	<button class="btn-secondary btn-sm rounded-full" onclick={() => (scannerOpen = true)}
+	<button class="btn-secondary btn-sm rounded-full" onclick={() => setScannerOpen(true)}
 		>Scan</button
 	>
 	<button class="btn-primary btn-sm rounded-full" onclick={() => openAdd()}>+ Add stock</button>
@@ -475,7 +489,7 @@
 	bind:open={scannerOpen}
 	busy={looking}
 	ondetected={lookUp}
-	onclose={() => (scannerOpen = false)}
+	onclose={() => setScannerOpen(false)}
 />
 
 <ScanConfirm

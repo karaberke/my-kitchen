@@ -18,6 +18,7 @@
 		children: Snippet;
 		onclose?: () => void;
 	} = $props();
+	const titleId = $props.id();
 
 	/** Keeps the native dialog's open/closed state in sync with the `open` prop. */
 	function syncOpen(node: HTMLDialogElement) {
@@ -42,7 +43,7 @@
 	onclick={(e) => {
 		if (e.target === e.currentTarget) close();
 	}}
-	aria-labelledby="sheet-title"
+	aria-labelledby={titleId}
 >
 	<div
 		class="anim-sheet max-h-[90dvh] w-full overflow-y-auto rounded-t-[24px] bg-cream px-5 pt-3 pb-[calc(22px+env(safe-area-inset-bottom))] shadow-sheet sm:max-w-lg sm:rounded-[20px] sm:px-6 sm:pb-6"
@@ -51,7 +52,7 @@
 		<div class="mx-auto mb-3 h-1 w-9 rounded-full bg-fog sm:hidden" aria-hidden="true"></div>
 		<div class="flex items-start justify-between gap-3">
 			<div>
-				<h2 id="sheet-title" class="text-[17px]">{title}</h2>
+				<h2 id={titleId} class="text-[17px]">{title}</h2>
 				{#if description}<p class="mt-1 text-[12.5px] leading-relaxed text-sage">
 						{description}
 					</p>{/if}

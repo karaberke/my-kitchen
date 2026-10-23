@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { onDestroy, type Snippet } from 'svelte';
 	import { debouncedSubmit } from '$lib/client/debounced-search';
 
 	/**
@@ -27,6 +27,7 @@
 
 	let q = $derived(value);
 	const submit = debouncedSubmit();
+	onDestroy(() => submit.cancel());
 </script>
 
 <form

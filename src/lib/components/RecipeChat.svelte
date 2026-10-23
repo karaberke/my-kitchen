@@ -57,6 +57,12 @@
 	let epoch = 0;
 	let recognition: { stop(): void } | null = null;
 
+	function stopDictation() {
+		recognition?.stop();
+		recognition = null;
+		listening = false;
+	}
+
 	function loadTurns(): RecipeChatTurn[] {
 		if (!storageKey) return [];
 		try {
@@ -112,8 +118,9 @@
 		}
 		scrollToNewest();
 		return () => {
+			epoch++;
 			document.removeEventListener('pointerdown', primeSpeech, { capture: true });
-			recognition?.stop();
+			stopDictation();
 			stopSpeaking();
 		};
 	});
@@ -121,7 +128,7 @@
 	async function send() {
 		const question = input.trim();
 		if (pending || !question) return;
-		recognition?.stop();
+		stopDictation();
 		stopSpeaking();
 		if (voice) primeSpeech();
 		const mine = epoch;
@@ -158,7 +165,7 @@
 
 	function clearChat() {
 		epoch++;
-		recognition?.stop();
+		stopDictation();
 		stopSpeaking();
 		turns = [];
 		error = '';
@@ -181,17 +188,22 @@
 		micError = '';
 		stopSpeaking(); // the microphone must not hear the answer
 		const session = listen({ lang: speechLang() });
+		const mine = epoch;
 		recognition = session;
 		listening = true;
 		try {
 			const text = await session.result;
+			if (mine !== epoch || recognition !== session) return;
 			input = (input.trim() ? input.trimEnd() + ' ' : '') + text;
 			input = input.slice(0, LLM_QUESTION_MAX_CHARS);
 		} catch (err) {
+			if (mine !== epoch || recognition !== session) return;
 			micError = err instanceof Error ? err.message : 'Could not use the microphone.';
 		} finally {
-			if (recognition === session) recognition = null;
-			listening = false;
+			if (recognition === session) {
+				recognition = null;
+				listening = false;
+			}
 		}
 	}
 

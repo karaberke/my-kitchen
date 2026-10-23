@@ -24,6 +24,7 @@ const USER_AGENT = 'my-kitchen (recipe image)';
 const ACCEPT = 'image/*;q=0.9,*/*;q=0.1';
 const DEFAULT_TIMEOUT_MS = 6000;
 const DEFAULT_MAX_REDIRECTS = 3;
+const TIMEOUT_MESSAGE = 'That site took too long to send the picture.';
 
 export type { FetchImpl };
 
@@ -67,7 +68,7 @@ export async function fetchImageBytes(raw: string, options: FetchImageOptions): 
 		userAgent: USER_AGENT,
 		timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 		maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
-		timeoutMessage: 'That site took too long to send the picture.',
+		timeoutMessage: TIMEOUT_MESSAGE,
 		noLocationMessage: 'That link redirects to nothing.',
 		fetchImpl: options.fetchImpl
 	});
@@ -79,7 +80,7 @@ export async function fetchImageBytes(raw: string, options: FetchImageOptions): 
 		await discardBody(response);
 		throw err;
 	}
-	const bytes = await readCapped(response, maxBytes, tooLarge);
+	const bytes = await readCapped(response, maxBytes, tooLarge, TIMEOUT_MESSAGE);
 	// Only emptiness is judged here. Whether the bytes decode as a picture is
 	// the storage pipeline's question, and it asks sharp rather than a header.
 	if (bytes.length === 0) throw new AppError(400, 'That link did not give back a picture.');

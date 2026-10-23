@@ -69,6 +69,23 @@
 	);
 </script>
 
+{#snippet cookingError()}
+	{#if f?.message}
+		<Alert class="mb-4" kind="error"
+			>{f.message}{#if f.review?.insufficient?.length}
+				— {#each f.review.insufficient as s (s.lotId)}<span
+						>{fmtQty(s.available, s.unit)} available where {fmtQty(s.requested, s.unit)} was requested.
+					</span>{/each}{/if}
+			<button
+				type="button"
+				class="font-bold underline"
+				onclick={() => invalidate('app:cook').then(() => (finishOpen = true))}
+				>Refresh the preview</button
+			></Alert
+		>
+	{/if}
+{/snippet}
+
 <PageHeader
 	title="Cooking"
 	subtitle="{r.title} · {fmtNum(servings)} servings"
@@ -126,18 +143,8 @@
 		<Alert class="mb-4" kind="info"
 			>The cooking event was undone; its pantry deductions were reversed.</Alert
 		>
-	{:else if f?.message}
-		<Alert class="mb-4" kind="error"
-			>{f.message}{#if f.review?.insufficient?.length}
-				— {#each f.review.insufficient as s (s.lotId)}<span
-						>{fmtQty(s.available, s.unit)} available where {fmtQty(s.requested, s.unit)} was requested.
-					</span>{/each}{/if}
-			<button
-				class="font-bold underline"
-				onclick={() => invalidate('app:cook').then(() => (finishOpen = true))}
-				>Refresh the preview</button
-			></Alert
-		>
+	{:else if f?.message && !finishOpen}
+		{@render cookingError()}
 	{/if}
 
 	<div class="mb-3.5 flex items-center justify-end gap-3.5">
@@ -354,6 +361,9 @@
 		title="Finish cooking {r.title}"
 		description="Confirm servings and what actually left the pantry. Nothing is deducted until you confirm."
 	>
+		{#if finishOpen}
+			{@render cookingError()}
+		{/if}
 		<form
 			method="post"
 			action="?/finish"

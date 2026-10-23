@@ -1,5 +1,19 @@
-import type { RecipeFormInput, RecipeStepInput } from './recipe-input';
-import { ingredientFromLine } from './ingredient-line';
+import {
+	emptyRecipeFormInput,
+	servingsFromYield,
+	type RecipeFormInput,
+	type RecipeStepInput
+} from './recipe-input';
+import { ingredientRowsFromLine } from './ingredient-line';
+import {
+	isRecipeMetadataLabel,
+	parseRecipeText,
+	RECIPE_SOURCE,
+	recipeSectionOf,
+	timeToMinutes
+} from './recipe-text';
+
+export { emptyRecipeFormInput, servingsFromYield } from './recipe-input';
 
 /**
  * Read a recipe out of a saved HTML page.
@@ -75,11 +89,81 @@ function blocksToLines(html: string): string[] {
 	return html
 		.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
 		.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
-		.replace(/<\/(p|li|div|h[1-6]|section)\s*>/gi, '\n')
+		.replace(/<\/(p|li|div|h[1-6]|section|dt|dd|tr|td|th)\s*>/gi, '\n')
 		.replace(/<br\s*\/?>/gi, '\n')
 		.split('\n')
 		.map((part) => stripTags(part))
 		.filter(Boolean);
+}
+
+/** Preserve table orientation and nested ingredient headings before stripping markup. */
+function recipeLayoutText(html: string): string {
+	const tables = html.replace(/<table\b[^>]*>([\s\S]*?)<\/table\s*>/gi, (_, table: string) => {
+		const rows = [...table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)].map((row) =>
+			[...row[1].matchAll(/<(th|td)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)].map((cell) => ({
+				header: cell[1].toLowerCase() === 'th',
+				text: stripTags(cell[2])
+			}))
+		);
+		const [head, values] = rows;
+		if (!rows.some((row) => row.length)) return table;
+		if (
+			rows.length === 2 &&
+			head.length > 0 &&
+			head.length === values.length &&
+			head.every((cell) => cell.header && isRecipeMetadataLabel(cell.text))
+		)
+			return `\n${head.map((cell, i) => `${cell.text.replace(/:$/, '')}: ${values[i].text}`).join('\n')}\n`;
+		return `\n${rows
+			.filter((row) => row.some((cell) => !cell.header))
+			.map((row) => row.map((cell) => cell.text).join(' '))
+			.join('\n')}\n`;
+	});
+	let ingredientLevel: number | null = null;
+	return tables.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi, (whole, level, content) => {
+		const text = stripTags(content);
+		const section = recipeSectionOf(text);
+		if (section) ingredientLevel = section === 'ingredients' ? Number(level) : null;
+		else if (ingredientLevel !== null) {
+			if (Number(level) > ingredientLevel)
+				return `<h${level}>${content.replace(/:\s*$/, '')}:</h${level}>`;
+			ingredientLevel = null;
+		}
+		return whole;
+	});
+}
+
+function plainRecipeInput(html: string, pageImage: string, pageUrl?: string): RecipeFormInput {
+	const body = html.replace(/<(head|nav|aside)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
+	const readable = blocksToLines(body).join('\n');
+	const region = /<(main|article)\b[^>]*>([\s\S]*?)<\/\1\s*>/i.exec(body)?.[2];
+	const recipeBody = (region ?? body).replace(
+		/<footer\b[^>]*>([\s\S]*?)<\/footer\s*>/gi,
+		(_, content) => {
+			const source = blocksToLines(content).join(' ');
+			return /^source\s*:\s*https?:\/\/\S+\s*$/i.test(source) ? `\n${source}\n` : '';
+		}
+	);
+	const parsed = parseRecipeText([blocksToLines(recipeLayoutText(recipeBody)).join('\n')]).input;
+	const headings = [...recipeBody.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi)];
+	for (let i = 0; i < headings.length; i++) {
+		const heading = headings[i];
+		if (recipeSectionOf(stripTags(heading[2])) !== 'steps') continue;
+		const end = headings.slice(i + 1).find((next) => Number(next[1]) <= Number(heading[1]))?.index;
+		const content = recipeBody.slice(heading.index + heading[0].length, end);
+		const list = /<(ol|ul)\b[^>]*>([\s\S]*?)<\/\1\s*>/i.exec(content);
+		if (!list) continue;
+		const steps = [...list[2].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li\s*>/gi)]
+			.map((item) => stripTags(item[1]))
+			.filter(Boolean);
+		if (steps.length) parsed.steps = steps.map((text) => ({ section: '', text }));
+		break;
+	}
+	parsed.title = (region && titleFromDocument(region)) || titleFromDocument(html) || parsed.title;
+	parsed.source ||= RECIPE_SOURCE.exec(readable)?.[1] ?? pageUrl ?? '';
+	parsed.imageUrl = absoluteImageUrl(pageImage, pageUrl);
+	parsed.notes = readable.length <= MAX_USEFUL_NOTES ? readable : '';
+	return parsed;
 }
 
 function text(value: unknown): string {
@@ -181,34 +265,6 @@ function titleFromDocument(html: string): string {
  */
 const MAX_USEFUL_NOTES = 4000;
 
-/** A yield like "4 servings" gives a servings count; "one loaf" is kept as a note. */
-export function servingsFromYield(yieldText: string): { baseServings: string; yieldNote: string } {
-	const servings = /^\s*(\d+(?:\.\d+)?)\b/.exec(yieldText);
-	if (servings) return { baseServings: servings[1], yieldNote: '' };
-	return { baseServings: '', yieldNote: yieldText.trim() };
-}
-
-export function emptyRecipeFormInput(): RecipeFormInput {
-	return {
-		title: '',
-		description: '',
-		baseServings: '',
-		yieldNote: '',
-		prepMinutes: '',
-		cookMinutes: '',
-		source: '',
-		notes: '',
-		tags: '',
-		convention: 'metric',
-		ingredients: [],
-		steps: [],
-		intent: 'save',
-		expectedRevision: null,
-		removeImage: false,
-		imageUrl: ''
-	};
-}
-
 /**
  * The picture a page names, as an absolute http(s) address, or ''.
  *
@@ -253,6 +309,7 @@ function schemaImage(value: unknown): string {
 
 export function importRecipeHtml(html: string, pageUrl?: string): HtmlImportResult {
 	const input = emptyRecipeFormInput();
+	input.source = pageUrl ?? '';
 	if (!html.trim()) return { source: 'text', input };
 
 	// The page's own picture, used unless the recipe names a better one.
@@ -269,31 +326,52 @@ export function importRecipeHtml(html: string, pageUrl?: string): HtmlImportResu
 
 		input.title = text(recipe.name) || titleFromDocument(html);
 		input.description = text(recipe.description);
-		const prep = isoDurationToMinutes(firstScalar(recipe.prepTime));
-		const cook = isoDurationToMinutes(firstScalar(recipe.cookTime));
+		const prep =
+			isoDurationToMinutes(firstScalar(recipe.prepTime)) ??
+			timeToMinutes(firstScalar(recipe.prepTime));
+		const cook =
+			isoDurationToMinutes(firstScalar(recipe.cookTime)) ??
+			timeToMinutes(firstScalar(recipe.cookTime));
 		if (prep !== null) input.prepMinutes = String(prep);
 		if (cook !== null) input.cookMinutes = String(cook);
 
-		Object.assign(input, servingsFromYield(firstScalar(recipe.recipeYield)));
+		const yields = Array.isArray(recipe.recipeYield) ? recipe.recipeYield : [recipe.recipeYield];
+		for (const value of new Set(yields.map(text))) {
+			const yieldInfo = servingsFromYield(value);
+			if (yieldInfo.baseServings && !input.baseServings)
+				input.baseServings = yieldInfo.baseServings;
+			if (yieldInfo.yieldNote)
+				input.yieldNote = [input.yieldNote, yieldInfo.yieldNote].filter(Boolean).join('; ');
+		}
 
 		const ingredients = recipe.recipeIngredient ?? recipe.ingredients;
 		if (Array.isArray(ingredients))
 			input.ingredients = ingredients
 				.map((i) => text(i))
 				.filter(Boolean)
-				.map(ingredientFromLine);
+				.flatMap(ingredientRowsFromLine);
 
 		input.steps = instructionsToSteps(recipe.recipeInstructions);
+		if (!input.ingredients.length) {
+			// Some pages publish concatenated ingredient strings or incomplete
+			// structured data. Prefer intact visible lists over invented splits.
+			const visible = plainRecipeInput(html, pageImage, pageUrl);
+			if (visible.ingredients.length) {
+				input.ingredients = visible.ingredients;
+				input.steps = visible.steps.length ? visible.steps : input.steps;
+				input.baseServings ||= visible.baseServings;
+				input.yieldNote ||= visible.yieldNote;
+				input.prepMinutes ||= visible.prepMinutes;
+				input.cookMinutes ||= visible.cookMinutes;
+				input.notes = visible.notes;
+			}
+			if (!input.ingredients.length && typeof ingredients === 'string' && ingredients.trim())
+				input.ingredients = ingredientRowsFromLine(stripTags(ingredients));
+		}
 		// The recipe's own picture beats og:image, which is sometimes the site logo.
 		input.imageUrl = absoluteImageUrl(schemaImage(recipe.image) || pageImage, pageUrl);
 		return { source: 'json-ld', input };
 	}
 
-	// No structured recipe: keep the readable text so nothing is lost, and let
-	// the user shape it in the form.
-	input.title = titleFromDocument(html);
-	input.imageUrl = absoluteImageUrl(pageImage, pageUrl);
-	const readable = stripTags(html);
-	input.notes = readable.length <= MAX_USEFUL_NOTES ? readable : '';
-	return { source: 'text', input };
+	return { source: 'text', input: plainRecipeInput(html, pageImage, pageUrl) };
 }

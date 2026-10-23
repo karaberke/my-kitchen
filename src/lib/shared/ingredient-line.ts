@@ -26,6 +26,9 @@ export const RANGE_SEPARATOR = /\s*[-–—]\s*/;
 /** A leading quantity and the space after it. */
 const QUANTITY = new RegExp(`^${QUANTITY_PATTERN}\\s*`);
 
+const BULLET = /^[-*•]\s+/;
+const INGREDIENT_LABEL = /^([^:]{1,100}):\s*(.+)$/;
+
 export interface SplitIngredient {
 	amount: string;
 	unit: string;
@@ -48,14 +51,27 @@ function parseLine(line: string): ParsedLine {
 	const original = collapseSpaces(line);
 	const empty = { amount: null, unit: '', name: original, original };
 	if (!original) return { ...empty, name: '' };
+	const written = original.replace(BULLET, '');
+	const labelled = INGREDIENT_LABEL.exec(written);
+	if (labelled && QUANTITY.test(labelled[2])) {
+		const parsed = parseLine(labelled[2]);
+		// An explicit ingredient name beats a section label. A size alone is
+		// not an identity ("Eggs: 2 large"), so the label supplies that name.
+		if (
+			parsed.amount &&
+			!/^(?:(?:extra[- ]?)?small|medium|(?:extra[- ]?)?large|jumbo)$/i.test(parsed.name)
+		)
+			return { ...parsed, original };
+		return { ...parseLine(`${labelled[2]} ${labelled[1]}`), name: labelled[1].trim(), original };
+	}
 
-	const m = QUANTITY.exec(original);
+	const m = QUANTITY.exec(written);
 	if (!m) return empty;
 
 	const parsed = parseAmount(lowEnd(m[1]));
 	if (!parsed.ok || parsed.value === null) return empty;
 
-	let rest = original.slice(m[0].length).trim();
+	let rest = written.slice(m[0].length).trim();
 	let unit = '';
 	const words = rest.split(' ');
 	const token = readUnitToken(words);
@@ -137,6 +153,57 @@ export function ingredientFromSplit(split: SplitIngredient): RecipeIngredientInp
 /** One written ingredient line as a form row, split into amount, unit and name. */
 export function ingredientFromLine(line: string): RecipeIngredientInput {
 	return ingredientFromSplit(splitIngredientLine(line));
+}
+
+/**
+ * Split a compound list only at top-level separators followed by another
+ * independently measured, named ingredient. Parentheses and alternatives stay
+ * intact; an ambiguous list is kept verbatim for review.
+ */
+export function ingredientRowsFromLine(line: string): RecipeIngredientInput[] {
+	const original = collapseSpaces(line);
+	const written = original.replace(BULLET, '');
+	const labelled = INGREDIENT_LABEL.exec(written);
+	const body = labelled?.[2] ?? written;
+	const parts: string[] = [];
+	const separators = /[,;]\s*(?:and\s+)?|\s+and\s+/gi;
+	let depth = 0;
+	let scanned = 0;
+	let start = 0;
+	for (const match of body.matchAll(separators)) {
+		for (; scanned < match.index; scanned++) {
+			if (body[scanned] === '(') depth++;
+			if (body[scanned] === ')') depth = Math.max(0, depth - 1);
+		}
+		const next = match.index + match[0].length;
+		// A comma between digits belongs to a decimal, never a list boundary.
+		if (/\d/.test(body[match.index - 1] ?? '') && /^,\d/.test(body.slice(match.index))) continue;
+		if (depth || !QUANTITY.test(body.slice(next))) continue;
+		parts.push(body.slice(start, match.index).trim());
+		start = next;
+	}
+	if (!parts.length) {
+		if (labelled && /\s(?:and|&)\s/i.test(labelled[1]))
+			return [ingredientFromSplit({ amount: '', unit: '', name: original, original })];
+		return [ingredientFromLine(original)];
+	}
+	parts.push(body.slice(start).trim());
+	const splits = parts.map(splitIngredientLine);
+	if (
+		!splits.every(
+			(split) =>
+				!!split.amount &&
+				/^\p{L}/u.test(split.name) &&
+				// A usage clause modifies the preceding ingredient; it is not
+				// a separately named food, even when it starts with a measure.
+				!/^(?:for|to|as|plus|at|per|more)\b/i.test(split.name)
+		)
+	)
+		return [ingredientFromSplit({ amount: '', unit: '', name: original, original })];
+	return splits.map((split) => ({
+		...ingredientFromSplit(split),
+		group: labelled?.[1].trim() ?? ''
+	}));
 }
 
 /**

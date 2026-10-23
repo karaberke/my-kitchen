@@ -1,6 +1,14 @@
-import type { RecipeFormInput, RecipeStepInput } from './recipe-input';
-import { emptyRecipeFormInput } from './recipe-html';
-import { ingredientFromSplit, splitIngredientLine, type SplitIngredient } from './ingredient-line';
+import {
+	emptyRecipeFormInput,
+	servingsFromYield,
+	type RecipeFormInput,
+	type RecipeStepInput
+} from './recipe-input';
+import {
+	ingredientRowsFromLine,
+	splitIngredientLine,
+	type SplitIngredient
+} from './ingredient-line';
 import { collapseSpaces } from './text';
 
 /**
@@ -13,21 +21,69 @@ const INGREDIENT_HEADING = /^(ingredients|you will need|shopping list)\b[:\s]*$/
 const STEP_HEADING = /^(method|instructions|directions|steps|preparation)\b[:\s]*$/i;
 const OTHER_HEADING = /^(notes?|tips?|nutrition|equipment)\b[:\s]*$/i;
 
-const SERVINGS = /(?:^|\b)(?:serves|servings?|yield|makes)\b[:\s]*(\d+(?:\.\d+)?)/i;
+/** Semantic HTML headings use the same section names as plain-text imports. */
+export function recipeSectionOf(text: string): 'ingredients' | 'steps' | 'other' | null {
+	if (INGREDIENT_HEADING.test(text)) return 'ingredients';
+	if (STEP_HEADING.test(text)) return 'steps';
+	return OTHER_HEADING.test(text) ? 'other' : null;
+}
+
 const SERVINGS_TRAILING = /^(\d+(?:\.\d+)?)\s+servings?\b/i;
-const PREP = /\bprep(?:aration)?(?:\s*time)?\b[:\s]*(.+)$/i;
-const COOK = /\b(?:cook|bake|total)(?:ing)?(?:\s*time)?\b[:\s]*(.+)$/i;
+const META_LABEL =
+	'prep(?:aration)?(?:\\s+time)?|cook(?:ing)?(?:\\s+time)?|bake(?:\\s+time)?|total(?:\\s+time)?|serves|servings?|yield|makes';
+const METADATA_START = new RegExp(`^(?:${META_LABEL})(?:\\s*:|\\s+|$)`, 'i');
+const METADATA_ONLY = new RegExp(`^(?:${META_LABEL})\\s*:?$`, 'i');
+const METADATA_EXPLICIT = new RegExp(`^(?:${META_LABEL})\\s*:`, 'i');
+
+export function isRecipeMetadataLabel(text: string): boolean {
+	return METADATA_ONLY.test(text.trim());
+}
+const LABELLED = /^[^:]{1,100}:/;
+export const RECIPE_SOURCE = /^source\s*:\s*(https?:\/\/\S+)\s*$/im;
+
+/** Explicit metadata only; instruction prose and total time never become cook time. */
+function readMetadata(text: string, input: RecipeFormInput): boolean {
+	const trailing = SERVINGS_TRAILING.exec(text);
+	if (trailing) {
+		input.baseServings ||= trailing[1];
+		return true;
+	}
+	if (!METADATA_START.test(text)) return false;
+	const labels = [...text.matchAll(new RegExp(`\\b(${META_LABEL})\\b\\s*:?\\s*`, 'gi'))];
+	let found = false;
+	labels.forEach((match, i) => {
+		const value = text
+			.slice(match.index + match[0].length, labels[i + 1]?.index)
+			.replace(/[|;•]+\s*$/, '')
+			.trim();
+		const label = match[1].toLowerCase();
+		if (!value || (!/^\d/.test(value) && !/^(?:yield|makes)/.test(label))) return;
+		if (/^(?:serv|yield|makes)/.test(label)) {
+			const parsed = servingsFromYield(value);
+			input.baseServings ||= parsed.baseServings;
+			input.yieldNote ||= parsed.yieldNote;
+			found = true;
+			return;
+		}
+		const minutes = timeToMinutes(value);
+		if (minutes === null) return;
+		if (label.startsWith('prep')) input.prepMinutes ||= String(minutes);
+		if (/^(?:cook|bake)/.test(label)) input.cookMinutes ||= String(minutes);
+		found = true;
+	});
+	return found;
+}
 
 /** "1 hr 30 min", "45 minutes", "1h30" -> minutes. */
 export function timeToMinutes(raw: string): number | null {
-	const s = raw.toLowerCase();
-	const h = /(\d+(?:\.\d+)?)\s*(?:h\b|hr|hour)/.exec(s);
-	const m = /(\d+)\s*(?:m\b|min)/.exec(s);
-	if (!h && !m) {
-		const bare = /^\s*(\d+)\s*$/.exec(s);
-		return bare ? Number(bare[1]) : null;
-	}
-	return Math.round((h ? Number(h[1]) * 60 : 0) + (m ? Number(m[1]) : 0));
+	const s = raw.trim().toLowerCase().replace(/\.$/, '');
+	const hours =
+		/^(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)(?:\s*,?\s*(?:and\s+)?(\d+)\s*(?:minutes?|mins?|m)?)?$/.exec(
+			s
+		);
+	if (hours) return Math.round(Number(hours[1]) * 60 + Number(hours[2] ?? 0));
+	const minutes = /^(\d+)\s*(?:minutes?|mins?|m)?$/.exec(s);
+	return minutes ? Number(minutes[1]) : null;
 }
 
 export interface TextImportResult {
@@ -50,7 +106,7 @@ function splitOf(line: Line): SplitIngredient {
 	return line.split;
 }
 
-const NUMBERED = /^\d+[.)]\s+/;
+const NUMBERED = /^(?:\d+[.)]\s+|step\s+\d+\s*[:.)-]?\s*)/i;
 
 /** A line that plainly begins something new, so the one before it is finished. */
 function startsNewItem(line: Line): boolean {
@@ -60,6 +116,8 @@ function startsNewItem(line: Line): boolean {
 		INGREDIENT_HEADING.test(text) ||
 		STEP_HEADING.test(text) ||
 		OTHER_HEADING.test(text) ||
+		METADATA_START.test(text) ||
+		LABELLED.test(text) ||
 		!!splitOf(line).amount
 	);
 }
@@ -71,14 +129,53 @@ function startsNewItem(line: Line): boolean {
  */
 function joinWrapped(lines: Line[]): Line[] {
 	const out: Line[] = [];
+	let inSteps = false;
+	let numberedStep = false;
 	for (const line of lines) {
 		const prev = out[out.length - 1];
+		if (prev && /^source\s*:\s*$/i.test(prev.text) && /^https?:\/\/\S+$/i.test(line.text)) {
+			prev.text = `${prev.text} ${line.text}`;
+			prev.split = undefined;
+			continue;
+		}
+		if (STEP_HEADING.test(line.text)) {
+			inSteps = true;
+			numberedStep = false;
+		} else if (INGREDIENT_HEADING.test(line.text) || OTHER_HEADING.test(line.text)) {
+			inSteps = false;
+			numberedStep = false;
+		} else if (inSteps && NUMBERED.test(line.text)) {
+			numberedStep = true;
+		} else if (
+			inSteps &&
+			numberedStep &&
+			prev &&
+			!LABELLED.test(line.text) &&
+			!METADATA_ONLY.test(line.text)
+		) {
+			// An explicitly numbered step can contain several sentences and short
+			// wrapped lines; its next number or heading is the reliable boundary.
+			prev.text = `${prev.text} ${line.text}`;
+			prev.split = undefined;
+			continue;
+		} else if (inSteps && (LABELLED.test(line.text) || METADATA_ONLY.test(line.text)))
+			numberedStep = false;
+		if (
+			prev &&
+			METADATA_ONLY.test(prev.text) &&
+			(/^\d/.test(line.text) || (/^(?:yield|makes)\b/i.test(prev.text) && !startsNewItem(line)))
+		) {
+			prev.text = `${prev.text}: ${line.text}`;
+			prev.split = undefined;
+			continue;
+		}
 		const wrapped =
 			prev &&
 			// Only a line long enough to have hit the column edge was wrapped; a
 			// short one is a title or a label that simply has no full stop.
-			prev.text.length >= 45 &&
-			!/[.!?:;]$/.test(prev.text) &&
+			((prev.text.length >= 45 && !/[.!?:;]$/.test(prev.text)) ||
+				(NUMBERED.test(prev.text) && /:$/.test(prev.text))) &&
+			!METADATA_START.test(prev.text) &&
 			!startsNewItem(line);
 		if (wrapped) {
 			prev.text = `${prev.text} ${line.text}`;
@@ -101,6 +198,7 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 	});
 	const lines = joinWrapped(raw);
 	if (!lines.length) return { input, ingredientPages: [], empty: true };
+	const hasIngredientHeading = lines.some((line) => INGREDIENT_HEADING.test(line.text));
 
 	input.notes = pages.map((p) => p.trim()).join('\n\n');
 
@@ -109,7 +207,7 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 		(l) =>
 			!INGREDIENT_HEADING.test(l.text) &&
 			!STEP_HEADING.test(l.text) &&
-			!SERVINGS.test(l.text) &&
+			!METADATA_START.test(l.text) &&
 			!SERVINGS_TRAILING.test(l.text)
 	);
 	if (titleIndex >= 0) input.title = lines[titleIndex].text.slice(0, 200);
@@ -118,6 +216,7 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 	const ingredientPages: number[] = [];
 	const steps: RecipeStepInput[] = [];
 	const descriptionParts: string[] = [];
+	let ingredientGroup = '';
 
 	lines.forEach((line, i) => {
 		const { text } = line;
@@ -125,33 +224,21 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 		if (STEP_HEADING.test(text)) return void (section = 'steps');
 		if (OTHER_HEADING.test(text)) return void (section = 'other');
 		if (i === titleIndex) return;
-
-		// Stats can appear anywhere; take them wherever they show up.
-		const servings = SERVINGS.exec(text) ?? SERVINGS_TRAILING.exec(text);
-		if (servings && !input.baseServings) {
-			input.baseServings = servings[1];
+		const source = RECIPE_SOURCE.exec(text);
+		if (source) {
+			input.source ||= source[1];
 			return;
 		}
-		const prep = PREP.exec(text);
-		if (prep && !input.prepMinutes) {
-			const mins = timeToMinutes(prep[1]);
-			if (mins !== null) {
-				input.prepMinutes = String(mins);
-				return;
-			}
-		}
-		const cook = COOK.exec(text);
-		if (cook && !input.cookMinutes) {
-			const mins = timeToMinutes(cook[1]);
-			if (mins !== null) {
-				input.cookMinutes = String(mins);
-				return;
-			}
-		}
+		if ((section === 'none' || METADATA_EXPLICIT.test(text)) && readMetadata(text, input)) return;
 		if (section === 'other') return;
+		if (section === 'ingredients' && /^[^:]{1,100}:$/.test(text)) {
+			ingredientGroup = text.slice(0, -1).trim();
+			return;
+		}
 
 		const split = splitOf(line);
-		const looksLikeIngredient = !!split.amount;
+		const looksLikeIngredient =
+			!!split.amount && (!hasIngredientHeading || section === 'ingredients');
 		const inIngredients = section === 'ingredients';
 		const inSteps = section === 'steps';
 
@@ -161,8 +248,10 @@ export function parseRecipeText(pages: string[]): TextImportResult {
 			return;
 		}
 		if (inIngredients || looksLikeIngredient) {
-			input.ingredients.push(ingredientFromSplit(split));
-			ingredientPages.push(line.page);
+			for (const ingredient of ingredientRowsFromLine(text)) {
+				input.ingredients.push({ ...ingredient, group: ingredient.group || ingredientGroup });
+				ingredientPages.push(line.page);
+			}
 			return;
 		}
 		// Prose before any heading reads as the description; after that, a step.

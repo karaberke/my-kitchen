@@ -50,6 +50,7 @@ pnpm-debug.log*
 # Local runtime data (see also data/.gitignore)
 /data/uploads
 /data/test-uploads
+/data/dev-uploads
 
 # Tooling worktrees (agent scratch checkouts), not project config
 /.claude/worktrees/

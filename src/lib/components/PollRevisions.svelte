@@ -3,7 +3,7 @@
 	import { invalidate } from '$app/navigation';
 	import { isHttpError } from '@sveltejs/kit';
 	import { pushToast } from '$lib/client/toast.svelte';
-	import { fetchFresh } from '$lib/client/remote';
+	import { fetchFresh, remoteErrorMessage } from '$lib/client/remote';
 	import { createPoller } from '$lib/client/poller';
 	import { householdRevisions } from '$lib/remote/household.remote';
 
@@ -32,6 +32,7 @@
 	let changedNotice = $state(false);
 	let lastChecked = $state<Date | null>(null);
 	let refreshing = $state(false);
+	let mounted = false;
 
 	const poller = createPoller({
 		intervalMs: () => intervalMs,
@@ -57,20 +58,33 @@
 		try {
 			await invalidate(dependsOn);
 			changedNotice = false;
+			return true;
+		} catch (err) {
+			changedNotice = true;
+			if (mounted) {
+				pushToast(remoteErrorMessage(err, 'Could not refresh. Check your connection.'), {
+					kind: 'error'
+				});
+			}
+			return false;
 		} finally {
 			refreshing = false;
 		}
 	}
 	onMount(() => {
+		mounted = true;
 		poller.start();
-		return () => poller.stop();
+		return () => {
+			mounted = false;
+			poller.stop();
+		};
 	});
-	export function manualRefresh() {
+	export async function manualRefresh() {
 		poller.stop();
-		refresh().then(() => {
-			pushToast('Refreshed.', { timeout: 2000 });
-			poller.start();
-		});
+		const refreshed = await refresh();
+		if (!mounted) return;
+		if (refreshed) pushToast('Refreshed.', { timeout: 2000 });
+		poller.start();
 	}
 </script>
 
@@ -79,7 +93,8 @@
 		<span class="rounded-full bg-honey-soft px-2.5 py-1 font-semibold text-honey-dark"
 			>Changed by another member</span
 		>
-		<button class="font-bold text-leaf" onclick={refresh}>Load changes</button>
+		<button class="font-bold text-leaf" onclick={refresh} disabled={refreshing}>Load changes</button
+		>
 	{:else}
 		<button class="font-bold text-leaf" onclick={manualRefresh} disabled={refreshing}
 			>{refreshing ? 'Refreshing…' : 'Refresh'}</button

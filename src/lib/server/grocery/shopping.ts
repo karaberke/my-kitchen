@@ -286,6 +286,8 @@ export async function recordPurchase(ctx: ActorContext, input: PurchaseInput) {
 			} else {
 				await assertIngredientsVisible(tx, ctx.userId, [ingredientId]);
 			}
+			if (ingredientId !== line.ingredientId && Dec.from(line.purchasedAmount).isPositive())
+				throw new AppError(409, "Undo this item's purchases before changing its ingredient");
 			const [{ name }] = await tx
 				.select({ name: ingredients.name })
 				.from(ingredients)

@@ -2,3 +2,17 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - '@aws-sdk/client-s3@3.1128.0'
+  - impit-darwin-arm64@0.14.7
+  - impit-darwin-x64@0.14.7
+  - impit-linux-arm64-gnu@0.14.7
+  - impit-linux-arm64-musl@0.14.7
+  - impit-linux-x64-gnu@0.14.7
+  - impit-linux-x64-musl@0.14.7
+  - impit-win32-arm64-msvc@0.14.7
+  - impit-win32-x64-msvc@0.14.7
+  - impit@0.14.7
+overrides:
+  # Remove when upstream ranges include these security fixes.
+  # GHSA-pxg6-pf52-xh8x; GHSA-67mh-4wv8-2f99.
+  '@sveltejs/kit>cookie': 0.7.2
+  '@esbuild-kit/core-utils>esbuild': 0.25.12

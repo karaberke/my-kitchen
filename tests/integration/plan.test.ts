@@ -63,7 +63,7 @@ describe('meal plan entries', () => {
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-07', recipeId });
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-12', title: 'Takeaway night' });
 
-		const week = await getWeekPlan(db, alice.householdId, '2026-09-07');
+		const week = await getWeekPlan(db, alice.householdId, '2026-09-07', alice.id);
 		expect(week).toHaveLength(7);
 		expect(week.map((d) => d.date)).toEqual(weekDates('2026-09-07'));
 
@@ -84,7 +84,7 @@ describe('meal plan entries', () => {
 		const alice = await createUser('Alice');
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-06', title: 'Last week' });
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-14', title: 'Next week' });
-		const week = await getWeekPlan(db, alice.householdId, '2026-09-07');
+		const week = await getWeekPlan(db, alice.householdId, '2026-09-07', alice.id);
 		expect(week.flatMap((d) => d.entries)).toEqual([]);
 	});
 
@@ -97,7 +97,7 @@ describe('meal plan entries', () => {
 
 		await removePlanEntry(alice.ctx, id);
 		expect(await planRevision(alice.householdId)).toBeGreaterThan(afterAdd);
-		const week = await getWeekPlan(db, alice.householdId, '2026-09-07');
+		const week = await getWeekPlan(db, alice.householdId, '2026-09-07', alice.id);
 		expect(week.flatMap((d) => d.entries)).toEqual([]);
 	});
 
@@ -108,7 +108,7 @@ describe('meal plan entries', () => {
 
 		await deleteRecipe(alice.id, recipeId);
 
-		const week = await getWeekPlan(db, alice.householdId, '2026-09-07');
+		const week = await getWeekPlan(db, alice.householdId, '2026-09-07', alice.id);
 		const entry = week[0].entries[0];
 		expect(entry.title).toBe('Roast');
 		expect(entry.recipeId).toBeNull();
@@ -133,7 +133,7 @@ describe('meal plan entries', () => {
 
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-07', title: 'Shared soup' });
 		// Bob sees Alice's plan in the shared household.
-		const asBob = await getWeekPlan(db, alice.householdId, '2026-09-07');
+		const asBob = await getWeekPlan(db, alice.householdId, '2026-09-07', bob.id);
 		expect(asBob[0].entries[0].title).toBe('Shared soup');
 
 		const carolCtx = { ...carol.ctx, householdId: alice.householdId };
