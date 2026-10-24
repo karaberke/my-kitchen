@@ -23,6 +23,7 @@ process.env.IMPORT_PROXY_URL = proxy.url;
 // Ordinary browser tests keep the assistant off. The separate chat suite only
 // contacts its local stub, regardless of any inherited provider credentials.
 process.env.LLM_BASE_URL = '';
+process.env.LLM_FALLBACK_BASE_URL = '';
 if (process.env.E2E_CHAT_STUB === '1') {
 	process.env.LLM_BASE_URL = CHAT_STUB_BASE_URL;
 	process.env.LLM_API_KEY = CHAT_STUB_API_KEY;
