@@ -31,10 +31,94 @@ Without `deploy.sh`: copy `.env.example` to `.env`, fill in the same keys, then 
 from `.env` and activates the Cloudflare service from `COMPOSE_PROFILES`.
 A managed database (`--cloud-db`) must allow `CREATE EXTENSION pg_trgm`; migration 0006 needs it for the ingredient search.
 
-Services: `db` (persistent volume), `migrate` (one-shot, advisory-locked), `app` (Node on
+Services: `db` (persistent volume), `migrate` (one-shot, advisory-locked), `smokescreen`
+(public-address-only import proxy), `app` (Node on
 `0.0.0.0:3000` inside the container, published on `APP_BIND:APP_PORT`, default `127.0.0.1:3003`), and one of
 `cloudflared` (profile `tunnel`) or `quicktunnel` (profile `quicktunnel`). The launch command
 starts these services only; it never creates Cloudflare, S3 or cloud-database resources.
+
+## AI on a dual-boot Windows/Ubuntu PC
+
+The app server can use `LLM_BASE_URL` and an optional `LLM_FALLBACK_BASE_URL`
+to reach the same model on either operating system. See [Windows AI setup](windows-ai.md)
+for llama.cpp installation, private networking, automatic startup, and failover configuration.
+
+## Recipe and image import proxy
+
+All three Compose entry files reuse `compose.smokescreen.yaml`. The sidecar is
+built locally from [Stripe Smokescreen `v0.1.0`](https://github.com/stripe/smokescreen/releases/tag/v0.1.0), commit
+`609eb8931420453daf5893509be0b25b21bd9edb`, with digest-pinned official Go and
+Alpine base images. `deploy/smokescreen/Dockerfile` verifies the checked-out
+commit before compiling it; `deploy/smokescreen/config.yaml` contains the address
+policy and resource limits. No third-party Smokescreen image is used. The build
+applies exact Go dependency security updates inside the cloned source:
+`github.com/sirupsen/logrus@v1.9.3`
+([GO-2025-4188](https://pkg.go.dev/vuln/GO-2025-4188)),
+`golang.org/x/net@v0.60.0`
+([GO-2026-6611](https://pkg.go.dev/vuln/GO-2026-6611)) and
+`golang.org/x/text@v0.42.0`
+([GO-2026-6629](https://pkg.go.dev/vuln/GO-2026-6629)). The `x/text` version is
+the minimum required by `x/net@v0.60.0`, and is newer than the security fix in
+`v0.41.0`. It verifies module
+checksums and runs the upstream Go tests before compiling. These overrides are
+recorded in the image description label; the Smokescreen source commit remains
+pinned, and no Go module files are added to this repository.
+
+Production fixes `IMPORT_PROXY_URL` to `http://smokescreen:4750`. The app keeps
+its ordinary network for trusted database, LLM, storage, authentication and
+barcode calls, and additionally joins the internal `import_proxy` network.
+Smokescreen joins that network and its separate `import_outbound` network; it
+does not join the database/app default network. No proxy port is published on
+the host. The app can start while the proxy is unavailable; recipe-page and
+remote-image imports then fail without making a direct request. Normal app
+features continue to work.
+
+For local development, start the database and proxy together:
+
+```sh
+docker compose -f compose.dev.yaml -p my-kitchen-dev up -d --build
+pnpm dev
+```
+
+The proxy is published on `127.0.0.1:4750` only, matching the application's
+default `IMPORT_PROXY_URL`. An existing setting can point to another trusted
+Smokescreen deployment; it is server configuration, never a submitted import
+URL. Do not expose this unauthenticated sidecar to the LAN or Internet. No
+client certificates or MITM CA are required on the isolated internal hop;
+the import client still validates the original HTTPS site's certificate.
+
+The policy permits ordinary public IPv4 HTTP(S) sites and custom ports, and
+rejects private, loopback, link-local, cloud metadata, documentation, benchmark
+and transition ranges. The shipped bridges use IPv4, so IPv6-only websites
+cannot be imported. Some public protocol-anycast addresses are deliberately
+included in the conservative special-use blocks. Keep the IPv6 deny rules if
+enabling and testing dual-stack networking later. Stock Smokescreen selects
+one allowed DNS result and has no Happy Eyeballs fallback.
+
+Request concurrency is limited to 16, active CONNECT tunnels to 64, and request
+rate to 10/second with a burst of 20. DNS and connection setup time out after
+5 and 10 seconds; connections idle for 10 seconds close. The application keeps
+its shorter download deadlines and byte caps. Cancelling an import stops the
+app's wait, although the proxy can finish opening an allowed connection before
+its own timeout; it cannot switch to a forbidden destination.
+
+The container runs without root privileges, with a read-only filesystem,
+dropped capabilities and no new privileges. Uppercase and lowercase proxy
+environment variables are cleared to prevent upstream chaining. Its Docker
+logging driver is `none`, because stock proxy logs contain request-derived
+hostnames and errors. Health is a local TCP check, not a recipe request. To
+diagnose a failed import, check container health and the app's sanitized error
+category; do not enable request logging for real user imports.
+
+Run `pnpm test:egress` to check the real proxy and both import transports in
+disposable containers. The runner provides synthetic DNS, HTTP and HTTPS sites
+and creates a fresh test CA; runtime containers share only an internal test
+network with no external route, database, mounted user data or published ports.
+The test policy extends a copy of production configuration with exact fixture
+IP/port exceptions and a fixture DNS resolver. Only its request rate/burst are
+raised to keep address-policy assertions separate from throttling; request and
+tunnel concurrency limits remain unchanged. The launcher removes only its
+unique Compose project after success, failure or cancellation.
 
 ## Accounts: ADMIN_\* and REGISTRATION_OPEN
 

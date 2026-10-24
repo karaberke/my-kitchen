@@ -49,9 +49,11 @@ x-app-env: &app-env
   UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5242880}
   BODY_SIZE_LIMIT: ${BODY_SIZE_LIMIT:-6M}
   IMAGE_CONCURRENCY: ${IMAGE_CONCURRENCY:-2}
+  IMPORT_PROXY_URL: http://smokescreen:4750
   PUBLIC_REVISION_POLL_MS: ${PUBLIC_REVISION_POLL_MS:-20000}
-  # AI assistant; empty LLM_BASE_URL turns it off. A LAN/Tailscale URL, never localhost.
+  # AI assistant; both URLs empty turns it off. LAN/Tailscale URLs, never localhost.
   LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_FALLBACK_BASE_URL: ${LLM_FALLBACK_BASE_URL:-}
   LLM_API_KEY: ${LLM_API_KEY:-}
   LLM_MODEL: ${LLM_MODEL:-}
   HOST: 0.0.0.0
@@ -65,6 +67,11 @@ x-cloudflared: &cloudflared
       condition: service_started
 
 services:
+  smokescreen:
+    extends:
+      file: compose.smokescreen.yaml
+      service: smokescreen
+
   db:
     image: postgres:17.6-alpine
     restart: unless-stopped
@@ -102,6 +109,7 @@ services:
     image: my-kitchen:latest
     restart: unless-stopped
     environment: *app-env
+    networks: [default, import_proxy]
     ports:
       # APP_BIND=127.0.0.1 keeps it local (tunnel / reverse proxy on the same host); 0.0.0.0 exposes it on the LAN.
       - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3003}:3000'
@@ -131,3 +139,8 @@ services:
 volumes:
   pgdata:
   uploads:
+
+networks:
+  import_proxy:
+    internal: true
+  import_outbound:

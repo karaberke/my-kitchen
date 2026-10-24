@@ -1,0 +1,48 @@
+ip: '0.0.0.0'
+port: 4750
+# The supplied Docker networks use IPv4; IPv6-only origins are unsupported.
+network: ip4
+connect_timeout: 10s
+dns_timeout: 5s
+idle_timeout: 10s
+exit_timeout: 5s
+read_header_timeout: 10s
+read_timeout: 30s
+write_timeout: 30s
+max_concurrent_requests: 16
+max_concurrent_connect_tunnels: 64
+max_request_rate: 10
+max_request_burst: 20
+transport_max_idle_conns: 32
+transport_max_idle_conns_per_host: 4
+statsd_address: ''
+support_proxy_protocol: false
+unsafe_allow_private_ranges: false
+# No allow ranges, domain ACL, upstream proxy, TLS interception, or client certificates.
+# Conservatively reject special-use destinations, including translation mechanisms
+# and Azure's public platform-service address, in addition to built-in private checks.
+deny_ranges:
+  - 0.0.0.0/8
+  - 10.0.0.0/8
+  - 100.64.0.0/10
+  - 127.0.0.0/8
+  - 169.254.0.0/16
+  - 172.16.0.0/12
+  - 192.0.0.0/24
+  - 192.0.2.0/24
+  - 192.88.99.0/24
+  - 192.168.0.0/16
+  - 198.18.0.0/15
+  - 198.51.100.0/24
+  - 203.0.113.0/24
+  - 224.0.0.0/4
+  - 240.0.0.0/4
+  - 168.63.129.16/32
+  - ::/3
+  - 4000::/2
+  - 8000::/1
+  - 2001::/23
+  - 2001:db8::/32
+  - 2002::/16
+  - 3ffe::/16
+  - 3fff::/20

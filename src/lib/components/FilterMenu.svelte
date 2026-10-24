@@ -25,26 +25,28 @@
 		children?: Snippet;
 	} = $props();
 
-	let open = $state(false);
 	const activeCount = $derived(
 		groups.reduce((n, g) => n + g.options.filter((o) => o.checked).length, 0)
 	);
 
-	let menu: HTMLElement;
+	let menu: HTMLDetailsElement;
 </script>
 
 <svelte:window
 	onkeydown={(e) => {
-		if (e.key === 'Escape' && open) open = false;
+		if (e.key === 'Escape' && menu?.open) {
+			menu.open = false;
+			menu.querySelector('summary')?.focus();
+		}
 	}}
 	onpointerdown={(e) => {
-		if (open && !menu.contains(e.target as Node)) open = false;
+		if (menu?.open && !menu.contains(e.target as Node)) menu.open = false;
 	}}
 />
 
 <div class="flex flex-wrap items-center gap-2">
-	<div class="relative" bind:this={menu}>
-		<details bind:open>
+	<div class="relative">
+		<details bind:this={menu}>
 			<summary class="chip cursor-pointer list-none [&::-webkit-details-marker]:hidden">
 				Filter{#if activeCount}<span> · {activeCount}</span>{/if}
 			</summary>

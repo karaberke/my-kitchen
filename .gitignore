@@ -27,6 +27,9 @@ test-results
 playwright-report
 coverage
 
+# Local promotional recordings and fictional filming data
+/artifacts/promo/
+
 # Logs
 *.log
 npm-debug.log*

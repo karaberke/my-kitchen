@@ -200,7 +200,8 @@
 							>{#if b.recipeId}<a href="/recipes/{b.recipeId}" class="font-semibold"
 									>{b.recipeTitle}</a
 								>{:else}<span class="font-semibold">{b.recipeTitle}</span>
-								<span class="text-sage">(deleted)</span>{/if} · {fmtNum(b.servings)} servings{#if b.recipeChanged}
+								<span class="text-sage">({b.recipeDeleted ? 'deleted' : 'unavailable'})</span>{/if} ·
+							{fmtNum(b.servings)} servings{#if b.recipeChanged}
 								<span class="pill bg-honey-soft text-honey-dark">recipe changed</span>{/if}</span
 						>
 						<button class="btn-ghost btn-sm h-8" onclick={() => (editBatch = b)}>Edit</button>

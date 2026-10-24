@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import postgres from 'postgres';
+import { vi } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
@@ -8,17 +10,80 @@ import { Dec } from '$lib/shared/decimal';
 import type { ActorContext } from '$lib/server/access';
 import { createRecipe } from '$lib/server/recipes';
 import type { ValidRecipe } from '$lib/shared/recipe-input';
+import { sslOptions } from '$lib/server/db/ssl';
+import { assertTestDatabaseName, assertTestDatabaseUrl } from '../../scripts/test-database.mjs';
 
 /** Wipe all tenant data; the shared ingredient catalog and migrations stay. */
 export async function resetDb() {
-	// FK cascades remove every tenant row; catalog ingredients (owner null) survive.
-	await db.execute(sql`delete from household`);
-	await db.execute(sql`delete from "user"`);
-	await db.execute(sql`delete from ingredient where owner_user_id is not null`);
-	// Provider metadata is a shared cache, not tenant data, so no cascade
-	// reaches it. Clearing it keeps one test from seeing another's lookups.
-	await db.execute(sql`delete from barcode_product`);
-	await db.execute(sql`delete from barcode_miss`);
+	assertTestDatabaseUrl(process.env.DATABASE_URL);
+	await db.transaction(async (tx) => {
+		const [database] = await tx.execute<{ name: string }>(sql`select current_database() as name`);
+		assertTestDatabaseName(database.name);
+		// FK cascades remove every tenant row; catalog ingredients (owner null) survive.
+		await tx.execute(sql`delete from household`);
+		await tx.execute(sql`delete from "user"`);
+		await tx.execute(sql`delete from ingredient where owner_user_id is not null`);
+		// Provider metadata is a shared cache, not tenant data, so no cascade
+		// reaches it. Clearing it keeps one test from seeing another's lookups.
+		await tx.execute(sql`delete from barcode_product`);
+		await tx.execute(sql`delete from barcode_miss`);
+	});
+}
+
+/** Hold a real transaction open; a separate connection observes only its blocking chain. */
+export async function holdDatabaseTransaction(
+	hold: (tx: postgres.TransactionSql) => Promise<unknown>
+) {
+	const control = postgres(assertTestDatabaseUrl(process.env.DATABASE_URL), {
+		max: 2,
+		ssl: sslOptions(process.env.DATABASE_SSL ?? ''),
+		onnotice: () => {}
+	});
+	const ready = Promise.withResolvers<number>();
+	const release = Promise.withResolvers<void>();
+	const transaction = control.begin(async (tx) => {
+		const [{ name, pid }] = await tx<{ name: string; pid: number }[]>`
+			select current_database() as name, pg_backend_pid() as pid`;
+		assertTestDatabaseName(name);
+		await hold(tx);
+		ready.resolve(pid);
+		await release.promise;
+	});
+	void transaction.catch(ready.reject);
+	let pid: number;
+	try {
+		pid = await ready.promise;
+	} catch (err) {
+		await control.end({ timeout: 1 });
+		throw err;
+	}
+	return {
+		async waitForBlocked(count = 1, completed: () => boolean = () => false) {
+			await vi.waitUntil(
+				async () => {
+					if (completed()) return true;
+					const [{ n }] = await control<{ n: number }[]>`
+						with recursive blocked(pid) as (
+							select ${pid}::int
+							union
+							select activity.pid from pg_stat_activity activity
+							join blocked on blocked.pid = any(pg_blocking_pids(activity.pid))
+						)
+						select count(*)::int as n from blocked where pid <> ${pid}`;
+					return n >= count;
+				},
+				{ timeout: 10_000, interval: 10 }
+			);
+		},
+		async release() {
+			release.resolve();
+			try {
+				await transaction;
+			} finally {
+				await control.end({ timeout: 1 });
+			}
+		}
+	};
 }
 
 export interface TestUser {

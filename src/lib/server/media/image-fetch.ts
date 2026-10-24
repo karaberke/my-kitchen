@@ -1,4 +1,5 @@
 import { AppError } from '$lib/server/errors';
+import { createImportTransport } from '$lib/server/import-transport';
 import {
 	discardBody,
 	fetchWithRedirects,
@@ -14,10 +15,8 @@ import {
  * which decodes them, checks the real format and writes bounded WebP variants.
  * Nothing here trusts the content-type header beyond a first refusal.
  *
- * There is no restriction on which address this reaches, by decision, exactly as
- * in import-fetch.ts: a private or loopback URL is fetched like any other. The
- * caller rate-limits instead. Put the address check in this module if that
- * decision changes.
+ * Production downloads go through Smokescreen, which rejects private and
+ * special-use destinations and connects to the address it checked.
  */
 
 const USER_AGENT = 'my-kitchen (recipe image)';
@@ -33,8 +32,10 @@ export interface FetchImageOptions {
 	maxBytes: number;
 	timeoutMs?: number;
 	maxRedirects?: number;
-	/** Test seam. Production passes nothing and gets global fetch. */
+	/** Test seam. Production uses its owned proxy transport. */
 	fetchImpl?: FetchImpl;
+	/** Explicit proxy for isolated transport fixtures; production uses server configuration. */
+	proxyUrl?: string;
 }
 
 function tooLarge(maxBytes: number): never {
@@ -63,26 +64,32 @@ function statusError(status: number): AppError {
 
 export async function fetchImageBytes(raw: string, options: FetchImageOptions): Promise<Buffer> {
 	const { maxBytes } = options;
-	const { response } = await fetchWithRedirects(raw, {
-		accept: ACCEPT,
-		userAgent: USER_AGENT,
-		timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-		maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
-		timeoutMessage: TIMEOUT_MESSAGE,
-		noLocationMessage: 'That link redirects to nothing.',
-		fetchImpl: options.fetchImpl
-	});
-
+	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	const transport = createImportTransport(timeoutMs, options.proxyUrl);
 	try {
-		if (!response.ok) throw statusError(response.status);
-		checkType(response);
-	} catch (err) {
-		await discardBody(response);
-		throw err;
+		const { response } = await fetchWithRedirects(raw, {
+			accept: ACCEPT,
+			userAgent: USER_AGENT,
+			timeoutMs,
+			maxRedirects: options.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
+			timeoutMessage: TIMEOUT_MESSAGE,
+			noLocationMessage: 'That link redirects to nothing.',
+			fetchImpl: options.fetchImpl ?? transport.fetch
+		});
+
+		try {
+			if (!response.ok) throw statusError(response.status);
+			checkType(response);
+		} catch (err) {
+			await discardBody(response);
+			throw err;
+		}
+		const bytes = await readCapped(response, maxBytes, tooLarge, TIMEOUT_MESSAGE);
+		// Only emptiness is judged here. Whether the bytes decode as a picture is
+		// the storage pipeline's question, and it asks sharp rather than a header.
+		if (bytes.length === 0) throw new AppError(400, 'That link did not give back a picture.');
+		return bytes;
+	} finally {
+		await transport.destroy();
 	}
-	const bytes = await readCapped(response, maxBytes, tooLarge, TIMEOUT_MESSAGE);
-	// Only emptiness is judged here. Whether the bytes decode as a picture is
-	// the storage pipeline's question, and it asks sharp rather than a header.
-	if (bytes.length === 0) throw new AppError(400, 'That link did not give back a picture.');
-	return bytes;
 }

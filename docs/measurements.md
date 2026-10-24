@@ -45,6 +45,14 @@ Counted from the server code paths (each bullet is one round trip):
   lines, requirements, line sources, household revisions = 9 queries for 300 lines.
 - Revision poll: session, membership check, household row = 3 small indexed queries.
 
+Changed grocery batches add seven statements per nonempty batch during Start
+shopping: lock the source recipe, read it with fresh permissions, read its
+ingredients, read previous include choices, delete old requirements, insert new
+requirements, and update the batch snapshot. These are source-counted round trips,
+not a latency benchmark. The second recipe read is required after a lock wait:
+otherwise a concurrent unshare can expose a newly private edit. Bulk refresh is
+deferred until a measurement justifies changing the existing snapshot helpers.
+
 ## Query plans (EXPLAIN ANALYZE, BUFFERS on the seeded database)
 
 `node --env-file=.env scripts/explain.mjs`:

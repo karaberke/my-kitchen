@@ -9,6 +9,7 @@ data
 test-results
 playwright-report
 docs
+deploy
 *.log
 .DS_Store
 
@@ -24,6 +25,7 @@ docs
 tests
 playwright.config.ts
 vitest.config.ts
+vitest.egress.config.ts
 eslint.config.js
 prettier.config.js
 .prettierignore

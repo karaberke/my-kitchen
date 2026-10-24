@@ -21,7 +21,7 @@ import { convertAmount, isUnitId, unitsCompatible } from '$lib/shared/units';
 import { validateDate } from '$lib/server/pantry';
 import { match as isUuid } from '../../../params/uuid';
 import { LOCATION_MAX_CHARS, NOTE_MAX_CHARS } from '$lib/shared/text';
-import { lockList, bumpList } from './shared';
+import { lockList, bumpList, recipeRefreshableBy } from './shared';
 import { recalculateDraft, recipeRequirements, insertRequirements } from './draft';
 
 /**
@@ -56,7 +56,10 @@ export async function startShopping(
 				title: groceryBatches.recipeTitle
 			})
 			.from(groceryBatches)
-			.leftJoin(recipes, eq(recipes.id, groceryBatches.recipeId))
+			.leftJoin(
+				recipes,
+				and(eq(recipes.id, groceryBatches.recipeId), recipeRefreshableBy(ctx.userId))
+			)
 			.where(eq(groceryBatches.listId, input.listId));
 		const changedRecipes = batches
 			.filter((b) => b.current !== null && b.current !== b.recipeRevision)
@@ -68,7 +71,7 @@ export async function startShopping(
 			if (changedRecipes.length) {
 				for (const b of batches) {
 					if (b.current !== null && b.current !== b.recipeRevision)
-						await refreshBatchFromRecipe(tx, b.id, b.recipeId!);
+						await refreshBatchFromRecipe(tx, ctx.userId, b.id, b.recipeId!);
 				}
 			}
 			await recalculateDraft(tx, ctx.householdId, input.listId, pantryRevision);
@@ -113,7 +116,15 @@ export async function startShopping(
 }
 
 /** Re-snapshot a batch's requirements from the recipe's current revision (draft lists only). */
-async function refreshBatchFromRecipe(tx: Tx, batchId: string, recipeId: string) {
+async function refreshBatchFromRecipe(tx: Tx, userId: string, batchId: string, recipeId: string) {
+	const [locked] = await tx
+		.select({ id: recipes.id })
+		.from(recipes)
+		.where(and(eq(recipes.id, recipeId), recipeRefreshableBy(userId)))
+		.for('share');
+	if (!locked) return;
+	// A lock wait can outlive unsharing. Re-check permissions in a fresh statement
+	// before copying values; the held recipe lock keeps later edits behind us.
 	const [full] = await tx
 		.select({
 			title: recipes.title,
@@ -123,8 +134,8 @@ async function refreshBatchFromRecipe(tx: Tx, batchId: string, recipeId: string)
 			status: recipes.status
 		})
 		.from(recipes)
-		.where(eq(recipes.id, recipeId));
-	if (!full || full.status !== 'active' || !full.baseServings) return;
+		.where(and(eq(recipes.id, recipeId), recipeRefreshableBy(userId)));
+	if (!full || !full.baseServings) return;
 	const reqs = await recipeRequirements(tx, recipeId);
 	const previous = await tx
 		.select({
@@ -224,6 +235,8 @@ export interface PurchaseInput {
  * possible). Remaining = max(0, target - credited). Never re-subtracts pantry.
  */
 export async function recordPurchase(ctx: ActorContext, input: PurchaseInput) {
+	if (input.ingredientId !== null && !isUuid(input.ingredientId))
+		throw new AppError(400, 'One or more ingredients are not available to you');
 	if (input.bought) {
 		if (!input.bought.quantity.isPositive())
 			throw new AppError(400, 'Enter the amount you actually bought');
@@ -276,14 +289,14 @@ export async function recordPurchase(ctx: ActorContext, input: PurchaseInput) {
 				};
 			}
 
-			let ingredientId = input.ingredientId ?? line.ingredientId;
+			let ingredientId = input.ingredientId?.toLowerCase() ?? line.ingredientId;
 			if (!ingredientId) {
 				if (!input.newIngredientName)
 					throw new AppError(400, 'Choose which ingredient this is so the pantry can track it');
 				ingredientId = (
 					await createCustomIngredient(tx, ctx.userId, input.newIngredientName, line.category)
 				).id;
-			} else {
+			} else if (ingredientId !== line.ingredientId) {
 				await assertIngredientsVisible(tx, ctx.userId, [ingredientId]);
 			}
 			if (ingredientId !== line.ingredientId && Dec.from(line.purchasedAmount).isPositive())

@@ -9,3 +9,4 @@ bun.lockb
 /static/
 /drizzle/
 /.claude/worktrees/
+/artifacts/promo/

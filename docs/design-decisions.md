@@ -88,6 +88,10 @@ A list moves `draft → shopping → completed`.
   moved it commits a fresh preview and returns a review conflict instead of
   committing stale targets. Only when everything matches do the suggested
   amounts become committed purchase targets and the list becomes `shopping`.
+  Live recipe data is checked against the acting user's current access, including
+  shares through any household they belong to, as when adding a batch. A deleted,
+  inaccessible, inactive or incomplete source keeps its historical snapshot;
+  it exposes no live revision or recipe link and does not prevent shopping.
 - During shopping `remaining = max(0, target − net credited purchases)`. A
   purchase adds the full bought amount to the pantry as a new lot and credits
   the line once (converted to the line unit when possible). The pantry is never
@@ -166,14 +170,35 @@ same-origin, apart from the Google Fonts stylesheet linked in `app.html`.
 `/recipes/import?kind=url` fetches the page in the app process, because a recipe
 site sends no CORS headers and the browser cannot read it. `import-fetch.ts` does
 the request: http(s) only, `redirect: 'manual'` with 3 hops, a 6-second timeout,
-and a 2 MB cap checked against `content-length` and again while the body streams.
+and a 5 MB cap checked against `content-length` and again against decompressed
+bytes while the body streams. The same byte limit applies to uploaded HTML and
+pasted page source, measured as UTF-8 bytes. This accommodates recipe pages with
+large embedded application data while keeping parsing and retained attachments
+bounded.
 
-**The fetch is not restricted to public addresses, on purpose.** A private,
-loopback or metadata URL is fetched like any other, so any signed-in member can
-make the host request what it can route to. Two things bound this: the response
-is only ever parsed for text, never rendered, and `IMPORT_LIMITS.fetch` allows 10
-link imports a minute per user. Put the address check in `import-fetch.ts` if
-that decision changes; nothing else needs to know.
+**Recipe-page and remote-image downloads use a public-address-only egress proxy.**
+Both the ordinary Undici transport and the Chrome retry use the pinned Stripe
+Smokescreen service through `IMPORT_PROXY_URL`. A failed, absent or rejecting proxy
+fails the download; neither transport falls back to a direct connection. Each
+redirect is validated and goes through the same proxy policy. Smokescreen checks
+resolved addresses and connects to the checked numerical address, preventing a
+second DNS lookup from switching the connection to a private destination. Its
+configuration rejects private, loopback, link-local, metadata and special-use
+addresses, including Azure's `168.63.129.16` platform service. Public custom ports
+remain supported. The supplied IPv4 Docker networks use `network: ip4`, so
+IPv6-only origins are unsupported; dual-stack deployment requires explicit network
+configuration and acceptance testing before changing that setting.
+
+The proxy is available only to the app on a dedicated internal network in
+production, with its own outbound network and no published host port. Local
+development publishes `127.0.0.1:4750`. Neither imported headers nor proxy chaining
+settings are forwarded, and proxy environment variables are cleared. HTTPS stays
+inside a raw CONNECT tunnel: the client validates the origin certificate and
+Smokescreen does no TLS interception. Stock request logging is disabled so hostnames
+and request-derived errors are not retained. Trusted database, LLM, storage,
+authentication and barcode clients keep their existing transports; this policy
+does not sandbox the whole application. `IMPORT_LIMITS.fetch` still allows 10 link
+imports a minute per user.
 
 The fetched bytes are kept as an `html` attachment, named after the host and
 path, and the final URL (after redirects) goes into the recipe's Source field.
@@ -185,6 +210,13 @@ The retry uses the same redirect validation, timeout and byte cap. A 429,
 missing page, unsupported content, oversized page or network failure is not
 retried. Ordinary pages without structured recipe data keep the text-import
 behavior; they are not assumed to be challenges.
+
+An ordinary transport belongs to one top-level download and is destroyed after
+its body is consumed or cancelled. Impit has no explicit disposal API. Abort
+stops the application's wait and releases its owned streams; stock Smokescreen
+DNS and connection setup can finish opening an already-allowed destination
+after cancellation, bounded by the proxy timeouts. Cancellation does not permit
+forbidden destinations or a direct bypass.
 
 `impit` is a server-only runtime dependency with platform-specific native
 binaries. The production image must retain its matching Linux package after
@@ -208,6 +240,11 @@ them hourly (and once at start-up):
 
 The grace period matters: a sweep that ran immediately would race a review form
 the user still has open. Nothing referenced is ever a candidate.
+Media cleanup locks a bounded batch of candidate rows with `SKIP LOCKED`, then
+checks references in a fresh statement before deleting database rows. Attachment
+claims hold their parent row lock through the reference write, and duplicating
+a recipe holds a shared source-row lock while copying its image reference.
+Physical objects are deleted only after the database transaction commits.
 
 ## Barcode scanning
 

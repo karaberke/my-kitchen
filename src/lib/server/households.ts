@@ -24,6 +24,7 @@ import {
 	revisionsOf
 } from '$lib/server/access';
 import { withTransaction } from '$lib/server/operations';
+import { lockHousehold } from '$lib/server/inventory';
 import { dbTimestampMs } from '$lib/shared/time';
 import type { Convention } from '$lib/shared/units';
 import { HOUSEHOLD_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
@@ -320,6 +321,9 @@ async function lockMember(tx: Tx, householdId: string, userId: string) {
 /** Owners can remove members; anyone can leave. The final owner must transfer ownership first. */
 export async function removeMember(actorId: string, householdId: string, targetUserId: string) {
 	await withTransaction(async (tx) => {
+		await assertMember(tx, householdId, actorId);
+		await lockHousehold(tx, householdId, {});
+		// Membership and ownership may have changed while waiting for the household lock.
 		const actorRole = await assertMember(tx, householdId, actorId);
 		if (actorId !== targetUserId && actorRole !== 'owner')
 			throw forbidden('Only owners can remove other members');
@@ -342,6 +346,8 @@ export async function setMemberRole(
 ) {
 	await withTransaction(async (tx) => {
 		await assertOwner(tx, householdId, actorId);
+		await lockHousehold(tx, householdId, {});
+		await assertOwner(tx, householdId, actorId);
 		const target = await lockMember(tx, householdId, targetUserId);
 		if (target.role === 'owner' && role === 'member' && (await ownerCount(tx, householdId)) <= 1) {
 			throw new AppError(409, 'Promote another member to owner first');
@@ -358,12 +364,8 @@ export async function deleteHousehold(actorId: string, householdId: string): Pro
 	await withTransaction(async (tx) => {
 		await assertOwner(tx, householdId, actorId);
 		// Lock the household row so concurrent pantry/grocery mutations serialise behind us.
-		const [row] = await tx
-			.select({ id: households.id })
-			.from(households)
-			.where(eq(households.id, householdId))
-			.for('update');
-		if (!row) throw new AppError(404, 'Household not found');
+		await lockHousehold(tx, householdId, {});
+		await assertOwner(tx, householdId, actorId);
 		// inventory_movement.lot_id -> stock_lot is ON DELETE RESTRICT, and the household cascade
 		// does not guarantee movements go before their lots. Clear movements explicitly first.
 		await tx.delete(inventoryMovements).where(eq(inventoryMovements.householdId, householdId));

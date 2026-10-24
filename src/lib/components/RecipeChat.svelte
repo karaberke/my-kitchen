@@ -31,13 +31,16 @@
 		step,
 		servings,
 		storageKey,
-		voice = false
+		voice = false,
+		active = true
 	}: {
 		recipeId: string;
 		step?: number;
 		servings?: string;
 		storageKey?: string;
 		voice?: boolean;
+		/** False while a containing dialog is closed; replies still finish silently. */
+		active?: boolean;
 	} = $props();
 
 	const READ_ALOUD_KEY = 'my-kitchen:chat-read-aloud';
@@ -55,13 +58,19 @@
 	let listEl = $state<HTMLElement>();
 	/** Bumped by "Clear chat" so an answer that arrives afterwards is dropped. */
 	let epoch = 0;
-	let recognition: { stop(): void } | null = null;
+	let recognition: ReturnType<typeof listen> | null = null;
 
-	function stopDictation() {
-		recognition?.stop();
+	function stopMedia() {
+		const session = recognition;
 		recognition = null;
 		listening = false;
+		session?.cancel();
+		stopSpeaking();
 	}
+
+	$effect(() => {
+		if (!active) stopMedia();
+	});
 
 	function loadTurns(): RecipeChatTurn[] {
 		if (!storageKey) return [];
@@ -120,16 +129,14 @@
 		return () => {
 			epoch++;
 			document.removeEventListener('pointerdown', primeSpeech, { capture: true });
-			stopDictation();
-			stopSpeaking();
+			stopMedia();
 		};
 	});
 
 	async function send() {
 		const question = input.trim();
-		if (pending || !question) return;
-		stopDictation();
-		stopSpeaking();
+		if (!active || pending || !question) return;
+		stopMedia();
 		if (voice) primeSpeech();
 		const mine = epoch;
 		pending = true;
@@ -148,9 +155,9 @@
 			});
 			if (mine !== epoch) return;
 			turns = [...turns, { question, answer }].slice(-LLM_CHAT_MAX_TURNS);
-			input = '';
+			if (input.trim() === question) input = '';
 			saveTurns();
-			if (voice && readAloud) speak(answer, speechLang());
+			if (active && voice && readAloud) speak(answer, speechLang());
 		} catch (err) {
 			if (mine !== epoch) return;
 			// The question stays in the box so the cook can send it again.
@@ -165,8 +172,7 @@
 
 	function clearChat() {
 		epoch++;
-		stopDictation();
-		stopSpeaking();
+		stopMedia();
 		turns = [];
 		error = '';
 		micError = '';
@@ -181,6 +187,7 @@
 	}
 
 	async function toggleMic() {
+		if (!active) return;
 		if (listening) {
 			recognition?.stop();
 			return;
@@ -193,11 +200,11 @@
 		listening = true;
 		try {
 			const text = await session.result;
-			if (mine !== epoch || recognition !== session) return;
+			if (!active || mine !== epoch || recognition !== session) return;
 			input = (input.trim() ? input.trimEnd() + ' ' : '') + text;
 			input = input.slice(0, LLM_QUESTION_MAX_CHARS);
 		} catch (err) {
-			if (mine !== epoch || recognition !== session) return;
+			if (!active || mine !== epoch || recognition !== session) return;
 			micError = err instanceof Error ? err.message : 'Could not use the microphone.';
 		} finally {
 			if (recognition === session) {
@@ -273,7 +280,7 @@
 			<button
 				type="submit"
 				class="btn-primary"
-				disabled={pending || !input.trim()}
+				disabled={!active || pending || !input.trim()}
 				aria-busy={pending}
 			>
 				{pending ? 'Thinking…' : 'Send'}

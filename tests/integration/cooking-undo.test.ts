@@ -173,7 +173,7 @@ describe('cooking, planned batches and undo', () => {
 			clientKey: 'k',
 			includeOptional: []
 		});
-		let detail = await getListDetail(db, alice.householdId, listId);
+		let detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
 
 		// an unrelated cooking event first
@@ -229,7 +229,7 @@ describe('cooking, planned batches and undo', () => {
 		});
 		expect(cook.result.plannedServingsFulfilled).toBe('2');
 		expect(cook.result.unplannedServings).toBe('0');
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.batches[0].remainingServings).toBe('2');
 		expect(detail.batches[0].status).toBe('planned');
 		expect(await chickenTotal(alice.householdId)).toBe('700');
@@ -251,7 +251,7 @@ describe('cooking, planned batches and undo', () => {
 		// undo the cooking: only the 200 g delta and 2 servings come back
 		await undoEvent(alice.ctx, { operationId: opId(), eventId: cook.result.eventId });
 		expect(await chickenTotal(alice.householdId)).toBe('1200');
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.batches[0].remainingServings).toBe('4');
 		const history = await getHistory(db, alice.householdId, null);
 		const otherEvent = history.items.find((e) => e.id === other.result.eventId)!;
@@ -281,7 +281,7 @@ describe('cooking, planned batches and undo', () => {
 		});
 		expect(cook2.result.plannedServingsFulfilled).toBe('4');
 		expect(cook2.result.unplannedServings).toBe('1');
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.batches[0].status).toBe('fulfilled');
 		expect(await chickenTotal(alice.householdId)).toBe('1200');
 	});
@@ -298,9 +298,9 @@ describe('cooking, planned batches and undo', () => {
 			clientKey: 'k',
 			includeOptional: []
 		});
-		let detail = await getListDetail(db, alice.householdId, listId);
+		let detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		const purchase = await recordPurchase(alice.ctx, {
 			operationId: opId(),
 			listId,
@@ -342,7 +342,7 @@ describe('cooking, planned batches and undo', () => {
 		expect(err).toBeInstanceOf(ReviewConflict);
 		expect(err.review.reason).toBe('consumed');
 		expect(await chickenTotal(alice.householdId)).toBe('100');
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.lines[0].purchasedAmount).toBe('500');
 	});
 

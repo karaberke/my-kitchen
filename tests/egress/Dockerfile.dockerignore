@@ -1,0 +1,29 @@
+# An allowlist: never send environment files, user media, worktrees, git or promo files.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.npmrc
+!svelte.config.js
+!vite.config.ts
+!tsconfig.json
+!vitest.egress.config.ts
+!src/
+!src/**
+!static/
+!static/**
+!tests/
+!tests/egress/
+!tests/egress/**
+!deploy/
+!deploy/smokescreen/
+!deploy/smokescreen/config.yaml
+# Directory inclusions above never permit local credentials or nested checkouts.
+**/.env
+**/.env.*
+**/.git
+**/.git/**
+**/node_modules
+**/node_modules/**
+**/*.key
+**/*.pem

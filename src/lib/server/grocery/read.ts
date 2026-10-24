@@ -13,6 +13,7 @@ import {
 import { notFound } from '$lib/server/errors';
 import { Dec } from '$lib/shared/decimal';
 import { remainingTarget } from '$lib/shared/grocery-math';
+import { recipeRefreshableBy } from './shared';
 
 /* ------------------------------ reads ------------------------------ */
 
@@ -158,6 +159,7 @@ export async function getListDetail(
 	dbx: DbOrTx,
 	householdId: string,
 	listId: string,
+	viewerUserId: string,
 	knownPantryRevision?: number
 ): Promise<ListDetail> {
 	const columns = {
@@ -189,7 +191,8 @@ export async function getListDetail(
 		dbx
 			.select({
 				id: groceryBatches.id,
-				recipeId: groceryBatches.recipeId,
+				recipeId: recipes.id,
+				storedRecipeId: groceryBatches.recipeId,
 				recipeTitle: groceryBatches.recipeTitle,
 				recipeRevision: groceryBatches.recipeRevision,
 				currentRecipeRevision: recipes.revision,
@@ -199,7 +202,10 @@ export async function getListDetail(
 				status: groceryBatches.status
 			})
 			.from(groceryBatches)
-			.leftJoin(recipes, eq(recipes.id, groceryBatches.recipeId))
+			.leftJoin(
+				recipes,
+				and(eq(recipes.id, groceryBatches.recipeId), recipeRefreshableBy(viewerUserId))
+			)
 			.where(eq(groceryBatches.listId, listId))
 			.orderBy(asc(groceryBatches.createdAt), asc(groceryBatches.id)),
 		selectLines(dbx, listId)
@@ -261,7 +267,7 @@ export async function getListDetail(
 		recipeRevision: b.recipeRevision,
 		currentRecipeRevision: b.currentRecipeRevision,
 		recipeChanged: b.currentRecipeRevision !== null && b.currentRecipeRevision !== b.recipeRevision,
-		recipeDeleted: b.recipeId === null,
+		recipeDeleted: b.storedRecipeId === null,
 		baseServings: Dec.from(b.baseServings).toString(),
 		servings: Dec.from(b.servings).toString(),
 		fulfilledServings: Dec.from(b.fulfilledServings).toString(),

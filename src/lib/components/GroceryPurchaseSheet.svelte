@@ -69,6 +69,8 @@
 					<IngredientAutocomplete
 						inputId="buy-ing"
 						fieldName="newIngredientName"
+						ingredientIdName="ingredientId"
+						createIdentityName="createIdentity"
 						bind:name={buyName}
 						bind:ingredientId={buyIngredientId}
 						bind:identityLabel={buyLabel}

@@ -25,7 +25,8 @@ import { parseRecipeText } from '$lib/shared/recipe-text';
  */
 
 /** Generous for a saved page, small enough to keep parsing cheap. */
-export const MAX_HTML_BYTES = 2_000_000;
+export const MAX_HTML_BYTES = 5_000_000;
+const HTML_TOO_LARGE_MESSAGE = `That page is larger than ${MAX_HTML_BYTES / 1_000_000} MB.`;
 /** The name a pasted page source is kept under. */
 const PASTED_FILENAME = 'pasted-source.html';
 
@@ -109,13 +110,13 @@ async function readFile(
 		throw new AppError(413, 'That file is larger than 10 MB.');
 	const bytes = await userFile.bytes();
 	if (looksLikePdf(bytes)) return readPdf(bytes, userFile.filename, clientParsed);
-	if (bytes.byteLength > MAX_HTML_BYTES) throw new AppError(413, 'That page is larger than 2 MB.');
+	if (bytes.byteLength > MAX_HTML_BYTES) throw new AppError(413, HTML_TOO_LARGE_MESSAGE);
 	return readHtml(bytes.toString('utf8'), bytes, userFile.filename, clientParsed);
 }
 
 async function readLink(userId: string, link: string): Promise<ReadSource> {
-	// The fetch reaches any address this host can route to, by decision. The
-	// bucket is the only thing bounding that, so it is checked before the request.
+	// The proxy checks and pins public destination addresses. Rate-limit each
+	// user before making a request through that checked transport.
 	const limit = consume(`import:${userId}`, IMPORT_LIMITS.fetch);
 	if (!limit.allowed)
 		throw new AppError(
@@ -138,7 +139,8 @@ async function readLink(userId: string, link: string): Promise<ReadSource> {
 }
 
 function readPasted(html: string, clientParsed: FormDataEntryValue | null): ReadSource {
-	if (html.length > MAX_HTML_BYTES) throw new AppError(413, 'That page is larger than 2 MB.');
+	if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES)
+		throw new AppError(413, HTML_TOO_LARGE_MESSAGE);
 	if (!html.trim()) throw new AppError(400, 'Paste the page source, a link, or choose a file.');
 	// Pasted source is kept too, so a recipe can always be traced back.
 	return readHtml(html, Buffer.from(html, 'utf8'), PASTED_FILENAME, clientParsed);

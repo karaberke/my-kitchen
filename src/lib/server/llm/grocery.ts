@@ -1,7 +1,7 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import { z } from 'zod';
 import { db } from '$lib/server/db';
-import { assertMember, householdActor } from '$lib/server/access';
+import { assertMember, householdActor, requireUserApi } from '$lib/server/access';
 import { AppError, notFound } from '$lib/server/errors';
 import {
 	GROCERY_LINE_NAME_MAX,
@@ -235,6 +235,7 @@ export async function tidyGroceryList(
 	event: RequestEvent,
 	arg: { listId: string }
 ): Promise<{ proposals: TidyProposal[]; sent: number }> {
+	requireUserApi(event);
 	if (!isUuid(arg.listId)) throw notFound('Grocery list not found');
 	const ctx = householdActor(event);
 	await assertMember(db, ctx.householdId, ctx.userId);

@@ -197,6 +197,14 @@ export async function updateRecipe(
 
 export async function duplicateRecipe(userId: string, recipeId: string): Promise<string> {
 	return withTransaction(async (tx) => {
+		const [locked] = await tx
+			.select({ id: recipes.id })
+			.from(recipes)
+			.where(and(eq(recipes.id, recipeId), recipeReadableBy(userId)))
+			.for('share');
+		if (!locked) throw notFound('Recipe not found');
+		// Waiting for a writer can outlive sharing. Use a fresh permission snapshot
+		// before reading the source and children under the retained recipe lock.
 		const [src] = await tx
 			.select({ ...recipeColumns, imageId: recipes.imageId })
 			.from(recipes)

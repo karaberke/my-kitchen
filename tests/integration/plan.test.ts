@@ -171,7 +171,7 @@ describe('planning a week into the grocery list', () => {
 		// With no list open beforehand, one is created and returned.
 		expect(listId).toBe(await getCurrentListId(db, alice.householdId));
 
-		const detail = await getListDetail(db, alice.householdId, listId);
+		const detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		const titles = detail.batches.map((b) => b.recipeTitle).sort();
 		expect(titles).toEqual(['Curry', 'Roast']);
 		const roastBatch = detail.batches.find((b) => b.recipeTitle === 'Roast')!;
@@ -192,22 +192,22 @@ describe('planning a week into the grocery list', () => {
 			clientKey: 'trip-roast',
 			includeOptional: []
 		});
-		const { revision } = await getListDetail(db, alice.householdId, trip);
+		const { revision } = await getListDetail(db, alice.householdId, trip, alice.id);
 		await startShopping(alice.ctx, { listId: trip, expectedRevision: revision });
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-07', recipeId: roast });
 		await addPlanEntry(alice.ctx, { plannedOn: '2026-09-09', recipeId: curry });
 
 		const listId = await planWeekToGrocery(alice.ctx, '2026-09-07');
 		expect(listId).not.toBe(trip);
-		const draft = await getListDetail(db, alice.householdId, listId);
+		const draft = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(draft.status).toBe('draft');
 		expect(draft.batches.map((b) => b.recipeTitle).sort()).toEqual(['Curry', 'Roast']);
-		const tripAfter = await getListDetail(db, alice.householdId, trip);
+		const tripAfter = await getListDetail(db, alice.householdId, trip, alice.id);
 		expect(tripAfter.batches).toHaveLength(1);
 
 		// The same week again lands on the same draft and adds no duplicate batch.
 		expect(await planWeekToGrocery(alice.ctx, '2026-09-07')).toBe(listId);
-		const again = await getListDetail(db, alice.householdId, listId);
+		const again = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(again.batches).toHaveLength(2);
 	});
 

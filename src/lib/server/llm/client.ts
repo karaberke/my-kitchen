@@ -3,9 +3,10 @@ import { z, type ZodType } from 'zod';
 import { serverEnv } from '$lib/server/env';
 import { AppError } from '$lib/server/errors';
 import { LLM_LIMITS, consume } from '$lib/server/ratelimit';
+import { discardBody, readCappedOrNull } from '$lib/server/fetch-capped';
 
 /**
- * The AI assistant: one OpenAI-compatible model server on the private network.
+ * The AI assistant: OpenAI-compatible model servers on the private network.
  *
  * The server is a small CPU box. It answers one request at a time, it is slow
  * (about 19 tokens a second out), and its context is 8192 tokens. So every
@@ -17,6 +18,8 @@ import { LLM_LIMITS, consume } from '$lib/server/ratelimit';
 
 export interface LlmConfig {
 	baseUrl: string;
+	/** A second installation of the same model, such as the other dual-boot OS. */
+	fallbackBaseUrl?: string;
 	apiKey: string;
 	model: string;
 }
@@ -41,6 +44,12 @@ export const LLM_TEXT_TEMPERATURE = 0.3;
 export const LLM_TOO_LONG_MESSAGE = 'The request is too long for the assistant.';
 /** Interactive calls allowed to wait behind the running one before a caller is told to come back. */
 export const LLM_MAX_WAITING = 3;
+/** Readiness checks must not wait for an offline operating system. */
+export const LLM_PROBE_TIMEOUT_MS = 2_000;
+/** Reuse the working server briefly, then check both installations again. */
+export const LLM_ENDPOINT_CACHE_MS = 30_000;
+/** Model lists are small; never buffer an unbounded readiness response. */
+export const LLM_MODELS_MAX_BYTES = 64 * 1024;
 
 /**
  * How one call waits and how long it may run. A `background` call has no
@@ -67,7 +76,8 @@ function timeoutFor(call: LlmCallOptions): number {
 }
 
 let override: { config: LlmConfig | null; fetch?: LlmFetch } | null = null;
-let cached: { key: string; openai: OpenAI } | null = null;
+const clients = new Map<string, OpenAI>();
+let preferred: { key: string; baseUrl: string; until: number } | null = null;
 
 /**
  * Test hook: point the assistant at a stub `fetch` (or switch it off with
@@ -75,7 +85,8 @@ let cached: { key: string; openai: OpenAI } | null = null;
  */
 export function setLlmForTests(next: { config: LlmConfig | null; fetch?: LlmFetch } | null) {
 	override = next;
-	cached = null;
+	clients.clear();
+	preferred = null;
 }
 
 /**
@@ -86,8 +97,16 @@ export function setLlmForTests(next: { config: LlmConfig | null; fetch?: LlmFetc
 export function llmConfig(): LlmConfig | null {
 	if (override) return override.config;
 	const env = serverEnv();
-	if (!env.LLM_BASE_URL) return null;
-	return { baseUrl: env.LLM_BASE_URL, apiKey: env.LLM_API_KEY, model: env.LLM_MODEL };
+	const baseUrl = env.LLM_BASE_URL || env.LLM_FALLBACK_BASE_URL;
+	if (!baseUrl) return null;
+	return {
+		baseUrl,
+		...(env.LLM_BASE_URL && env.LLM_FALLBACK_BASE_URL
+			? { fallbackBaseUrl: env.LLM_FALLBACK_BASE_URL }
+			: {}),
+		apiKey: env.LLM_API_KEY,
+		model: env.LLM_MODEL
+	};
 }
 
 export function llmEnabled(): boolean {
@@ -108,13 +127,103 @@ function createLlmClient(config: LlmConfig, fetchImpl?: LlmFetch): OpenAI {
 	});
 }
 
-function client(): { openai: OpenAI; model: string } {
-	const config = llmConfig();
-	if (!config) throw new AppError(503, 'The assistant is not set up on this installation.');
-	const key = `${config.baseUrl}\n${config.apiKey}`;
-	if (!cached || cached.key !== key)
-		cached = { key, openai: createLlmClient(config, override?.fetch) };
-	return { openai: cached.openai, model: config.model };
+function client(config: LlmConfig, baseUrl: string): OpenAI {
+	const key = `${baseUrl}\n${config.apiKey}`;
+	let openai = clients.get(key);
+	if (!openai) {
+		openai = createLlmClient({ ...config, baseUrl }, override?.fetch);
+		clients.set(key, openai);
+	}
+	return openai;
+}
+
+type ProbeResult = 'ready' | 'unavailable' | 'refused';
+
+/** Check the authenticated OpenAI model list, including loading and wrong-model servers. */
+async function probeEndpoint(
+	config: LlmConfig,
+	baseUrl: string,
+	signal: AbortSignal
+): Promise<ProbeResult> {
+	if (signal.aborted) return 'unavailable';
+	const abort = new AbortController();
+	const cancel = () => abort.abort();
+	signal.addEventListener('abort', cancel, { once: true });
+	const timer = setTimeout(cancel, LLM_PROBE_TIMEOUT_MS);
+	let onAbort: () => void;
+	const interrupted = new Promise<ProbeResult>((resolve) => {
+		onAbort = () => resolve('unavailable');
+		abort.signal.addEventListener('abort', onAbort, { once: true });
+	});
+	try {
+		const probe = async (): Promise<ProbeResult> => {
+			const response = await (override?.fetch ?? fetch)(`${baseUrl.replace(/\/+$/, '')}/models`, {
+				method: 'GET',
+				headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}` },
+				redirect: 'error',
+				signal: abort.signal
+			});
+			if (!response.ok) {
+				await discardBody(response);
+				return [400, 401, 403].includes(response.status) ? 'refused' : 'unavailable';
+			}
+			const bytes = await readCappedOrNull(response, LLM_MODELS_MAX_BYTES);
+			if (!bytes) return 'unavailable';
+			const body: unknown = JSON.parse(bytes.toString('utf8'));
+			const parsed = z.object({ data: z.array(z.object({ id: z.string() })) }).safeParse(body);
+			return parsed.success && parsed.data.data.some((model) => model.id === config.model)
+				? 'ready'
+				: 'unavailable';
+		};
+		return await Promise.race([probe().catch((): ProbeResult => 'unavailable'), interrupted]);
+	} finally {
+		signal.removeEventListener('abort', cancel);
+		abort.signal.removeEventListener('abort', onAbort!);
+		clearTimeout(timer);
+	}
+}
+
+/** Kept for the whole queued call, including a structured-output repair attempt. */
+interface LlmRoute {
+	selected?: string;
+	failoverUsed?: boolean;
+	deadline?: number;
+}
+
+function routeKey(config: LlmConfig): string {
+	return `${config.baseUrl}\n${config.fallbackBaseUrl ?? ''}\n${config.apiKey}\n${config.model}`;
+}
+
+async function selectEndpoint(
+	config: LlmConfig,
+	urls: string[],
+	signal: AbortSignal
+): Promise<string> {
+	let candidates = urls;
+	if (preferred?.key === routeKey(config) && preferred.until > Date.now()) {
+		const cachedUrl = preferred.baseUrl;
+		const readiness = await probeEndpoint(config, cachedUrl, signal);
+		if (readiness === 'ready') return cachedUrl;
+		if (readiness === 'refused') throw new AppError(502, 'The assistant could not answer.');
+		// A reboot can silently blackhole the previously working address. Bound
+		// that check too, without probing the offline OS on healthy cached calls.
+		preferred = null;
+		candidates = urls.filter((url) => url !== cachedUrl);
+	}
+	const readiness = await Promise.all(candidates.map((url) => probeEndpoint(config, url, signal)));
+	if (readiness.includes('refused')) throw new AppError(502, 'The assistant could not answer.');
+	const ready = readiness.indexOf('ready');
+	if (ready < 0) throw new AppError(502, 'The assistant could not be reached.');
+	return candidates[ready];
+}
+
+/** Only a transient failure before any response chunk is safe to send elsewhere. */
+function canFailOver(err: unknown): boolean {
+	return (
+		err instanceof APIConnectionError ||
+		(err instanceof APIError &&
+			(err.status === 408 || err.status === 409 || err.status === 429 || (err.status ?? 0) >= 500))
+	);
 }
 
 /**
@@ -223,10 +332,19 @@ async function chat(
 		responseFormat?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'];
 		timeoutMs: number;
 		signal?: AbortSignal;
-	}
+	},
+	route: LlmRoute = {}
 ): Promise<Reply> {
-	const { openai, model } = client();
-	// Streamed, so the limit is on silence, not on how long a slow server writes.
+	const config = llmConfig();
+	if (!config) throw new AppError(503, 'The assistant is not set up on this installation.');
+	const urls = [
+		...new Set([config.baseUrl, config.fallbackBaseUrl].filter((url): url is string => !!url))
+	];
+	const dual = urls.length > 1;
+	// One total budget includes readiness checks and both generation attempts.
+	if (dual) route.deadline ??= Date.now() + params.timeoutMs;
+	const remaining = dual ? route.deadline! - Date.now() : params.timeoutMs;
+	if (remaining <= 0) throw stoppedError('total');
 	const abort = new AbortController();
 	let stopped: StopReason | null = null;
 	const stop = (why: StopReason) => {
@@ -236,37 +354,80 @@ async function chat(
 	const cancel = () => stop('cancelled');
 	if (params.signal?.aborted) throw cancelledError();
 	params.signal?.addEventListener('abort', cancel, { once: true });
-	let idle = setTimeout(() => stop('idle'), LLM_IDLE_TIMEOUT_MS);
-	const total = setTimeout(() => stop('total'), params.timeoutMs);
+	const total = setTimeout(() => stop('total'), remaining);
 	try {
-		const stream = await openai.chat.completions.create(
-			{
-				model,
-				messages: [{ role: 'system', content: system }, ...messages],
-				max_tokens: params.maxTokens,
-				temperature: params.temperature,
-				stream: true,
-				...(params.responseFormat ? { response_format: params.responseFormat } : {})
-			},
-			{ signal: abort.signal }
-		);
-		let content = '';
-		let finishReason: string | null = null;
-		for await (const chunk of stream) {
-			clearTimeout(idle);
-			idle = setTimeout(() => stop('idle'), LLM_IDLE_TIMEOUT_MS);
-			const choice = chunk.choices?.[0];
-			if (typeof choice?.delta?.content === 'string') content += choice.delta.content;
-			if (choice?.finish_reason) finishReason = choice.finish_reason;
-		}
-		// The SDK ends an aborted stream quietly, so a partial reply must not pass.
+		route.selected ??= dual ? await selectEndpoint(config, urls, abort.signal) : urls[0];
 		if (stopped) throw stoppedError(stopped);
-		return { content, finishReason };
+		for (;;) {
+			// An idle attempt can end before output and try the other installation,
+			// while cancellation and the total deadline still stop the whole call.
+			const attemptAbort = new AbortController();
+			const cancelAttempt = () => attemptAbort.abort();
+			abort.signal.addEventListener('abort', cancelAttempt, { once: true });
+			let idleStopped = false;
+			let receivedChunk = false;
+			const stopIdle = () => {
+				idleStopped = true;
+				attemptAbort.abort();
+			};
+			let idle = setTimeout(stopIdle, LLM_IDLE_TIMEOUT_MS);
+			try {
+				const stream = await client(config, route.selected).chat.completions.create(
+					{
+						model: config.model,
+						messages: [{ role: 'system', content: system }, ...messages],
+						max_tokens: params.maxTokens,
+						temperature: params.temperature,
+						stream: true,
+						...(params.responseFormat ? { response_format: params.responseFormat } : {})
+					},
+					{ signal: attemptAbort.signal }
+				);
+				let content = '';
+				let finishReason: string | null = null;
+				for await (const chunk of stream) {
+					receivedChunk = true;
+					clearTimeout(idle);
+					idle = setTimeout(stopIdle, LLM_IDLE_TIMEOUT_MS);
+					const choice = chunk.choices?.[0];
+					if (typeof choice?.delta?.content === 'string') content += choice.delta.content;
+					if (choice?.finish_reason) finishReason = choice.finish_reason;
+				}
+				// The SDK ends an aborted stream quietly; a partial reply must not pass.
+				if (stopped) throw stoppedError(stopped);
+				if (idleStopped) throw stoppedError('idle');
+				if (dual)
+					preferred = {
+						key: routeKey(config),
+						baseUrl: route.selected,
+						until: Date.now() + LLM_ENDPOINT_CACHE_MS
+					};
+				return { content, finishReason };
+			} catch (err) {
+				clearTimeout(idle);
+				if (stopped) throw stoppedError(stopped);
+				if (dual && !route.failoverUsed && !receivedChunk && (idleStopped || canFailOver(err))) {
+					route.failoverUsed = true;
+					if (preferred?.key === routeKey(config)) preferred = null;
+					const other = urls.find((url) => url !== route.selected)!;
+					const readiness = await probeEndpoint(config, other, abort.signal);
+					if (stopped) throw stoppedError(stopped);
+					if (readiness === 'refused') throw new AppError(502, 'The assistant could not answer.');
+					if (readiness === 'ready') {
+						route.selected = other;
+						continue;
+					}
+				}
+				throw idleStopped ? stoppedError('idle') : asLlmError(err);
+			} finally {
+				abort.signal.removeEventListener('abort', cancelAttempt);
+				clearTimeout(idle);
+			}
+		}
 	} catch (err) {
 		throw stopped ? stoppedError(stopped) : asLlmError(err);
 	} finally {
 		params.signal?.removeEventListener('abort', cancel);
-		clearTimeout(idle);
 		clearTimeout(total);
 	}
 }
@@ -311,14 +472,22 @@ export async function completeJson<T>(
 		json_schema: { name: options.name ?? 'result', strict: true, schema: jsonSchema }
 	};
 	return enqueue(async () => {
+		const route: LlmRoute = {};
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const reply = await chat(system, [{ role: 'user', content: userText }], {
-				maxTokens: options.maxTokens,
-				temperature: LLM_JSON_TEMPERATURE,
-				responseFormat,
-				timeoutMs: timeoutFor(options),
-				signal: options.signal
-			});
+			const reply = await chat(
+				system,
+				[{ role: 'user', content: userText }],
+				{
+					maxTokens: options.maxTokens,
+					temperature: LLM_JSON_TEMPERATURE,
+					responseFormat,
+					timeoutMs: timeoutFor(options),
+					signal: options.signal
+				},
+				route
+			);
+			// A structured-output repair stays on the server that gave the reply.
+			route.failoverUsed = true;
 			if (reply.finishReason === 'length')
 				throw new AppError(502, options.tooLongMessage ?? LLM_TOO_LONG_MESSAGE);
 			let json: unknown;

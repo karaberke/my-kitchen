@@ -1,6 +1,13 @@
-# Local development database only. Production uses compose.yaml.
+# Local development database and import proxy. Production uses compose.yaml.
 # Binds to 127.0.0.1:5433 so it does not collide with other local Postgres instances.
 services:
+  smokescreen:
+    extends:
+      file: compose.smokescreen.yaml
+      service: smokescreen
+    ports:
+      - '127.0.0.1:4750:4750'
+
   db:
     image: postgres:17.6-alpine
     restart: unless-stopped
@@ -19,3 +26,8 @@ services:
       retries: 20
 volumes:
   recipe_dev_pgdata:
+
+networks:
+  import_proxy:
+    internal: true
+  import_outbound:

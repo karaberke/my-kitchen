@@ -71,6 +71,8 @@ export interface Dictation {
 	result: Promise<string>;
 	/** End early: what was heard so far still resolves, silence rejects. */
 	stop(): void;
+	/** Release the microphone immediately and discard any transcript. */
+	cancel(): void;
 }
 
 /** How long `stop()` waits for the browser to end before it gives up on it. */
@@ -83,20 +85,29 @@ export const LISTEN_STOP_GRACE_MS = 1_500;
  */
 export function listen({ lang }: { lang: string }): Dictation {
 	let recognition: Recognition | null = null;
-	let finish: () => void = () => {};
+	let finish: (cancelled?: boolean) => void = () => {};
+	let done = false;
+	let stopTimer: ReturnType<typeof setTimeout> | undefined;
 	const result = new Promise<string>((resolve, reject) => {
 		const Ctor = recognitionConstructor();
 		if (!Ctor) {
+			done = true;
 			reject(new Error('Speech input is not available in this browser.'));
 			return;
 		}
 		let text = '';
 		let failure = '';
-		let done = false;
-		finish = () => {
+		finish = (cancelled = false) => {
 			if (done) return;
 			done = true;
-			if (text) resolve(text);
+			clearTimeout(stopTimer);
+			if (recognition) {
+				recognition.onresult = null;
+				recognition.onerror = null;
+				recognition.onend = null;
+			}
+			if (cancelled) reject(new DOMException('Dictation cancelled.', 'AbortError'));
+			else if (text) resolve(text);
 			else reject(new Error(failure || RECOGNITION_ERRORS['no-speech']));
 		};
 		try {
@@ -114,7 +125,7 @@ export function listen({ lang }: { lang: string }): Dictation {
 			recognition.onerror = (e) => {
 				if (e.error !== 'aborted') failure = RECOGNITION_ERRORS[e.error] ?? RECOGNITION_FALLBACK;
 			};
-			recognition.onend = finish;
+			recognition.onend = () => finish();
 			recognition.start();
 		} catch {
 			done = true;
@@ -124,12 +135,9 @@ export function listen({ lang }: { lang: string }): Dictation {
 	return {
 		result,
 		stop() {
-			try {
-				recognition?.stop();
-			} catch {
-				// already stopped
-			}
-			setTimeout(() => {
+			if (done) return;
+			clearTimeout(stopTimer);
+			stopTimer = setTimeout(() => {
 				try {
 					recognition?.abort();
 				} catch {
@@ -137,6 +145,20 @@ export function listen({ lang }: { lang: string }): Dictation {
 				}
 				finish();
 			}, LISTEN_STOP_GRACE_MS);
+			try {
+				recognition?.stop();
+			} catch {
+				// already stopped
+			}
+		},
+		cancel() {
+			if (done) return;
+			finish(true);
+			try {
+				recognition?.abort();
+			} catch {
+				// already ended
+			}
 		}
 	};
 }

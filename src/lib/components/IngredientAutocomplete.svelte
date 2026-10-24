@@ -16,6 +16,8 @@
 		propose = false,
 		inputId,
 		fieldName,
+		ingredientIdName,
+		createIdentityName,
 		placeholder = 'e.g. chicken breast',
 		onenter
 	}: {
@@ -29,6 +31,8 @@
 		propose?: boolean;
 		inputId: string;
 		fieldName: string;
+		ingredientIdName?: string;
+		createIdentityName?: string;
 		placeholder?: string;
 		onenter?: () => void;
 	} = $props();
@@ -256,9 +260,13 @@
 		Not matched to a pantry ingredient — pick one above to enable stock tracking
 	</div>
 {/if}
-<input type="hidden" name={fieldName.replace(/name$/, 'ingredientId')} value={ingredientId ?? ''} />
 <input
 	type="hidden"
-	name={fieldName.replace(/name$/, 'createIdentity')}
+	name={ingredientIdName ?? fieldName.replace(/name$/, 'ingredientId')}
+	value={ingredientId ?? ''}
+/>
+<input
+	type="hidden"
+	name={createIdentityName ?? fieldName.replace(/name$/, 'createIdentity')}
 	value={createIdentity ? '1' : ''}
 />

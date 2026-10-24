@@ -4,6 +4,7 @@ import { db, type DbOrTx } from '$lib/server/db';
 import { recipeAttachments, recipes } from '$lib/server/db/schema';
 import { recipeReadableBy } from '$lib/server/access';
 import { AppError } from '$lib/server/errors';
+import { withTransaction } from '$lib/server/operations';
 import { MEDIA_SWEEP_BATCH, storage } from '$lib/server/media/storage';
 
 /** Source files an import may keep. HTML is stored as bytes and never served as markup. */
@@ -87,16 +88,18 @@ export async function attachToRecipe(
 	recipeId: string,
 	attachmentId: string
 ): Promise<void> {
-	const [own] = await dbx
-		.select({ id: recipeAttachments.id })
-		.from(recipeAttachments)
-		.where(and(eq(recipeAttachments.id, attachmentId), eq(recipeAttachments.ownerUserId, userId)))
-		.limit(1);
-	if (!own) return;
-	await dbx
-		.update(recipes)
-		.set({ sourceAttachmentId: attachmentId })
-		.where(and(eq(recipes.id, recipeId), eq(recipes.ownerUserId, userId)));
+	await dbx.transaction(async (tx) => {
+		const [own] = await tx
+			.select({ id: recipeAttachments.id })
+			.from(recipeAttachments)
+			.where(and(eq(recipeAttachments.id, attachmentId), eq(recipeAttachments.ownerUserId, userId)))
+			.for('share');
+		if (!own) return;
+		await tx
+			.update(recipes)
+			.set({ sourceAttachmentId: attachmentId })
+			.where(and(eq(recipes.id, recipeId), eq(recipes.ownerUserId, userId)));
+	});
 }
 
 /**
@@ -108,28 +111,34 @@ export async function cleanupUnreferencedAttachments(
 	olderThanMinutes = 60,
 	keep: string[] = []
 ): Promise<number> {
-	// One statement checks and deletes, so a recipe that claims the file in between keeps it.
+	// Keep the row locked through a fresh reference check so concurrent claims cannot be lost.
 	const unclaimed = and(
 		sql`not exists (select 1 from ${recipes} where ${recipes.sourceAttachmentId} = ${recipeAttachments.id})`,
 		lt(recipeAttachments.createdAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
 		keep.length ? notInArray(recipeAttachments.id, keep) : undefined
 	);
-	const rows = await db
-		.delete(recipeAttachments)
-		.where(
-			and(
-				inArray(
-					recipeAttachments.id,
-					db
-						.select({ id: recipeAttachments.id })
-						.from(recipeAttachments)
-						.where(unclaimed)
-						.limit(MEDIA_SWEEP_BATCH)
-				),
-				unclaimed
+	const rows = await withTransaction(async (tx) => {
+		const candidates = await tx
+			.select({ id: recipeAttachments.id })
+			.from(recipeAttachments)
+			.where(unclaimed)
+			.orderBy(recipeAttachments.id)
+			.limit(MEDIA_SWEEP_BATCH)
+			.for('update', { skipLocked: true });
+		if (!candidates.length) return [];
+		return tx
+			.delete(recipeAttachments)
+			.where(
+				and(
+					inArray(
+						recipeAttachments.id,
+						candidates.map((row) => row.id)
+					),
+					unclaimed
+				)
 			)
-		)
-		.returning({ objectKey: recipeAttachments.objectKey });
+			.returning({ objectKey: recipeAttachments.objectKey });
+	});
 	const store = storage();
 	for (const row of rows) await store.delete(row.objectKey).catch(() => {});
 	return rows.length;

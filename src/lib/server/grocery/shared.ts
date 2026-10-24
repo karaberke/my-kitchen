@@ -1,9 +1,19 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Tx } from '$lib/server/db';
-import { groceryLists } from '$lib/server/db/schema';
+import { groceryLists, recipes } from '$lib/server/db/schema';
+import { recipeReadableBy } from '$lib/server/access';
 import { notFound } from '$lib/server/errors';
 
 /* ------------------------------ helpers ------------------------------ */
+
+/** Live sources a viewer may use to refresh a draft; other batches keep their snapshot. */
+export function recipeRefreshableBy(userId: string) {
+	return and(
+		recipeReadableBy(userId),
+		eq(recipes.status, 'active'),
+		isNotNull(recipes.baseServings)
+	);
+}
 
 /** Lock one list of the household (after `lockHousehold`); a 404 when it is not there. */
 export async function lockList(tx: Tx, householdId: string, listId: string) {

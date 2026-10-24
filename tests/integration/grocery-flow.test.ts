@@ -58,7 +58,7 @@ describe('grocery planning, shopping and purchases', () => {
 			clientKey: 'forty',
 			includeOptional: []
 		});
-		const before = await getListDetail(db, alice.householdId, listId);
+		const before = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(before.lines).toHaveLength(40);
 		const statements: string[] = [];
 		const previousDebug = client.options.debug;
@@ -77,7 +77,7 @@ describe('grocery planning, shopping and purchases', () => {
 			`40-line refresh: ${statements.length} statements, ${writes.length} line/source writes`
 		);
 		expect(writes).toHaveLength(3);
-		const after = await getListDetail(db, alice.householdId, listId);
+		const after = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(after.lines.map((l) => l.id)).toEqual(before.lines.map((l) => l.id));
 		for (let i = 0; i < 40; i++) {
 			expect(after.lines[i]).toMatchObject({
@@ -171,7 +171,7 @@ describe('grocery planning, shopping and purchases', () => {
 		const { removeBatch } = await import('$lib/server/grocery');
 		await removeBatch(alice.ctx, { listId, batchId: extra.batchId });
 
-		let detail = await getListDetail(db, alice.householdId, listId);
+		let detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.batches).toHaveLength(2);
 		expect(detail.lines).toHaveLength(1);
 		expect(detail.lines[0].demandAmount).toBe('800');
@@ -191,7 +191,7 @@ describe('grocery planning, shopping and purchases', () => {
 			expiresOn: '2030-01-01',
 			note: ''
 		});
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.pantryChanged).toBe(true);
 		const staleRevision = detail.revision;
 		const err = await startShopping(alice.ctx, { listId, expectedRevision: staleRevision }).catch(
@@ -199,7 +199,7 @@ describe('grocery planning, shopping and purchases', () => {
 		);
 		expect(err).toBeInstanceOf(ReviewConflict);
 		expect(err.review.reason).toBe('pantry_changed');
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.status).toBe('draft');
 		expect(detail.lines[0].stockConsidered).toBe('400');
 		expect(detail.lines[0].targetAmount).toBe('400');
@@ -218,10 +218,10 @@ describe('grocery planning, shopping and purchases', () => {
 			reason: 'test'
 		});
 		await refreshDraft(alice.ctx, listId);
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.lines[0].targetAmount).toBe('500');
 		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.status).toBe('shopping');
 		const line = detail.lines[0];
 
@@ -257,7 +257,7 @@ describe('grocery planning, shopping and purchases', () => {
 		expect(r2.result.remaining).toBe('0');
 		expect(r2.result.lineStatus).toBe('purchased');
 		expect(await chickenStock(alice.householdId)).toBe('1500');
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.lines[0].purchasedAmount).toBe('1200');
 		expect(detail.lines[0].targetAmount).toBe('500');
 
@@ -338,7 +338,7 @@ describe('grocery planning, shopping and purchases', () => {
 			subtractPantry: false,
 			note: ''
 		});
-		let detail = await getListDetail(db, alice.householdId, listId);
+		let detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		const l1 = detail.lines.find((l) => l.id === m1.lineId)!;
 		const l2 = detail.lines.find((l) => l.id === m2.lineId)!;
 		const l3 = detail.lines.find((l) => l.id === m3.lineId)!;
@@ -349,7 +349,7 @@ describe('grocery planning, shopping and purchases', () => {
 		expect(l3.unresolvedReason).toBe('unknown_amount');
 
 		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.lines.find((l) => l.id === m2.lineId)!.status).toBe('purchased');
 		// buy 200 g against 500 g target, then edit remaining to 100 g -> total target 300
 		await recordPurchase(alice.ctx, {
@@ -363,7 +363,7 @@ describe('grocery planning, shopping and purchases', () => {
 			expiresOn: null,
 			note: ''
 		});
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		const before = detail.lines.find((l) => l.id === m1.lineId)!;
 		expect(before.remaining).toBe('300');
 		await updateLine(alice.ctx, {
@@ -372,7 +372,7 @@ describe('grocery planning, shopping and purchases', () => {
 			expectedRevision: before.revision,
 			amount: d(100)
 		});
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		const after = detail.lines.find((l) => l.id === m1.lineId)!;
 		expect(after.targetAmount).toBe('300');
 		expect(after.remaining).toBe('100');
@@ -411,7 +411,7 @@ describe('grocery planning, shopping and purchases', () => {
 			clientKey: 'k1',
 			includeOptional: []
 		});
-		let detail = await getListDetail(db, alice.householdId, listId);
+		let detail = await getListDetail(db, alice.householdId, listId, alice.id);
 
 		// a draft cannot be reopened
 		await expect(
@@ -419,10 +419,10 @@ describe('grocery planning, shopping and purchases', () => {
 		).rejects.toMatchObject({ status: 409 });
 
 		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		const startedAt = detail.startedAt;
 		await completeList(alice.ctx, { listId, expectedRevision: detail.revision });
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.status).toBe('completed');
 		expect(detail.completedAt).not.toBeNull();
 		const completedRevision = detail.revision;
@@ -431,7 +431,7 @@ describe('grocery planning, shopping and purchases', () => {
 		await expect(
 			reopenList(alice.ctx, { listId, expectedRevision: completedRevision - 1 })
 		).rejects.toBeInstanceOf(ReviewConflict);
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.status).toBe('completed');
 
 		const reopened = await reopenList(alice.ctx, {
@@ -439,7 +439,7 @@ describe('grocery planning, shopping and purchases', () => {
 			expectedRevision: completedRevision
 		});
 		expect(reopened.revision).toBeGreaterThan(completedRevision);
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.status).toBe('shopping');
 		expect(detail.completedAt).toBeNull();
 		expect(detail.startedAt).toBe(startedAt);
@@ -448,7 +448,7 @@ describe('grocery planning, shopping and purchases', () => {
 		// a second reopen is safe and keeps the list in shopping
 		const again = await reopenList(alice.ctx, { listId, expectedRevision: detail.revision });
 		expect(again.revision).toBe(detail.revision);
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		expect(detail.status).toBe('shopping');
 
 		// shopping works again after the revert
@@ -477,9 +477,9 @@ describe('grocery planning, shopping and purchases', () => {
 			clientKey: 'k1',
 			includeOptional: []
 		});
-		let detail = await getListDetail(db, alice.householdId, listId);
+		let detail = await getListDetail(db, alice.householdId, listId, alice.id);
 		await startShopping(alice.ctx, { listId, expectedRevision: detail.revision });
-		detail = await getListDetail(db, alice.householdId, listId);
+		detail = await getListDetail(db, alice.householdId, listId, alice.id);
 
 		await expect(
 			recordPurchase(alice.ctx, {
@@ -521,7 +521,7 @@ describe('grocery planning, shopping and purchases', () => {
 			subtractPantry: false,
 			note: ''
 		});
-		const draft = await getListDetail(db, alice.householdId, listId);
+		const draft = await getListDetail(db, alice.householdId, listId, alice.id);
 		await startShopping(alice.ctx, { listId, expectedRevision: draft.revision });
 
 		const { lineId } = await addManualLine(alice.ctx, {
@@ -534,7 +534,7 @@ describe('grocery planning, shopping and purchases', () => {
 			subtractPantry: true,
 			note: ''
 		});
-		const line = (await getListDetail(db, alice.householdId, listId)).lines.find(
+		const line = (await getListDetail(db, alice.householdId, listId, alice.id)).lines.find(
 			(l) => l.id === lineId
 		)!;
 		expect(line.stockConsidered).toBe('1030');
@@ -559,7 +559,7 @@ describe('grocery planning, shopping and purchases', () => {
 			});
 		const typed = await add(true);
 		const kept = await add(false);
-		const lines = (await getListDetail(db, alice.householdId, listId)).lines;
+		const lines = (await getListDetail(db, alice.householdId, listId, alice.id)).lines;
 		expect(lines.find((l) => l.id === typed.lineId)).toMatchObject({
 			name: 'rice',
 			unit: 'g',

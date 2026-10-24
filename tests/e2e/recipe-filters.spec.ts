@@ -70,10 +70,11 @@ test.describe('recipe filters', () => {
 		await expect(page.getByRole('link', { name: 'Remove Mine filter' })).toHaveCount(0);
 		await expect(page.getByRole('link', { name: 'Remove Soups filter' })).toBeVisible();
 
-		if (!(await details.getAttribute('open'))) await details.locator('summary').click();
+		if ((await details.getAttribute('open')) === null) await details.locator('summary').click();
 		await expect(details).toHaveAttribute('open');
 		await page.keyboard.press('Escape');
 		await expect(details).not.toHaveAttribute('open');
+		await expect(details.locator('summary')).toBeFocused();
 
 		// a click anywhere outside the menu closes it too
 		await details.locator('summary').click();

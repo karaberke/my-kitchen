@@ -1,0 +1,48 @@
+services:
+  smokescreen:
+    build:
+      context: ../..
+      dockerfile: tests/egress/Dockerfile
+      target: test-proxy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    environment:
+      HTTP_PROXY: ''
+      HTTPS_PROXY: ''
+      ALL_PROXY: ''
+      NO_PROXY: ''
+      http_proxy: ''
+      https_proxy: ''
+      all_proxy: ''
+      no_proxy: ''
+    logging:
+      driver: none
+    networks:
+      egress:
+        ipv4_address: 192.0.2.20
+    stop_grace_period: 10s
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: tests/egress/Dockerfile
+      target: runner
+    init: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    environment:
+      EGRESS_PROXY_URL: http://smokescreen:4750
+    depends_on:
+      smokescreen:
+        condition: service_healthy
+    networks:
+      egress:
+        ipv4_address: 192.0.2.10
+
+networks:
+  egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24

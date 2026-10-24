@@ -12,9 +12,12 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { sslOptions } from './db-ssl.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { assertTestDatabaseName, assertTestDatabaseUrl } from './test-database.mjs';
 
 const LOCK_KEY = 7_281_934_001; // arbitrary stable bigint key for pg_advisory_lock
 const url = process.env.DATABASE_URL;
+const testDatabase = process.argv.includes('--test');
+if (testDatabase) assertTestDatabaseUrl(url);
 if (!url) {
 	console.error('migrate: DATABASE_URL is not set');
 	process.exit(2);
@@ -54,6 +57,10 @@ async function waitForDatabase() {
 await waitForDatabase();
 const sql = postgres(url, { max: 1, ssl, onnotice: () => {} });
 try {
+	if (testDatabase) {
+		const [{ name }] = await sql`select current_database() as name`;
+		assertTestDatabaseName(name);
+	}
 	console.log('migrate: acquiring advisory lock');
 	await sql`select pg_advisory_lock(${LOCK_KEY})`;
 	const db = drizzle(sql);

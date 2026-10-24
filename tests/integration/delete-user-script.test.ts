@@ -7,11 +7,13 @@ import { acceptInvite, createInvite, createHousehold } from '$lib/server/househo
 import { addStock } from '$lib/server/pantry';
 import { createCustomIngredient } from '$lib/server/ingredients';
 import { createUser, d, makeChickenRecipe, opId, resetDb } from './helpers';
+import { assertTestDatabaseUrl } from '../../scripts/test-database.mjs';
 
 const run = promisify(execFile);
 const script = async (args: string[]) =>
 	run('node', ['--env-file=.env.test', 'scripts/delete-user.mjs', ...args], {
-		cwd: process.cwd()
+		cwd: process.cwd(),
+		env: { ...process.env, DATABASE_URL: assertTestDatabaseUrl(process.env.DATABASE_URL) }
 	});
 
 const rows = async (q: string) =>

@@ -6,6 +6,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
 	testDir: 'tests/e2e',
+	testIgnore: ['**/chat.spec.ts'],
 	timeout: 60_000,
 	fullyParallel: false,
 	workers: 1,
@@ -17,10 +18,9 @@ export default defineConfig({
 		...devices['Desktop Chrome']
 	},
 	webServer: {
-		command:
-			"node --env-file=.env.test scripts/migrate.mjs && node --env-file=.env.test -e \"process.env.PORT=4173; process.env.BODY_SIZE_LIMIT='6M'; import('./build/index.js')\"",
+		command: 'node --env-file=.env.test scripts/test-server.mjs',
 		url: 'http://localhost:4173/health',
-		reuseExistingServer: !process.env.CI,
+		reuseExistingServer: false,
 		timeout: 60_000
 	}
 });

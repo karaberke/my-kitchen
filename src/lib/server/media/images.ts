@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, or, exists, inArray, sql } from 'drizzle-orm';
-import { db, type DbOrTx } from '$lib/server/db';
+import { db, type DbOrTx, type Tx } from '$lib/server/db';
 import { images, recipes } from '$lib/server/db/schema';
 import { recipeReadableBy } from '$lib/server/access';
 import { serverEnv } from '$lib/server/env';
 import { AppError } from '$lib/server/errors';
+import { withTransaction } from '$lib/server/operations';
 import { fetchImageBytes } from './image-fetch';
 import { IMAGE_VARIANTS, renderImageVariants, type ImageVariant } from './image-pipeline';
 import { MEDIA_SWEEP_BATCH, storage } from './storage';
 
 export { IMAGE_VARIANTS, type ImageVariant };
+
+const unreferencedImage = sql`not exists (select 1 from ${recipes} where ${recipes.imageId} = ${images.id})`;
 
 /** Tiny semaphore so image processing cannot exhaust CPU/memory under a burst of uploads. */
 class Semaphore {
@@ -149,53 +152,62 @@ export async function loadReadableImage(dbx: DbOrTx, userId: string, imageId: st
 
 /** Delete an image the user owns when no recipe references it any more. */
 export async function deleteImageIfUnreferenced(userId: string, imageId: string): Promise<boolean> {
-	const [row] = await db
-		.select({
-			id: images.id,
-			objectKey: images.objectKey,
-			referenced: sql<boolean>`exists (select 1 from ${recipes} where ${recipes.imageId} = ${images.id})`
-		})
-		.from(images)
-		.where(and(eq(images.id, imageId), eq(images.ownerUserId, userId)))
-		.limit(1);
-	if (!row || row.referenced) return false;
-	await db.delete(images).where(eq(images.id, imageId));
+	const rows = await withTransaction(async (tx) => {
+		const candidates = await tx
+			.select({ id: images.id })
+			.from(images)
+			.where(and(eq(images.id, imageId), eq(images.ownerUserId, userId)))
+			.for('update');
+		return deleteLockedUnreferencedImages(
+			tx,
+			candidates.map((row) => row.id)
+		);
+	});
+	for (const row of rows) await deleteImageFiles(row.objectKey);
+	return rows.length > 0;
+}
+
+/** Re-check references in a fresh statement after locking the image rows. */
+async function deleteLockedUnreferencedImages(tx: Tx, ids: string[]) {
+	if (!ids.length) return [];
+	return tx
+		.delete(images)
+		.where(and(inArray(images.id, ids), unreferencedImage))
+		.returning({ objectKey: images.objectKey });
+}
+
+/** Physical objects are removed only after their database deletion commits. */
+async function deleteImageFiles(objectKey: string): Promise<void> {
 	const store = storage();
 	for (const variant of Object.keys(IMAGE_VARIANTS) as ImageVariant[]) {
 		await store
-			.delete(variantKey(row.objectKey, variant))
-			.catch((err) => console.warn('image cleanup failed', row.objectKey, err));
+			.delete(variantKey(objectKey, variant))
+			.catch(() => console.warn('Image cleanup failed'));
 	}
-	return true;
 }
 
 /**
  * Maintenance: remove image rows (and files) no recipe references. Never touches referenced images.
- * One statement checks and deletes, so a recipe that takes the image between a read and a delete
- * cannot lose it to the sweep.
+ * Lock bounded candidates without waiting on active claims, then re-check references.
  */
 export async function cleanupUnreferencedImages(olderThanMinutes = 60): Promise<number> {
 	const unreferenced = and(
-		sql`not exists (select 1 from ${recipes} where ${recipes.imageId} = ${images.id})`,
+		unreferencedImage,
 		sql`${images.createdAt} < now() - make_interval(mins => ${olderThanMinutes})`
 	);
-	const rows = await db
-		.delete(images)
-		.where(
-			and(
-				inArray(
-					images.id,
-					db.select({ id: images.id }).from(images).where(unreferenced).limit(MEDIA_SWEEP_BATCH)
-				),
-				unreferenced
-			)
-		)
-		.returning({ objectKey: images.objectKey });
-	const store = storage();
-	for (const row of rows) {
-		for (const variant of Object.keys(IMAGE_VARIANTS) as ImageVariant[]) {
-			await store.delete(variantKey(row.objectKey, variant)).catch(() => {});
-		}
-	}
+	const rows = await withTransaction(async (tx) => {
+		const candidates = await tx
+			.select({ id: images.id })
+			.from(images)
+			.where(unreferenced)
+			.orderBy(images.id)
+			.limit(MEDIA_SWEEP_BATCH)
+			.for('update', { skipLocked: true });
+		return deleteLockedUnreferencedImages(
+			tx,
+			candidates.map((row) => row.id)
+		);
+	});
+	for (const row of rows) await deleteImageFiles(row.objectKey);
 	return rows.length;
 }

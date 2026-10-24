@@ -38,8 +38,14 @@ import { isUnitId } from '$lib/shared/units';
 
 export const load = guard(async (event: PageServerLoadEvent) => {
 	event.depends('app:grocery');
-	const { household } = await requireMemberHousehold(db, event);
-	const list = await getListDetail(db, household.id, event.params.listId, household.pantryRevision);
+	const { user, household } = await requireMemberHousehold(db, event);
+	const list = await getListDetail(
+		db,
+		household.id,
+		event.params.listId,
+		user.id,
+		household.pantryRevision
+	);
 	return {
 		title: list.name,
 		list,

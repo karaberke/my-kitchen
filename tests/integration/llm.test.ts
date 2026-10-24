@@ -786,7 +786,8 @@ async function listWith(
 	return { listId, lineIds };
 }
 
-const detailOf = (user: TestUser, listId: string) => getListDetail(db, user.householdId, listId);
+const detailOf = (user: TestUser, listId: string) =>
+	getListDetail(db, user.householdId, listId, user.id);
 
 /** A form-action event for the grocery list page. */
 function groceryEvent(

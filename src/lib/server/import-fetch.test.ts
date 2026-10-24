@@ -4,6 +4,9 @@ import { Impit, ReadTimeout, type ImpitResponse } from 'impit';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from './errors';
 import { fetchRecipePage } from './import-fetch';
+import { startImportProxy } from '../../../tests/helpers/import-proxy';
+
+const MOCK_PROXY_URL = 'http://127.0.0.1:1';
 
 function html(body: string, headers: Record<string, string> = {}): Response {
 	return new Response(body, {
@@ -548,6 +551,7 @@ describe('fetchRecipePage', () => {
 
 describe('fetchRecipePage with the native browser transport', () => {
 	it('fetches a local page with the Chrome profile and follows redirects itself', async () => {
+		const proxy = await startImportProxy();
 		const requests: { url: string | undefined; agent: string | undefined }[] = [];
 		const fixture = await servePage((req, res) => {
 			requests.push({ url: req.url, agent: req.headers['user-agent'] });
@@ -565,6 +569,7 @@ describe('fetchRecipePage with the native browser transport', () => {
 			const primary = queue(new Response('blocked', { status: 403 }));
 			const page = await fetchRecipePage(`${fixture.origin}/old`, {
 				maxBytes: 1000,
+				proxyUrl: proxy.url,
 				fetchImpl: primary.impl
 			});
 			expect(page.html).toBe('<html>Dal</html>');
@@ -574,10 +579,12 @@ describe('fetchRecipePage with the native browser transport', () => {
 			for (const req of requests) expect(req.agent).toMatch(/Chrome\//);
 		} finally {
 			await fixture.close();
+			await proxy.close();
 		}
 	});
 
 	it('closes a native connection when a streaming page exceeds the cap', async () => {
+		const proxy = await startImportProxy();
 		const closed = Promise.withResolvers<void>();
 		const fixture = await servePage((_req, res) => {
 			res.once('close', () => closed.resolve());
@@ -588,12 +595,17 @@ describe('fetchRecipePage with the native browser transport', () => {
 		try {
 			const primary = queue(new Response('blocked', { status: 403 }));
 			const err = await failure(
-				fetchRecipePage(`${fixture.origin}/dal`, { maxBytes: 1000, fetchImpl: primary.impl })
+				fetchRecipePage(`${fixture.origin}/dal`, {
+					maxBytes: 1000,
+					proxyUrl: proxy.url,
+					fetchImpl: primary.impl
+				})
 			);
 			expect(err.status).toBe(413);
 			await closed.promise;
 		} finally {
 			await fixture.close();
+			await proxy.close();
 		}
 	});
 
@@ -602,7 +614,11 @@ describe('fetchRecipePage with the native browser transport', () => {
 		try {
 			const primary = queue(new Response('blocked', { status: 403 }));
 			const err = await failure(
-				fetchRecipePage('https://example.com/dal', { maxBytes: 1000, fetchImpl: primary.impl })
+				fetchRecipePage('https://example.com/dal', {
+					maxBytes: 1000,
+					proxyUrl: MOCK_PROXY_URL,
+					fetchImpl: primary.impl
+				})
 			);
 			expect(err.status).toBe(504);
 			expect(err.message).toMatch(/too long/i);
@@ -632,7 +648,11 @@ describe('fetchRecipePage with the native browser transport', () => {
 		try {
 			const primary = queue(new Response('blocked', { status: 403 }));
 			const err = await failure(
-				fetchRecipePage('https://example.com/dal', { maxBytes: 1000, fetchImpl: primary.impl })
+				fetchRecipePage('https://example.com/dal', {
+					maxBytes: 1000,
+					proxyUrl: MOCK_PROXY_URL,
+					fetchImpl: primary.impl
+				})
 			);
 			expect(err.status).toBe(413);
 			await cancelled.promise;
@@ -668,7 +688,11 @@ describe('fetchRecipePage with the native browser transport', () => {
 		try {
 			const primary = queue(new Response('blocked', { status: 403 }));
 			const result = failure(
-				fetchRecipePage('https://example.com/dal', { maxBytes: 1000, fetchImpl: primary.impl })
+				fetchRecipePage('https://example.com/dal', {
+					maxBytes: 1000,
+					proxyUrl: MOCK_PROXY_URL,
+					fetchImpl: primary.impl
+				})
 			);
 			await reading.promise;
 			clock.abort(new DOMException('clock advanced', 'TimeoutError'));

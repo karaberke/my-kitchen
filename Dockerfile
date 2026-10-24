@@ -52,7 +52,7 @@ COPY --from=build /app/build ./build
 COPY package.json ./
 COPY drizzle ./drizzle
 COPY scripts/migrate.mjs scripts/consistency-check.mjs scripts/start.mjs \
-     scripts/delete-user.mjs scripts/db-ssl.mjs ./scripts/
+     scripts/delete-user.mjs scripts/db-ssl.mjs scripts/test-database.mjs ./scripts/
 USER app
 EXPOSE 3000
 # node's global fetch replaces curl, which is the only thing the apt-get layer

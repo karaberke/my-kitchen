@@ -96,6 +96,43 @@ describe('listen', () => {
 		vi.advanceTimersByTime(LISTEN_STOP_GRACE_MS);
 		await expect(session.result).rejects.toThrow('No speech heard');
 	});
+
+	it('cancels immediately and discards interim speech without waiting for an end event', async () => {
+		const session = listen({ lang: 'en-US' });
+		const r = latest();
+		const abort = vi.spyOn(r, 'abort').mockImplementation(() => {});
+		r.hearInterim('do not keep this');
+		session.cancel();
+		expect(abort).toHaveBeenCalledOnce();
+		await expect(session.result).rejects.toMatchObject({ name: 'AbortError' });
+		expect(vi.getTimerCount()).toBe(0);
+		expect(r.onresult).toBeNull();
+		expect(r.onend).toBeNull();
+	});
+
+	it('cancels a graceful stop and clears its delayed abort', async () => {
+		const session = listen({ lang: 'en-US' });
+		const r = latest();
+		r.stop = () => {};
+		const abort = vi.spyOn(r, 'abort');
+		session.stop();
+		expect(vi.getTimerCount()).toBe(1);
+		session.cancel();
+		await expect(session.result).rejects.toMatchObject({ name: 'AbortError' });
+		session.cancel();
+		vi.advanceTimersByTime(LISTEN_STOP_GRACE_MS);
+		expect(abort).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it('settles cancellation even when the browser refuses to abort', async () => {
+		const session = listen({ lang: 'en-US' });
+		latest().abort = () => {
+			throw new Error('already stopped');
+		};
+		session.cancel();
+		await expect(session.result).rejects.toMatchObject({ name: 'AbortError' });
+	});
 });
 
 describe('primeSpeech', () => {

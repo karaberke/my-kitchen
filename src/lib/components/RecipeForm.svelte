@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { beforeNavigate } from '$app/navigation';
 	import Alert from './Alert.svelte';
@@ -56,25 +57,25 @@
 	let seq = 0;
 	const blankStep = (section = ''): StepRow => ({ key: ++seq, section, text: '' });
 
-	/* The form owns its state after mount; parents remount it with {#key} when initial changes. */
-	/* svelte-ignore state_referenced_locally */
-	let title = $state(initial.title);
-	let description = $state(initial.description);
-	let baseServings = $state(initial.baseServings);
-	let yieldNote = $state(initial.yieldNote);
-	let prepMinutes = $state(initial.prepMinutes);
-	let cookMinutes = $state(initial.cookMinutes);
-	let source = $state(initial.source);
-	let notes = $state(initial.notes);
-	let tags = $state(initial.tags);
-	let convention = $state(initial.convention || 'metric');
+	/* The form owns its state; parents key it when replacing submitted or proposed input. */
+	const seed = untrack(() => ({ ...initial, identityLabels: { ...identityLabels } }));
+	let title = $state(seed.title);
+	let description = $state(seed.description);
+	let baseServings = $state(seed.baseServings);
+	let yieldNote = $state(seed.yieldNote);
+	let prepMinutes = $state(seed.prepMinutes);
+	let cookMinutes = $state(seed.cookMinutes);
+	let source = $state(seed.source);
+	let notes = $state(seed.notes);
+	let tags = $state(seed.tags);
+	let convention = $state(seed.convention || 'metric');
 	let ingredients = $state<IngredientRow[]>(
-		initial.ingredients.length
-			? initial.ingredients.map((i) => rowFrom(i, identityLabels))
+		seed.ingredients.length
+			? seed.ingredients.map((i) => rowFrom(i, seed.identityLabels))
 			: [blankIngredient()]
 	);
 	let steps = $state<StepRow[]>(
-		initial.steps.length ? initial.steps.map((s) => ({ key: ++seq, ...s })) : [blankStep()]
+		seed.steps.length ? seed.steps.map((s) => ({ key: ++seq, ...s })) : [blankStep()]
 	);
 	/**
 	 * Problems found in the browser before submitting. Merged over whatever the
@@ -86,8 +87,7 @@
 	const message = $derived(clientMessage || serverMessage);
 
 	let removeImage = $state(false);
-	/* svelte-ignore state_referenced_locally */
-	let imageUrl = $state(initial.imageUrl);
+	let imageUrl = $state(seed.imageUrl);
 	let submitting = $state(false);
 	let tidying = $state(false);
 

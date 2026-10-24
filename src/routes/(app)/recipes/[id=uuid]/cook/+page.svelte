@@ -348,6 +348,7 @@
 		>
 			<RecipeChat
 				recipeId={r.id}
+				active={chatOpen}
 				step={chatStep}
 				servings={String(servings)}
 				storageKey="recipe-chat:{r.id}"

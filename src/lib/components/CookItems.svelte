@@ -20,6 +20,7 @@
 	interface Alloc {
 		lotId: string;
 		amount: string;
+		unit: string;
 		revision: number;
 		label: string;
 	}
@@ -61,6 +62,7 @@
 			allocations: it.suggestions.map((s) => ({
 				lotId: s.lotId,
 				amount: Dec.from(s.take).toString(),
+				unit: s.unit,
 				revision: s.revision,
 				label: lotLabel(s)
 			})),
@@ -90,6 +92,7 @@
 			items[i].allocations = json.lots.map((l) => ({
 				lotId: l.lotId,
 				amount: l.take ?? '',
+				unit: l.unit,
 				revision: l.revision,
 				label: lotLabel(l)
 			}));
@@ -174,11 +177,7 @@
 								bind:value={a.amount}
 								aria-label="Amount to deduct from this lot"
 							/>
-							<span class="w-10 text-sage"
-								>{preview.items[i].suggestions.find((s) => s.lotId === a.lotId)?.unit ??
-									it.unit ??
-									''}</span
-							>
+							<span class="w-10 text-sage">{a.unit}</span>
 						</div>
 					{/each}
 				</div>

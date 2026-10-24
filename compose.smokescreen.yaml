@@ -1,0 +1,26 @@
+# Reused by the production, managed-database and local-development stacks.
+# Extending files declare both networks; only the app joins import_proxy.
+services:
+  smokescreen:
+    build:
+      context: ./deploy/smokescreen
+    image: my-kitchen-smokescreen:0.1.0
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    environment:
+      # Prevent environment-based proxy chaining. Import clients send no upstream header.
+      HTTP_PROXY: ''
+      HTTPS_PROXY: ''
+      ALL_PROXY: ''
+      NO_PROXY: ''
+      http_proxy: ''
+      https_proxy: ''
+      all_proxy: ''
+      no_proxy: ''
+    # Stock proxy logs contain request-derived hostnames and errors.
+    logging:
+      driver: none
+    networks: [import_proxy, import_outbound]
+    stop_grace_period: 10s

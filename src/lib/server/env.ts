@@ -6,6 +6,7 @@ import { PERSON_NAME_MAX_CHARS, cleanText } from '$lib/shared/text';
 
 const TRUE_WORDS = ['true', '1', 'yes', 'on'];
 const FALSE_WORDS = ['false', '0', 'no', 'off'];
+export const LOCAL_IMPORT_PROXY_URL = 'http://127.0.0.1:4750';
 
 /** An on/off variable. A word in neither list (or an empty value) keeps the default. */
 function flag(fallback: boolean) {
@@ -105,6 +106,19 @@ const schema = z.object({
 		.min(1024)
 		.default(5 * 1024 * 1024),
 	IMAGE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
+	/** Mandatory for user-supplied page/image downloads; never applied globally. */
+	IMPORT_PROXY_URL: urlVar({
+		fallback: '',
+		allowEmpty: true,
+		message: 'IMPORT_PROXY_URL must be an http(s) proxy origin'
+	}).refine((value) => {
+		if (!value) return true;
+		try {
+			return new URL(value).origin === value;
+		} catch {
+			return false;
+		}
+	}, 'IMPORT_PROXY_URL must be a bare origin without credentials, query or fragment'),
 
 	/**
 	 * Barcode lookup. Every value is optional: an install that sets none still
@@ -141,7 +155,7 @@ const schema = z.object({
 
 	/**
 	 * AI assistant: an OpenAI-compatible model server, such as
-	 * http://192.0.2.10:8080/v1. Empty turns the feature off. The server calls
+	 * http://192.0.2.10:8080/v1. Both URLs empty turns the feature off. The server calls
 	 * it, not the browser, so it can stay on a private network. In Docker, do
 	 * not use localhost: that is the app container itself.
 	 */
@@ -149,8 +163,15 @@ const schema = z.object({
 		fallback: '',
 		allowEmpty: true,
 		path: true,
+		message: 'LLM_BASE_URL must be a URL such as http://192.0.2.10:8080/v1 (or empty)'
+	}),
+	/** The same model/key on another OS or host; automatically used when available. */
+	LLM_FALLBACK_BASE_URL: urlVar({
+		fallback: '',
+		allowEmpty: true,
+		path: true,
 		message:
-			'LLM_BASE_URL must be a URL such as http://192.0.2.10:8080/v1 (or empty to turn it off)'
+			'LLM_FALLBACK_BASE_URL must be a URL such as http://192.0.2.11:8080/v1 (or empty for one server)'
 	}),
 	/** Most local servers ignore the key; the client still has to send one. */
 	LLM_API_KEY: z
@@ -184,6 +205,9 @@ export function serverEnv(): ServerEnv {
 	if (!parsed.success) {
 		const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 		throw new Error(`Invalid server environment: ${issues}`);
+	}
+	if (!parsed.data.IMPORT_PROXY_URL && parsed.data.NODE_ENV !== 'production') {
+		parsed.data.IMPORT_PROXY_URL = LOCAL_IMPORT_PROXY_URL;
 	}
 	if (parsed.data.ADMIN_EMAIL) {
 		if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(parsed.data.ADMIN_EMAIL))

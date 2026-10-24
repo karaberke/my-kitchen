@@ -149,7 +149,16 @@
 		back="/recipes/add"
 	/>
 
-	{#if form?.message}<Alert class="mb-3" kind="error">{form.message}</Alert>{/if}
+	{#if form?.message}
+		<Alert class="mb-3" kind="error">
+			{form.message}
+			{#if isUrl}
+				<a class="mt-2 block font-bold underline" href="/recipes/import?kind=html"
+					>Import a saved HTML page instead</a
+				>
+			{/if}
+		</Alert>
+	{/if}
 
 	<form
 		method="post"

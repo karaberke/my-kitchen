@@ -12,13 +12,15 @@ import { toHttpUrl } from '$lib/server/remote-url';
 export type FetchImpl = (url: string, init: RequestInit) => Promise<Response>;
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const UNREACHABLE_MESSAGE = 'Could not reach that site. Check the link and your network.';
 
 /** Fetch can fail before the headers arrive or while its body is being read. */
 function fetchError(err: unknown, timeoutMessage: string): AppError {
+	if (err instanceof AppError) return err;
 	const name = (err as { name?: string } | null)?.name;
 	return name === 'TimeoutError' || name === 'AbortError'
 		? new AppError(504, timeoutMessage)
-		: new AppError(502, 'Could not reach that site. Check the link and your network.');
+		: new AppError(502, UNREACHABLE_MESSAGE);
 }
 
 export interface FetchWithRedirectsOptions {
@@ -30,8 +32,8 @@ export interface FetchWithRedirectsOptions {
 	timeoutMessage: string;
 	/** Message for a 502 when a redirect has no Location header. Caller-specific wording. */
 	noLocationMessage: string;
-	/** Test seam. Production passes nothing and gets global fetch. */
-	fetchImpl?: FetchImpl;
+	/** Required: the caller owns the proxy transport or an explicit test fixture. */
+	fetchImpl: FetchImpl;
 }
 
 export interface FetchWithRedirectsResult {
@@ -50,7 +52,7 @@ export async function fetchWithRedirects(
 	raw: string,
 	options: FetchWithRedirectsOptions
 ): Promise<FetchWithRedirectsResult> {
-	const doFetch: FetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+	const doFetch = options.fetchImpl;
 
 	let url = toHttpUrl(raw);
 	for (let hop = 0; ; hop++) {
@@ -64,6 +66,11 @@ export async function fetchWithRedirects(
 			});
 		} catch (err) {
 			throw fetchError(err, options.timeoutMessage);
+		}
+		// Smokescreen rejects unsafe targets with 407. Never parse its body or retry it.
+		if (res.status === 407) {
+			await discardBody(res);
+			throw new AppError(502, UNREACHABLE_MESSAGE);
 		}
 
 		if (REDIRECT_STATUSES.has(res.status)) {
